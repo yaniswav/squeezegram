@@ -1054,15 +1054,19 @@ impl<B: TdBindings> TelegramTransport for TdlibJson<B> {
     }
 
     /// Under the lifecycle lock, so a start in progress applies either the old choice or this
-    /// one, never half of each.
+    /// one, never half of each. A choice TDLib refuses is not kept for the next start.
     async fn set_proxy(&self, proxy: Option<Proxy>) -> Result<(), TransportError> {
         let inner = &self.inner;
         let _lifecycle = inner.lifecycle.lock().await;
-        *lock(&inner.proxy) = Ok(proxy.clone());
+        let previous = std::mem::replace(&mut *lock(&inner.proxy), Ok(proxy.clone()));
         if inner.current_client() == 0 {
             return Ok(());
         }
-        inner.apply_proxy(proxy.as_ref()).await
+        let result = inner.apply_proxy(proxy.as_ref()).await;
+        if result.is_err() {
+            *lock(&inner.proxy) = previous;
+        }
+        result
     }
 
     async fn test_proxy(&self, proxy: &Proxy) -> Result<Duration, TransportError> {

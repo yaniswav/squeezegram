@@ -197,3 +197,24 @@ async fn an_unreadable_secret_blocks_every_start_until_the_proxy_is_set_again() 
     assert!(replay.unexpected().is_empty(), "{:?}", replay.unexpected());
     transport.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_change_tdlib_refuses_is_not_kept_for_the_next_start() {
+    let dir = TempDir::new("proxy-refused-live");
+    let transport = TdlibJson::new(
+        Replay::new(fixture(&[super::tests::START, CLOSE])),
+        config(dir.path()),
+    );
+    transport.start().await.unwrap();
+    transport.bindings().push_steps(steps(json!([
+        { "expect": "addProxy", "reply": { "@type": "error", "code": 400,
+          "message": "Wrong proxy secret" } }
+    ])));
+    let error = transport.set_proxy(Some(mtproto())).await.unwrap_err();
+    assert_eq!(error.code_and_params().0, "TG_PROXY_FAILED");
+    assert!(
+        matches!(*lock(&transport.inner.proxy), Ok(None)),
+        "the direct connection stays the choice"
+    );
+    transport.shutdown().await;
+}

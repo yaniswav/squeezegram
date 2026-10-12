@@ -9,8 +9,8 @@
 //! "Family" (`MOCK_SLOW_GROUP` is in the main list and in both folders); two more chats are in
 //! no list and only found by `search_chats` (`MOCK_PUBLIC_GROUP`, `MOCK_OLD_GROUP`).
 //!
-//! Proxy: kept as set; a test answers `MOCK_PROXY_PING`, or `Proxy` for the host
-//! `MOCK_PROXY_DOWN`.
+//! Proxy: kept as set; a test answers `MOCK_PROXY_PING`. A proxy at the host
+//! `MOCK_PROXY_DOWN` is refused (`Proxy`), when set as when tested.
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard};
@@ -30,7 +30,7 @@ use super::{
 pub const MOCK_CODE: &str = "12345";
 /// Round trip of a proxy test.
 pub const MOCK_PROXY_PING: Duration = Duration::from_millis(120);
-/// A proxy at this host never answers its test.
+/// A proxy at this host is refused and never answers its test.
 pub const MOCK_PROXY_DOWN: &str = "down.invalid";
 pub const MOCK_PASSWORD: &str = "squeezegram";
 pub const MOCK_ME_ID: i64 = 777_000_001;
@@ -886,6 +886,12 @@ impl TelegramTransport for MockTransport {
     }
 
     async fn set_proxy(&self, proxy: Option<Proxy>) -> Result<(), TransportError> {
+        if proxy
+            .as_ref()
+            .is_some_and(|proxy| proxy.host == MOCK_PROXY_DOWN)
+        {
+            return Err(TransportError::Proxy("Connection refused".into()));
+        }
         self.lock().proxy = proxy;
         Ok(())
     }

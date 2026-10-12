@@ -1143,32 +1143,57 @@ pub fn proxy_get(state: State<'_, AppState>) -> CommandResult<ProxyView> {
     Call::quiet("proxy_get").finish(result)
 }
 
-/// Validates, saves (secret protected by DPAPI) and applies the proxy: at once while TDLib
-/// runs, else at its next start. A start that failed (unreadable secret, refused proxy) is
-/// tried again with the new choice. The journal gets the kind only.
+/// Body of `proxy_set`, testable without a window. The proxy is applied first and saved only
+/// once TDLib took it: a refused proxy leaves the saved one (and its secret) in place. A
+/// TDLib start that had failed (unreadable secret, refused proxy) is tried again with the new
+/// choice; if it fails again the transport goes back to the saved choice and nothing is saved.
+pub(crate) async fn apply_then_save_proxy(
+    transport: &dyn TelegramTransport,
+    kind: TransportKind,
+    settings: &SettingsStore,
+    dir: &Path,
+    input: &ProxyInput,
+) -> CommandResult<ProxyView> {
+    let saved = settings.get().network.proxy;
+    let proxy = proxy_from_input(input, saved.as_ref(), || tdlib::proxy::load_secret(dir))?;
+    transport.set_proxy(proxy.clone()).await?;
+    let failed_start = kind == TransportKind::Tdlib
+        && matches!(*transport.auth_state().borrow(), AuthState::Closed);
+    if failed_start && let Err(error) = crate::transport::select::start(transport).await {
+        // The saved choice may itself be unusable (unreadable secret): then the new one stays
+        // in memory, which only the next try in this session reads.
+        if let Ok(previous) = tdlib::proxy::load(dir, saved.as_ref()) {
+            let _ = transport.set_proxy(previous).await;
+        }
+        return Err(error.into());
+    }
+    let settings = save_proxy(settings, dir, proxy.as_ref())?;
+    Ok(ProxyView {
+        proxy: settings.network.proxy,
+        has_secret: proxy.is_some_and(|proxy| !proxy.secret.is_empty()),
+    })
+}
+
+/// Validates, applies the proxy (at once while TDLib runs, else at its next start) and saves
+/// it with its secret protected by DPAPI. The journal gets the kind only.
 #[tauri::command]
 pub async fn proxy_set(state: State<'_, AppState>, input: ProxyInput) -> CommandResult<ProxyView> {
     let call = Call::new("proxy_set")
         .arg("kind", input.kind.map_or("none", ProxyKind::as_str))
         .arg("new_secret", input.secret.is_some());
-    let result: CommandResult<ProxyView> = async {
-        let dir = tdlib_dir()?;
-        let saved = state.settings.get().network.proxy;
-        let proxy = proxy_from_input(&input, saved.as_ref(), || tdlib::proxy::load_secret(&dir))?;
-        let settings = save_proxy(&state.settings, &dir, proxy.as_ref())?;
-        let has_secret = proxy.as_ref().is_some_and(|proxy| !proxy.secret.is_empty());
-        state.transport.set_proxy(proxy).await?;
-        let failed_start = state.transport_kind == TransportKind::Tdlib
-            && matches!(*state.transport.auth_state().borrow(), AuthState::Closed);
-        if failed_start {
-            crate::transport::select::start(state.transport.as_ref()).await?;
+    let result = match tdlib_dir() {
+        Ok(dir) => {
+            apply_then_save_proxy(
+                state.transport.as_ref(),
+                state.transport_kind,
+                &state.settings,
+                &dir,
+                &input,
+            )
+            .await
         }
-        Ok(ProxyView {
-            proxy: settings.network.proxy,
-            has_secret,
-        })
-    }
-    .await;
+        Err(error) => Err(error),
+    };
     call.finish(result)
 }
 
@@ -1721,6 +1746,41 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(unreadable.code, "TG_PROXY_SECRET_UNAVAILABLE");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_refused_proxy_is_never_saved() {
+        use crate::transport::mock::{MOCK_PROXY_DOWN, MockTransport};
+
+        let dir = TestDir::new("commands-proxy-apply");
+        let store = SettingsStore::load(dir.path().join("settings.json")).unwrap();
+        let tdlib_dir = dir.path().join("tdlib");
+        let mock = MockTransport::authorized();
+        let mut good = input(Some(ProxyKind::Mtproto), Some(MT));
+        good.host = "mt.example".into();
+        let view = apply_then_save_proxy(&mock, TransportKind::Mock, &store, &tdlib_dir, &good)
+            .await
+            .unwrap();
+        assert!(view.has_secret);
+        assert_eq!(mock.proxy().unwrap().host, "mt.example", "applied");
+
+        let mut down = input(Some(ProxyKind::Mtproto), Some(&format!("dd{MT}")));
+        down.host = MOCK_PROXY_DOWN.into();
+        let refused = apply_then_save_proxy(&mock, TransportKind::Mock, &store, &tdlib_dir, &down)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "TG_PROXY_FAILED");
+        assert_eq!(
+            store.get().network.proxy.unwrap().host,
+            "mt.example",
+            "the saved proxy stays"
+        );
+        assert_eq!(
+            tdlib::proxy::load_secret(&tdlib_dir).unwrap().as_deref(),
+            Some(MT),
+            "and its secret"
+        );
     }
 
     #[test]
