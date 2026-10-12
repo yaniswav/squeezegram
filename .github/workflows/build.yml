@@ -1,5 +1,5 @@
 # Dry-run build: checks that the project installs, lints, type-checks and compiles.
-# It publishes nothing and uses no secrets. A release workflow comes later.
+# It publishes nothing and uses no secrets. Releases are built by release.yml.
 name: build
 
 on:
@@ -62,6 +62,11 @@ jobs:
       - name: Rust clippy
         working-directory: src-tauri
         run: cargo clippy --locked -- -D warnings
+
+      # Unit tests only; tests marked #[ignore] stay ignored.
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --locked --lib
 
       - name: Rust check
         working-directory: src-tauri
