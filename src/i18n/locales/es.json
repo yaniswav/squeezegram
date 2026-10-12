@@ -1,0 +1,701 @@
+{
+  "app": {
+    "skipToContent": "Ir al contenido",
+    "testTransport": "Transporte de prueba",
+    "testTransportHint": "En esta sesión no se envía nada a Telegram.",
+    "nav": {
+      "label": "Principal",
+      "queue": "Cola",
+      "history": "Historial",
+      "settings": "Ajustes",
+      "connection": "Conexión"
+    }
+  },
+  "common": {
+    "cancel": "Cancelar",
+    "dismiss": "Descartar",
+    "retry": "Reintentar",
+    "loading": "Cargando…",
+    "destinationNumber": "Destino #{{id}}",
+    "rate": "{{rate}}/s",
+    "eta": "Quedan {{duration}}"
+  },
+  "mode": {
+    "video": "Vídeo",
+    "document": "Archivo",
+    "photo": "Foto"
+  },
+  "alerts": {
+    "label": "Notificaciones",
+    "item": "{{name}}"
+  },
+  "errors": {
+    "COMMAND_UNAVAILABLE": "Esta acción todavía no está disponible en esta versión.",
+    "NOT_IN_TAURI": "Esto solo funciona dentro de la aplicación de escritorio squeezegram.",
+    "IPC_ERROR": "El núcleo de la aplicación rechazó la solicitud.",
+    "UNEXPECTED": "Error inesperado ({{code}}).",
+    "IO_ERROR": "Falló una lectura o escritura en el disco.",
+    "DB_ERROR": "La base de datos de la cola informó de un error.",
+    "SETTINGS_INVALID": "Estos ajustes se rechazaron por no ser válidos.",
+    "ITEM_NOT_FOUND": "Este elemento ya no existe.",
+    "ITEM_STARTED": "Este elemento ya se ha iniciado y ya no se puede modificar.",
+    "ILLEGAL_TRANSITION": "Esta acción no es posible en el estado actual del elemento.",
+    "DESTINATION_NOT_FOUND": "Este destino ya no existe.",
+    "FILE_UNREADABLE": "No se puede leer un archivo, o no es un archivo normal.",
+    "FFMPEG_MISSING": "ffmpeg no está instalado, o la carpeta de ffmpeg personalizada no contiene ffmpeg.exe ni ffprobe.exe.",
+    "FFMPEG_ENCODER_UNAVAILABLE": "Ningún codificador de vídeo superó la prueba en este equipo.",
+    "FFMPEG_FAILED": "ffmpeg falló al procesar este archivo.",
+    "FFMPEG_FAILED_fallback_failed": "El codificador de la GPU ({{encoder}}) se detuvo tras {{duration}} (código de salida {{exitCode}}), y el codificador de la CPU ({{fallback}}) también falló. Vuelva a intentar este archivo. Si vuelve a fallar, cambie Settings › Encoding › Encoder a “Procesador primero”.",
+    "FFMPEG_FAILED_no_cpu_encoder": "El codificador de la GPU ({{encoder}}) se detuvo tras {{duration}} sin terminar (código de salida {{exitCode}}), y ningún codificador de la CPU funciona con este ffmpeg para tomar el relevo. Vuelva a intentarlo, idealmente mientras ningún juego ni grabación de pantalla use la tarjeta gráfica, o use un ffmpeg que incluya libx264.",
+    "ENCODER_FALLBACK": "El codificador de la GPU ({{from}}) informó de un error tras {{duration}}. squeezegram cambió al codificador de la CPU ({{to}}) y lo seguirá usando hasta que se reinicie la aplicación.",
+    "ENCODER_FALLBACK_silent": "El codificador de la GPU ({{from}}) se detuvo sin mensaje de error (tras {{duration}}). squeezegram cambió al codificador de la CPU ({{to}}) y lo seguirá usando hasta que se reinicie la aplicación.",
+    "OUTPUT_TOO_LARGE": "Este archivo no cabe dentro del límite de subida, ni siquiera comprimido.",
+    "DISK_SPACE": "No hay suficiente espacio libre en la carpeta temporal.",
+    "DUPLICATE": "Ya se envió a este destino.",
+    "SIDECAR_CHECKSUM": "El ffmpeg descargado no coincide con la suma de comprobación esperada, así que no se instaló.",
+    "SIDECAR_DOWNLOAD": "Falló la descarga de ffmpeg. Compruebe su conexión y reanude: continúa donde se detuvo.",
+    "SIDECAR_EXTRACT": "No se pudo extraer el archivo de ffmpeg.",
+    "SIDECAR_BUSY": "Ya hay una instalación de ffmpeg en curso.",
+    "SIDECAR_INVALID": "Esta carpeta no contiene un ffmpeg y un ffprobe que funcionen, así que no se usó.",
+    "UPDATE_FAILED": "La actualización falló.",
+    "UPDATE_CHECK_FAILED": "No se pudo buscar actualizaciones. Compruebe su conexión e inténtelo de nuevo.",
+    "UPDATE_DOWNLOAD_FAILED": "No se pudo descargar la actualización. Compruebe su conexión e inténtelo de nuevo.",
+    "UPDATE_SIGNATURE_INVALID": "La actualización descargada no superó la comprobación de firma, así que no se instaló.",
+    "UPDATE_INSTALL_FAILED": "No se pudo instalar la actualización. Su versión actual no ha cambiado.",
+    "TG_NOT_AUTHORIZED": "No ha iniciado sesión en Telegram.",
+    "TG_NETWORK": "No se puede conectar con Telegram. Compruebe su conexión.",
+    "TG_FLOOD_WAIT": "Telegram pidió esperar {{duration}} antes de volver a enviar.",
+    "TG_SLOWMODE": "El modo lento está activado en este chat. Espere {{duration}} antes de enviar.",
+    "TG_WRITE_FORBIDDEN": "No puede publicar en este chat ni en este tema.",
+    "TG_FILE_TOO_LARGE": "Telegram rechazó el archivo por ser demasiado grande (límite {{size}}).",
+    "TG_PAID_MESSAGES": "Este chat cobra {{stars}} Stars por mensaje. squeezegram nunca paga, así que no se envió nada.",
+    "TG_BAD_DB_KEY": "No se puede abrir la sesión local de Telegram. Inicie sesión de nuevo.",
+    "TG_NO_PROGRESS": "La subida no avanzó durante {{duration}}. Sigue intentándolo; cancélela si se queda atascada.",
+    "TG_TIMEOUT": "Telegram no respondió a tiempo.",
+    "TG_PROTOCOL": "Telegram envió una respuesta inesperada.",
+    "TG_UPLOAD_FAILED": "Telegram informó de que la subida falló.",
+    "TG_LIB_MISSING": "Falta la biblioteca de Telegram (tdjson.dll) o está dañada.",
+    "TG_NOT_CONFIGURED": "Esta versión no tiene una identidad válida de la API de Telegram (api_id y api_hash), así que no puede conectarse a Telegram.",
+    "TG_NOT_IMPLEMENTED": "Esta función de Telegram todavía no está disponible en esta versión.",
+    "CANCELLED": "Cancelado.",
+    "FILES_SKIPPED_one": "Se omitió {{count}} archivo que no es vídeo ni foto en esta carpeta.",
+    "FILES_SKIPPED_many": "Se omitieron {{count}} archivos que no son vídeos ni fotos en esta carpeta.",
+    "FILES_SKIPPED_other": "Se omitieron {{count}} archivos que no son vídeos ni fotos en esta carpeta.",
+    "TG_REJECTED": "Telegram rechazó la solicitud: {{message}} (código {{tgCode}}).",
+    "TG_WRITE_FORBIDDEN_not_member": "No es miembro de este chat.",
+    "TG_WRITE_FORBIDDEN_join_required": "Debe unirse a este chat o ser aprobado antes de publicar.",
+    "TG_WRITE_FORBIDDEN_banned": "Está bloqueado en este chat.",
+    "TG_WRITE_FORBIDDEN_restricted": "Su cuenta tiene restricciones en este chat.",
+    "TG_WRITE_FORBIDDEN_media_not_allowed": "Este chat no permite mensajes de {{media}}.",
+    "TG_WRITE_FORBIDDEN_admins_only": "Solo los administradores pueden publicar en este chat.",
+    "TG_WRITE_FORBIDDEN_topic_closed": "Este tema está cerrado.",
+    "LIC_MALFORMED": "Esto no es una licencia de squeezegram. Copie la licencia completa del mensaje del bot y péguela de nuevo.",
+    "LIC_UNKNOWN_KID": "Esta licencia está firmada con una clave que esta versión de squeezegram no reconoce. Actualice la aplicación e inténtelo de nuevo.",
+    "LIC_BAD_SIGNATURE": "La licencia no superó la comprobación de firma. Cópiela de nuevo desde el mensaje del bot, sin modificarla.",
+    "LIC_WRONG_ACCOUNT": "Esta licencia pertenece a otra cuenta de Telegram. Inicie sesión con la cuenta para la que se compró.",
+    "LIC_NO_ACCOUNT": "Inicie sesión en Telegram para comprobar esta licencia."
+  },
+  "sidecars": {
+    "missingTitle": "Se necesita ffmpeg para comprimir vídeos",
+    "missingBody": "squeezegram descarga su propia copia ({{size}}, compilación LGPL {{tag}}), comprueba su SHA-256 y nunca usa un ffmpeg encontrado en PATH.",
+    "customInvalid": "La carpeta de ffmpeg personalizada configurada en Ajustes no contiene ffmpeg.exe ni ffprobe.exe.",
+    "install": "Descargar ffmpeg (LGPL)",
+    "resume": "Reanudar descarga",
+    "downloading": "Descargando ffmpeg…",
+    "extracting": "Verificando e instalando…",
+    "progressLabel": "Descarga de ffmpeg",
+    "installed": "ffmpeg está instalado.",
+    "useOwn": "Usar mi propio ffmpeg…",
+    "finder": {
+      "search": "Buscar un ffmpeg ya instalado",
+      "searching": "Buscando en las ubicaciones habituales de instalación…",
+      "intro": "Solo se revisan las carpetas de instalación conocidas y las carpetas de su PATH, y cada resultado se ejecuta una vez para confirmar que funciona. No se usa nada hasta que lo elija.",
+      "none": "No se encontró ningún ffmpeg utilizable en este equipo.",
+      "found_one": "{{count}} ffmpeg encontrado",
+      "found_many": "{{count}} ffmpeg encontrados",
+      "found_other": "{{count}} ffmpeg encontrados",
+      "version": "Versión {{version}}",
+      "use": "Usar este",
+      "using": "Comprobando…",
+      "encoders": "Codificadores: {{list}}",
+      "noEncoders": "No se indica ningún codificador H.264",
+      "pathNote": "Encontrado en su PATH. Solo se muestra: squeezegram nunca elige por sí mismo un ffmpeg del PATH.",
+      "recommended": "Recomendado",
+      "recommendation": {
+        "download": "Recomendado: descargar el ffmpeg propuesto por squeezegram.",
+        "candidate": "Recomendado: usar el ffmpeg marcado abajo."
+      },
+      "unusable": "Ningún codificador H.264 funciona con este ffmpeg: no puede comprimir vídeos aquí.",
+      "weakWarning": "Con este ffmpeg solo funcionan codificadores básicos de la CPU.",
+      "workingEncoders": "Funcionan aquí: {{list}}",
+      "reason": {
+        "hw_nvenc": "Su PC tiene una GPU NVIDIA: este ffmpeg la utiliza.",
+        "hw_qsv": "Su PC tiene una GPU Intel: este ffmpeg la utiliza (Quick Sync).",
+        "hw_amf": "Su PC tiene una GPU AMD: este ffmpeg la utiliza.",
+        "cpu_x264": "Incluye libx264, la mejor alternativa de CPU y la más precisa para alcanzar un tamaño objetivo.",
+        "weak_fallback_only": "Solo funcionan codificadores básicos de la CPU ({{list}}).",
+        "no_working_encoder": "Ningún codificador H.264 funciona con él.",
+        "license_lgpl": "Compilación LGPL.",
+        "license_gpl": "Compilación GPL, válida para uso local.",
+        "candidate_adds_x264": "Este ffmpeg incluye libx264, que la descarga no tiene: mejor alternativa de CPU y tamaños más precisos.",
+        "candidate_adds_hardware": "Este ffmpeg utiliza un codificador por hardware ({{encoder}}) que la descarga no puede usar aquí.",
+        "download_no_candidate": "No se encontró ningún ffmpeg en este equipo, así que la descarga es la opción más sencilla.",
+        "download_no_gain": "Ninguno de los ffmpeg encontrados ofrece más que la descarga.",
+        "download_hardware_tested": "La descarga instalada se probó en este PC.",
+        "download_hardware_assumed": "La descarga aún no está instalada: su compatibilidad con hardware (NVENC, Quick Sync, AMF) se supone según la compilación fijada."
+      },
+      "gplNote": "Compilación GPL. squeezegram no la distribuye: permanece en su equipo.",
+      "license": {
+        "gpl": "GPL",
+        "lgpl": "LGPL",
+        "unknown": "Licencia desconocida"
+      },
+      "origin": {
+        "winget": "winget",
+        "chocolatey": "Chocolatey",
+        "scoop": "Scoop",
+        "program_files": "Program Files",
+        "system_drive": "Raíz de la unidad",
+        "path": "PATH"
+      }
+    }
+  },
+  "drop": {
+    "overlay": "Suelte para añadir a la cola",
+    "hint": "Suelte vídeos y fotos en cualquier parte de esta ventana, o",
+    "browse": "explorar archivos…"
+  },
+  "add": {
+    "title": "Añadir archivos",
+    "selected_one": "{{count}} archivo por añadir",
+    "selected_many": "{{count}} archivos por añadir",
+    "selected_other": "{{count}} archivos por añadir",
+    "more_one": "y {{count}} más",
+    "more_many": "y {{count}} más",
+    "more_other": "y {{count}} más",
+    "remove": "Quitar {{name}}",
+    "clear": "Borrar",
+    "destination": {
+      "label": "Destino",
+      "placeholder": "Elija un destino",
+      "unavailableTitle": "Los destinos no están disponibles",
+      "unavailableBody": "El núcleo no pudo listar los destinos, así que no se pueden poner archivos en la cola.",
+      "empty": "Todavía no hay destinos. Inicie sesión en Telegram y, después, actualice la lista.",
+      "loadError": "No se pudieron cargar los destinos.",
+      "check": {
+        "checking": "Comprobando permisos…",
+        "ok": "Puede enviar aquí.",
+        "blocked": "No puede enviar aquí.",
+        "warning": "Puede enviar aquí, con una advertencia.",
+        "failed": "No se pudieron comprobar los permisos."
+      }
+    },
+    "mode": {
+      "label": "Enviar como",
+      "default": "Predeterminado del destino"
+    },
+    "caption": {
+      "label": "Pie de foto (opcional)",
+      "hint": "Se aplica a todos los archivos de este lote."
+    },
+    "submit_one": "Añadir {{count}} archivo a la cola",
+    "submit_many": "Añadir {{count}} archivos a la cola",
+    "submit_other": "Añadir {{count}} archivos a la cola",
+    "added_one": "{{count}} archivo añadido a la cola.",
+    "added_many": "{{count}} archivos añadidos a la cola.",
+    "added_other": "{{count}} archivos añadidos a la cola."
+  },
+  "queue": {
+    "start": "Iniciar",
+    "pause": "Pausar",
+    "running": "En curso: un archivo cada vez. La pausa se aplica después del archivo actual.",
+    "idle": "Listo: los archivos que añada se procesan automáticamente.",
+    "paused": "En pausa: no se procesa nada hasta que pulse Iniciar.",
+    "loadError": "No se pudo cargar la cola.",
+    "empty": {
+      "title": "La cola está vacía",
+      "body": "Suelte archivos en cualquier parte de la ventana o búsquelos arriba."
+    },
+    "finished_one": "Terminado ({{count}})",
+    "finished_many": "Terminados ({{count}})",
+    "finished_other": "Terminados ({{count}})",
+    "listLabel": "Archivos en la cola",
+    "finishedLabel": "Archivos terminados",
+    "clear": {
+      "button": "Vaciar cola",
+      "title": "¿Vaciar la cola?",
+      "body": "Los archivos que vacíe salen de la cola y sus copias preparadas se eliminan. Sus archivos originales nunca se eliminan. Un archivo que se está procesando en este momento no se toca.",
+      "choices": "Qué vaciar",
+      "finished": {
+        "label": "Vaciar terminados",
+        "hint_one": "{{count}} archivo enviado, fallido o cancelado.",
+        "hint_many": "{{count}} archivos enviados, fallidos o cancelados.",
+        "hint_other": "{{count}} archivos enviados, fallidos o cancelados."
+      },
+      "all": {
+        "label": "Vaciar todo lo que no se está ejecutando",
+        "hint_one": "{{count}} archivo, incluido el que espera para enviarse. No se enviará.",
+        "hint_many": "{{count}} archivos, incluidos los que esperan para enviarse. No se enviarán.",
+        "hint_other": "{{count}} archivos, incluidos los que esperan para enviarse. No se enviarán."
+      },
+      "unconfirmed_one": "{{count}} archivo está marcado como “Por comprobar”: es posible que ya haya llegado a Telegram. Al vaciar se elimina sin comprobarlo.",
+      "unconfirmed_many": "{{count}} archivos están marcados como “Por comprobar”: es posible que ya hayan llegado a Telegram. Al vaciar se eliminan sin comprobarlos.",
+      "unconfirmed_other": "{{count}} archivos están marcados como “Por comprobar”: es posible que ya hayan llegado a Telegram. Al vaciar se eliminan sin comprobarlos.",
+      "removed_one": "{{count}} eliminado.",
+      "removed_many": "{{count}} eliminados.",
+      "removed_other": "{{count}} eliminados.",
+      "nothing": "Nada que eliminar.",
+      "running_one": "{{count}} archivo sigue en curso y se conservó.",
+      "running_many": "{{count}} archivos siguen en curso y se conservaron.",
+      "running_other": "{{count}} archivos siguen en curso y se conservaron."
+    },
+    "state": {
+      "pending_review": "Esperando su acción",
+      "ready": "Listo",
+      "probing": "Analizando",
+      "encoding": "Comprimiendo",
+      "remuxing": "Reempaquetando",
+      "encoded": "Preparado",
+      "uploading": "Subiendo",
+      "waiting_server": "Esperando a Telegram",
+      "sent": "Enviado",
+      "failed": "Fallido",
+      "unknown": "Por comprobar",
+      "cancelled": "Cancelado"
+    },
+    "plan": {
+      "none": "Aún no analizado",
+      "skip": "Listo tal cual",
+      "encode": "Compresión prevista",
+      "remux": "Solo reempaquetar",
+      "remux_audio": "Reempaquetar, audio convertido",
+      "photo": "Conversión de foto"
+    },
+    "step": {
+      "prepare": "Preparar",
+      "send": "Enviar",
+      "waiting": "Sin empezar",
+      "done": "Hecho"
+    },
+    "phase": {
+      "probing": "Analizando",
+      "encoding": "Comprimiendo",
+      "encodingCpuFallback": "Comprimiendo en el procesador (alternativa)",
+      "remuxing": "Reempaquetando",
+      "uploading": "Subiendo",
+      "awaiting_server": "Esperando la confirmación de Telegram",
+      "waiting_server": "Esperando a Telegram"
+    },
+    "item": {
+      "actions": "Acciones para {{name}}",
+      "moveUp": "Subir {{name}}",
+      "moveDown": "Bajar {{name}}",
+      "cancelNamed": "Cancelar {{name}}",
+      "retry": "Reintentar",
+      "to": "A {{name}}",
+      "sentAt": "Enviado {{time}}",
+      "resolution": "{{width}} × {{height}}",
+      "mode": "Enviar como",
+      "caption": {
+        "label": "Pie de foto",
+        "empty": "Sin pie de foto",
+        "edit": "Editar pie de foto",
+        "save": "Guardar pie de foto"
+      },
+      "duplicate": {
+        "body": "Este archivo ya se envió a este destino. Espera hasta que usted lo confirme.",
+        "confirm": "Enviar de todos modos",
+        "dialogTitle": "¿Enviar este archivo otra vez?",
+        "dialogBody": "{{name}} ya se envió a este destino. Volver a enviarlo publica un mensaje duplicado.",
+        "dialogConfirm": "Enviar otra vez"
+      },
+      "watch": {
+        "body": "Encontrado en una carpeta vigilada. No se envía nada sin su aprobación.",
+        "approve": "Aprobar"
+      },
+      "waiting": {
+        "body": "Telegram pidió reducir el ritmo. No se envió nada; reintentará por sí solo a las {{time}}.",
+        "countdown": "Reintentar en {{duration}}"
+      },
+      "unknown": {
+        "body": "La aplicación se detuvo mientras este archivo se subía. Es posible que haya llegado a Telegram o que no.",
+        "markSent": "Se envió",
+        "sendAgain": "Enviar otra vez",
+        "dialogTitle": "¿Enviarlo otra vez?",
+        "dialogBody": "Si la primera subida sí llegó, el chat recibe {{name}} dos veces.",
+        "search": "Buscar en el chat",
+        "searching": "Buscando en el chat…",
+        "noCandidate": "No se encontró ningún mensaje coincidente en el chat.",
+        "candidatesTitle": "Mensajes que podrían ser este archivo",
+        "candidate": "{{kind}}, {{when}}",
+        "useCandidate": "Este es el correcto"
+      },
+      "failed": {
+        "keptHint": "El archivo preparado se conserva: reintentar no lo vuelve a comprimir."
+      },
+      "cancelDialog": {
+        "title": "¿Cancelar este archivo?",
+        "body": "Se descarta el trabajo hecho en {{name}}, incluida la copia preparada. El archivo original nunca se toca.",
+        "confirm": "Cancelar archivo",
+        "keep": "Conservarlo"
+      }
+    }
+  },
+  "history": {
+    "title": "Historial",
+    "description": "Archivos enviados, fallidos y sin confirmar, del más reciente al más antiguo.",
+    "tableCaption": "Historial de envíos",
+    "filter": {
+      "label": "Mostrar",
+      "all": "Todos",
+      "sent": "Enviados",
+      "failed": "Fallidos",
+      "unknown": "Sin confirmar"
+    },
+    "column": {
+      "file": "Archivo",
+      "destination": "Destino",
+      "size": "Tamaño",
+      "mode": "Enviado como",
+      "status": "Resultado",
+      "date": "Fecha"
+    },
+    "status": {
+      "sent": "Enviado",
+      "failed": "Fallido",
+      "unknown": "Sin confirmar"
+    },
+    "compressed": "Comprimido",
+    "imported": "Importado",
+    "empty": "Todavía no hay nada aquí.",
+    "loadMore": "Cargar más",
+    "loadError": "No se pudo cargar el historial.",
+    "clear": {
+      "button": "Vaciar historial",
+      "title": "¿Vaciar el historial?",
+      "body": "Esto elimina todas las líneas del historial, no solo las que se muestran. La aplicación también lo usa para avisarle cuando un archivo ya se envió al mismo destino: una vez vaciado, los archivos ya enviados pueden volver a enviarse sin ningún aviso. La cola y sus destinos no se ven afectados.",
+      "confirm": "Vaciar historial",
+      "removed_one": "{{count}} eliminado.",
+      "removed_many": "{{count}} eliminados.",
+      "removed_other": "{{count}} eliminados.",
+      "nothing": "Nada que eliminar."
+    }
+  },
+  "settings": {
+    "title": "Ajustes",
+    "loadError": "No se pudieron cargar los ajustes.",
+    "save": "Guardar cambios",
+    "saving": "Guardando…",
+    "saved": "Ajustes guardados.",
+    "discard": "Descartar cambios",
+    "unsaved": "Cambios sin guardar",
+    "invalid": "Corrija los campos marcados para poder guardar.",
+    "license": {
+      "title": "Licencia",
+      "hint": "Una licencia desbloquea squeezegram Premium para la cuenta de Telegram para la que se compró. Se comprueba en este equipo, sin ninguna solicitud de red.",
+      "unavailable": "No se pudo leer el estado de la licencia.",
+      "status": {
+        "free": "Plan: Gratuito",
+        "premium": "Plan: Premium, de por vida",
+        "features": "Desbloqueado: {{list}}",
+        "pending": "Hay una licencia guardada. Inicie sesión en Telegram para comprobarla: se aplicará cuando inicie sesión la cuenta para la que se compró.",
+        "otherAccount": "La licencia guardada está vinculada a otra cuenta de Telegram. Inicie sesión con la cuenta para la que se compró o elimínela.",
+        "invalid": "No se puede usar la licencia guardada. {{message}}"
+      },
+      "feature": {
+        "advanced_encoding": "codificación avanzada",
+        "multi_destination": "varios destinos",
+        "watched_folder": "carpetas vigiladas",
+        "background": "modo en segundo plano",
+        "caption_templates": "plantillas de pie de foto"
+      },
+      "input": {
+        "label": "Pegue su licencia",
+        "hint": "El bot la envía en un mensaje. Empieza por SQZ1."
+      },
+      "activate": "Activar",
+      "activating": "Comprobando…",
+      "activated": "Licencia activada.",
+      "savedPending": "Licencia guardada. Inicie sesión en Telegram para comprobarla.",
+      "buy": "Comprar una licencia en @squeezegram_bot desde Telegram",
+      "remove": {
+        "button": "Eliminar licencia",
+        "title": "¿Eliminar la licencia?",
+        "body": "Las funciones Premium se desactivan en este equipo. Conserve el mensaje del bot: la misma licencia se puede volver a activar.",
+        "confirm": "Eliminar licencia"
+      }
+    },
+    "limit": {
+      "title": "Límite de subida",
+      "premium": {
+        "label": "Telegram Premium",
+        "auto": "Detectar desde mi cuenta",
+        "yes": "Premium (4000 MB)",
+        "no": "No Premium (2000 MB)",
+        "hint": "“Detectar desde mi cuenta” usa el límite de la cuenta de Telegram con sesión iniciada: 4000 MB con Premium, 2000 MB sin Premium, o si no hay sesión iniciada. Un límite personalizado lo sustituye.",
+        "current": "Aplicado ahora: {{mb}} MB, {{source}}.",
+        "currentUnavailable": "No se pudo leer el límite aplicado ahora.",
+        "source": {
+          "custom": "del límite personalizado",
+          "forcedPremium": "Premium fijado aquí",
+          "forcedStandard": "no Premium, fijado aquí",
+          "accountPremium": "detectado: cuenta Premium",
+          "accountStandard": "detectado: cuenta estándar",
+          "default": "sin sesión iniciada en Telegram"
+        }
+      },
+      "custom": {
+        "label": "Límite personalizado (MB)",
+        "hint": "Sustituye al límite Premium. Déjelo vacío para usar este.",
+        "error": "Introduzca un número entero de MB, mayor que 0."
+      },
+      "margin": {
+        "label": "Margen de seguridad (%)",
+        "hint": "Los archivos comprimidos apuntan a quedar este margen por debajo del límite. El 3 % ha demostrado ser fiable.",
+        "error": "Introduzca un número de 0 a 49.9."
+      }
+    },
+    "encoding": {
+      "title": "Codificación",
+      "prefer": {
+        "label": "Codificador",
+        "gpu": "Primero la tarjeta gráfica (más rápido)",
+        "cpu": "Primero el procesador",
+        "hint": "Si el primer tipo falla su prueba, se usa el otro. Si la tarjeta gráfica se detiene a mitad de una compresión (un juego o un grabador de pantalla que la use puede causarlo), el archivo se vuelve a comprimir en el procesador. Si esto sigue ocurriendo, elija “Primero el procesador”: es más lento, pero no afecta a la tarjeta gráfica.",
+        "gpuFailed": "El codificador de la tarjeta gráfica ({{encoder}}) se detuvo durante una compresión en esta sesión. squeezegram usa el procesador hasta que se reinicie la aplicación y, después, vuelve a probar la tarjeta gráfica."
+      }
+    },
+    "advanced": {
+      "title": "Codificación avanzada",
+      "premium": "Premium",
+      "locked": "Incluida con squeezegram Premium. Hasta entonces, la compresión usa los valores automáticos que se muestran aquí.",
+      "resolution": {
+        "label": "Resolución máxima",
+        "hint": "Los vídeos más grandes se reducen a este tamaño; los más pequeños nunca se amplían. Una resolución mayor deja menos bits para cada píxel dentro del límite de subida.",
+        "1080p": "1080p (automático)",
+        "1440p": "1440p",
+        "2160p": "2160p (4K)",
+        "original": "Tamaño original (hasta 4096 píxeles de ancho)"
+      },
+      "audio": {
+        "label": "Tasa de bits del audio",
+        "hint": "Una tasa de bits mayor suena mejor, pero resta espacio a la imagen dentro del límite de subida.",
+        "value": "{{kbps}} kbit/s",
+        "automatic": "{{kbps}} kbit/s (automático)"
+      }
+    },
+    "send": {
+      "title": "Pausas entre envíos",
+      "hint": "Tras cada envío se aplica una pausa aleatoria dentro de este intervalo.",
+      "min": "Mínimo (segundos)",
+      "max": "Máximo (segundos)",
+      "errorInteger": "Introduzca un número entero de segundos, 0 o más.",
+      "errorOrder": "El mínimo no puede ser mayor que el máximo."
+    },
+    "temp": {
+      "title": "Archivos temporales",
+      "dir": "Carpeta temporal",
+      "default": "Carpeta predeterminada",
+      "choose": "Elegir…",
+      "useDefault": "Usar la predeterminada",
+      "minFree": "Espacio libre mínimo (GB)",
+      "minFreeHint": "La compresión no empieza por debajo de este valor.",
+      "errorInteger": "Introduzca un número entero de GB, 0 o más."
+    },
+    "ffmpeg": {
+      "title": "ffmpeg",
+      "dir": "Carpeta de ffmpeg personalizada",
+      "default": "La copia descargada por squeezegram",
+      "hint": "Una carpeta con ffmpeg.exe y ffprobe.exe, directamente o dentro de bin.",
+      "choose": "Elegir…",
+      "useDefault": "Usar la predeterminada",
+      "inUse": "En uso: {{path}}",
+      "notFound": "No se encontró ningún ffmpeg utilizable."
+    },
+    "appearance": {
+      "title": "Apariencia",
+      "theme": {
+        "label": "Tema",
+        "dark": "Oscuro",
+        "light": "Claro",
+        "system": "Igual que Windows"
+      },
+      "language": "Idioma",
+      "languageBeta": "{{name}} (beta)"
+    },
+    "diagnostics": {
+      "title": "Diagnóstico",
+      "hint": "squeezegram guarda un registro de lo que hace, durante 7 días como máximo, para ayudar a encontrar la causa de un problema. Nunca contiene su número de teléfono, códigos, contraseñas, dirección de correo electrónico ni pies de foto.",
+      "folder": "Carpeta de registros",
+      "folderUnavailable": "El registro no está disponible.",
+      "openFolder": "Abrir la carpeta de registros",
+      "export": "Exportar un informe de depuración",
+      "exporting": "Exportando…",
+      "exportHint": "Guarda un archivo .zip con el registro reciente, las versiones en uso y los últimos códigos de error. Los nombres de carpetas y los chats se ocultan. No se envía nada a ningún sitio: usted decide si lo comparte.",
+      "exported": "Informe guardado: {{path}}"
+    },
+    "updates": {
+      "title": "Actualizaciones",
+      "current": "Versión actual: {{version}}",
+      "kind": {
+        "installer": "Instalada con el instalador: las actualizaciones se descargan e instalan desde aquí.",
+        "portable": "Versión portátil: se anuncia una nueva versión, pero nunca se instala automáticamente. Descárguela y reemplace esta carpeta."
+      },
+      "automatic": {
+        "label": "Buscar automáticamente",
+        "hint": "Busca una nueva versión en GitHub al iniciar la aplicación, como máximo una vez al día. Solo se envía una solicitud web estándar: sin identificador, sin versión de Windows y sin datos de uso."
+      },
+      "checkNow": "Buscar ahora",
+      "checking": "Buscando…",
+      "upToDate": "Tiene la versión más reciente.",
+      "available": "La versión {{version}} está disponible.",
+      "lastChecked": "Última búsqueda: {{date}}",
+      "neverChecked": "Nunca se ha buscado."
+    }
+  },
+  "update": {
+    "banner": {
+      "title": "Actualización disponible (versión {{version}})",
+      "install": "Descargar e instalar",
+      "openPage": "Abrir la página de descarga",
+      "portableHint": "Esta es la versión portátil: descargue el nuevo zip y reemplace esta carpeta.",
+      "queueRunning": "Primero pause la cola: squeezegram se cierra para instalar la actualización.",
+      "downloading": "Descargando la actualización…",
+      "installing": "Instalando: squeezegram se cerrará y se reiniciará.",
+      "progressLabel": "Descarga de la actualización"
+    }
+  },
+  "recovery": {
+    "title": "Algo salió mal",
+    "body": "Esta pantalla encontró un error inesperado. Los detalles se escribieron en el registro; puede exportarlos desde Settings, Diagnostics.",
+    "retry": "Intentar de nuevo",
+    "reload": "Recargar la aplicación"
+  },
+  "connection": {
+    "title": "Conexión con Telegram",
+    "testTransport": "Transporte de prueba: el inicio de sesión y el envío se simulan, nada llega a Telegram.",
+    "starting": "Iniciando Telegram…",
+    "closed": "Telegram no está disponible en esta versión, así que no es posible iniciar sesión.",
+    "loggingOut": "Cerrando sesión…",
+    "loadError": "No se pudo leer el estado del inicio de sesión.",
+    "submit": "Continuar",
+    "phone": {
+      "title": "Inicie sesión con su número de teléfono",
+      "label": "Número de teléfono",
+      "hint": "Con el prefijo de país, por ejemplo +33 6 12 34 56 78.",
+      "useQr": "Usar un código QR en su lugar"
+    },
+    "qr": {
+      "title": "Escanee este código con Telegram en su teléfono",
+      "body": "Abra Telegram y, después, Settings, Devices, Link Desktop Device. El código se renueva solo.",
+      "alt": "Código QR para iniciar sesión en Telegram",
+      "usePhone": "Usar mi número de teléfono en su lugar",
+      "request": "Mostrar un código QR"
+    },
+    "code": {
+      "title": "Introduzca el código de inicio de sesión",
+      "label": "Código",
+      "hint": "Telegram lo envió a sus otros dispositivos o por SMS.",
+      "resend": "Enviar el código de nuevo",
+      "resendIn": "Podrá pedir un código nuevo dentro de {{duration}}."
+    },
+    "email": {
+      "title": "Introduzca su dirección de correo electrónico",
+      "label": "Correo electrónico",
+      "hint": "Telegram la usa para proteger su inicio de sesión."
+    },
+    "emailCode": {
+      "title": "Introduzca el código enviado a su correo electrónico",
+      "label": "Código del correo electrónico"
+    },
+    "password": {
+      "title": "Verificación en dos pasos",
+      "label": "Contraseña",
+      "hint": "Pista: {{hint}}"
+    },
+    "other": {
+      "title": "Telegram necesita otro paso",
+      "body": "Este paso ({{step}}) no se puede completar en squeezegram. Termínelo en la aplicación oficial de Telegram y, después, vuelva aquí."
+    },
+    "ready": {
+      "title": "Sesión iniciada",
+      "premium": "Premium",
+      "standard": "Cuenta estándar",
+      "limit": "Límite de subida: {{size}}",
+      "caption_one": "Pies de foto de hasta {{count}} carácter",
+      "caption_many": "Pies de foto de hasta {{count}} caracteres",
+      "caption_other": "Pies de foto de hasta {{count}} caracteres",
+      "logout": "Cerrar sesión",
+      "logoutTitle": "¿Cerrar sesión en Telegram?",
+      "logoutBody": "La sesión local se elimina. Tendrá que volver a iniciar sesión para enviar archivos.",
+      "logoutConfirm": "Cerrar sesión"
+    }
+  },
+  "destinations": {
+    "refresh": "Actualizar desde Telegram",
+    "favorite": "Añadir {{name}} a favoritos",
+    "unfavorite": "Quitar {{name}} de favoritos",
+    "favorites": "Favoritos",
+    "rename": "Renombrar {{name}}",
+    "renameLabel": "Nombre local",
+    "renameHint": "Solo se muestra en squeezegram. Déjelo vacío para usar el nombre de Telegram.",
+    "save": "Guardar",
+    "unnamed": "Chat sin nombre",
+    "panelLabel": "Elija un destino",
+    "listLabel": "Destinos",
+    "groups": {
+      "saved": "Mensajes guardados",
+      "recent": "Usados recientemente",
+      "folder": "Carpeta",
+      "chats": "Chats principales",
+      "archived": "Chats archivados ({{count}})",
+      "forums": "Foros ({{count}})",
+      "results": "Coincidencias",
+      "telegram": "Resultados de búsqueda en Telegram",
+      "unnamed": "Sin nombre ({{count}})"
+    },
+    "badges": {
+      "archived": "archivado",
+      "closed": "cerrado",
+      "unlisted": "de la búsqueda",
+      "readOnly": "solo lectura",
+      "checking": "comprobando…",
+      "cannotSend": "no puede enviar aquí"
+    },
+    "topics": {
+      "show": "(pulse la flecha derecha para mostrar los temas)",
+      "hide": "(temas mostrados, la flecha izquierda los oculta)",
+      "loading": "Cargando temas…",
+      "error": "No se pudieron cargar los temas.",
+      "empty": "No hay temas."
+    },
+    "search": {
+      "label": "Filtrar destinos",
+      "placeholder": "Filtrar por nombre…",
+      "telegram": "Buscar en Telegram “{{query}}”",
+      "searching": "Buscando en Telegram…",
+      "noLocal": "Ningún chat de aquí coincide.",
+      "nothing": "No se encontró nada, tampoco en Telegram.",
+      "failed": "La búsqueda en Telegram falló.",
+      "count_one": "{{count}} coincidencia",
+      "count_many": "{{count}} coincidencias",
+      "count_other": "{{count}} coincidencias"
+    },
+    "telegramHint": "Estos chats no están en sus listas.",
+    "filters": {
+      "label": "Mostrar",
+      "all": "Todos",
+      "main": "Principales",
+      "archived": "Archivados",
+      "folders": "Carpetas",
+      "forums": "Foros",
+      "announce_one": "{{name}}: {{count}} chat",
+      "announce_many": "{{name}}: {{count}} chats",
+      "announce_other": "{{name}}: {{count}} chats",
+      "empty": "No hay ningún chat en esta vista."
+    },
+    "unnamedHint": "Chats sin nombre, a menudo cuentas eliminadas.",
+    "unnamedShow": "Mostrarlos",
+    "unnamedHide": "Ocultarlos"
+  }
+}

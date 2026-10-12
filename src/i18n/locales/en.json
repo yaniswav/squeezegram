@@ -507,7 +507,8 @@
         "light": "Light",
         "system": "Same as Windows"
       },
-      "language": "Language"
+      "language": "Language",
+      "languageBeta": "{{name}} (beta)"
     },
     "diagnostics": {
       "title": "Diagnostics",

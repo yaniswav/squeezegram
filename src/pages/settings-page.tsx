@@ -1053,7 +1053,15 @@ function SettingsForm({
                 value={draft.language}
                 onChange={(value) => update("language", value)}
                 options={availableLanguages().map(
-                  ({ code, nativeName }) => [code, nativeName] as const,
+                  ({ code, nativeName, beta }) =>
+                    [
+                      code,
+                      beta
+                        ? t("settings.appearance.languageBeta", {
+                            name: nativeName,
+                          })
+                        : nativeName,
+                    ] as const,
                 )}
               />
             )}

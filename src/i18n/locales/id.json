@@ -1,0 +1,669 @@
+{
+  "app": {
+    "skipToContent": "Lewati ke konten",
+    "testTransport": "Transport uji",
+    "testTransportHint": "Tidak ada yang dikirim ke Telegram dalam sesi ini.",
+    "nav": {
+      "label": "Utama",
+      "queue": "Antrean",
+      "history": "Riwayat",
+      "settings": "Pengaturan",
+      "connection": "Koneksi"
+    }
+  },
+  "common": {
+    "cancel": "Batal",
+    "dismiss": "Tutup",
+    "retry": "Coba lagi",
+    "loading": "Memuat…",
+    "destinationNumber": "Tujuan #{{id}}",
+    "rate": "{{rate}}/s",
+    "eta": "{{duration}} tersisa"
+  },
+  "mode": {
+    "video": "Video",
+    "document": "Berkas",
+    "photo": "Foto"
+  },
+  "alerts": {
+    "label": "Notifikasi",
+    "item": "{{name}}"
+  },
+  "errors": {
+    "COMMAND_UNAVAILABLE": "Tindakan ini belum tersedia di versi ini.",
+    "NOT_IN_TAURI": "Fitur ini hanya berfungsi di dalam aplikasi desktop squeezegram.",
+    "IPC_ERROR": "Inti aplikasi menolak permintaan.",
+    "UNEXPECTED": "Terjadi kesalahan tak terduga ({{code}}).",
+    "IO_ERROR": "Pembacaan atau penulisan disk gagal.",
+    "DB_ERROR": "Database antrean melaporkan kesalahan.",
+    "SETTINGS_INVALID": "Pengaturan ini ditolak karena tidak valid.",
+    "ITEM_NOT_FOUND": "Item ini sudah tidak ada.",
+    "ITEM_STARTED": "Item ini sudah mulai diproses dan tidak dapat diubah lagi.",
+    "ILLEGAL_TRANSITION": "Tindakan ini tidak mungkin dilakukan pada status item saat ini.",
+    "DESTINATION_NOT_FOUND": "Tujuan ini sudah tidak ada.",
+    "FILE_UNREADABLE": "Berkas tidak dapat dibaca atau bukan berkas biasa.",
+    "FFMPEG_MISSING": "ffmpeg belum terpasang, atau folder ffmpeg kustom tidak berisi ffmpeg.exe dan ffprobe.exe.",
+    "FFMPEG_ENCODER_UNAVAILABLE": "Tidak ada encoder video yang lolos uji di komputer ini.",
+    "FFMPEG_FAILED": "ffmpeg gagal memproses berkas ini.",
+    "FFMPEG_FAILED_fallback_failed": "Encoder GPU ({{encoder}}) berhenti setelah {{duration}} (kode keluar {{exitCode}}), dan encoder CPU ({{fallback}}) juga gagal. Coba lagi berkas ini. Jika gagal lagi, atur Settings › Encoding › Encoder ke “Prosesor dulu”.",
+    "FFMPEG_FAILED_no_cpu_encoder": "Encoder GPU ({{encoder}}) berhenti setelah {{duration}} tanpa selesai (kode keluar {{exitCode}}), dan tidak ada encoder CPU yang berfungsi dengan ffmpeg ini sebagai pengganti. Coba lagi, sebaiknya saat tidak ada game atau perekaman layar yang memakai kartu grafis, atau gunakan ffmpeg yang menyertakan libx264.",
+    "ENCODER_FALLBACK": "Encoder GPU ({{from}}) melaporkan kesalahan setelah {{duration}}. squeezegram beralih ke encoder CPU ({{to}}) dan terus memakainya sampai aplikasi dimulai ulang.",
+    "ENCODER_FALLBACK_silent": "Encoder GPU ({{from}}) berhenti tanpa pesan kesalahan (setelah {{duration}}). squeezegram beralih ke encoder CPU ({{to}}) dan terus memakainya sampai aplikasi dimulai ulang.",
+    "OUTPUT_TOO_LARGE": "Berkas ini tidak dapat masuk di bawah batas unggah, bahkan setelah dikompresi.",
+    "DISK_SPACE": "Ruang kosong di folder sementara tidak cukup.",
+    "DUPLICATE": "Sudah pernah dikirim ke tujuan ini.",
+    "SIDECAR_CHECKSUM": "ffmpeg yang diunduh tidak cocok dengan checksum yang diharapkan, sehingga tidak dipasang.",
+    "SIDECAR_DOWNLOAD": "Unduhan ffmpeg gagal. Periksa koneksi, lalu lanjutkan: unduhan berlanjut dari titik terhentinya.",
+    "SIDECAR_EXTRACT": "Arsip ffmpeg tidak dapat diekstrak.",
+    "SIDECAR_BUSY": "Pemasangan ffmpeg sedang berjalan.",
+    "SIDECAR_INVALID": "Folder ini tidak berisi ffmpeg dan ffprobe yang berfungsi, sehingga tidak digunakan.",
+    "UPDATE_FAILED": "Pembaruan gagal.",
+    "UPDATE_CHECK_FAILED": "Pemeriksaan pembaruan gagal. Periksa koneksi, lalu coba lagi.",
+    "UPDATE_DOWNLOAD_FAILED": "Pembaruan tidak dapat diunduh. Periksa koneksi, lalu coba lagi.",
+    "UPDATE_SIGNATURE_INVALID": "Pembaruan yang diunduh tidak lolos pemeriksaan tanda tangannya, sehingga tidak dipasang.",
+    "UPDATE_INSTALL_FAILED": "Pembaruan tidak dapat dipasang. Versi Anda saat ini tidak berubah.",
+    "TG_NOT_AUTHORIZED": "Belum masuk ke Telegram.",
+    "TG_NETWORK": "Tidak dapat terhubung ke Telegram. Periksa koneksi.",
+    "TG_FLOOD_WAIT": "Telegram meminta untuk menunggu {{duration}} sebelum mengirim lagi.",
+    "TG_SLOWMODE": "Mode lambat aktif di chat ini. Tunggu {{duration}} sebelum mengirim.",
+    "TG_WRITE_FORBIDDEN": "Anda tidak dapat memposting di chat atau topik ini.",
+    "TG_FILE_TOO_LARGE": "Telegram menolak berkas karena terlalu besar (batas {{size}}).",
+    "TG_PAID_MESSAGES": "Chat ini memungut {{stars}} Stars per pesan. squeezegram tidak pernah membayar, jadi tidak ada yang dikirim.",
+    "TG_BAD_DB_KEY": "Sesi Telegram lokal tidak dapat dibuka. Masuk lagi.",
+    "TG_NO_PROGRESS": "Unggahan tidak mengalami kemajuan selama {{duration}}. Unggahan terus dicoba; batalkan jika tetap macet.",
+    "TG_TIMEOUT": "Telegram tidak merespons tepat waktu.",
+    "TG_PROTOCOL": "Telegram mengirim jawaban yang tidak terduga.",
+    "TG_UPLOAD_FAILED": "Telegram melaporkan bahwa unggahan gagal.",
+    "TG_LIB_MISSING": "Pustaka Telegram (tdjson.dll) hilang atau rusak.",
+    "TG_NOT_CONFIGURED": "Build ini tidak memiliki identitas API Telegram (api_id dan api_hash) yang valid, sehingga tidak dapat terhubung ke Telegram.",
+    "TG_NOT_IMPLEMENTED": "Fitur Telegram ini belum tersedia di versi ini.",
+    "CANCELLED": "Dibatalkan.",
+    "FILES_SKIPPED_other": "{{count}} berkas yang bukan video atau foto dilewati di folder ini.",
+    "TG_REJECTED": "Telegram menolak permintaan: {{message}} (kode {{tgCode}}).",
+    "TG_WRITE_FORBIDDEN_not_member": "Anda bukan anggota chat ini.",
+    "TG_WRITE_FORBIDDEN_join_required": "Anda harus bergabung ke chat ini, atau disetujui, sebelum dapat memposting.",
+    "TG_WRITE_FORBIDDEN_banned": "Anda diblokir dari chat ini.",
+    "TG_WRITE_FORBIDDEN_restricted": "Akun Anda dibatasi di chat ini.",
+    "TG_WRITE_FORBIDDEN_media_not_allowed": "Chat ini tidak mengizinkan pesan {{media}}.",
+    "TG_WRITE_FORBIDDEN_admins_only": "Hanya admin yang dapat memposting di chat ini.",
+    "TG_WRITE_FORBIDDEN_topic_closed": "Topik ini sudah ditutup.",
+    "LIC_MALFORMED": "Ini bukan lisensi squeezegram. Salin seluruh lisensi dari pesan bot, lalu tempel ulang.",
+    "LIC_UNKNOWN_KID": "Lisensi ini ditandatangani dengan kunci yang tidak dikenali oleh versi squeezegram ini. Perbarui aplikasi, lalu coba lagi.",
+    "LIC_BAD_SIGNATURE": "Lisensi ini gagal pemeriksaan tanda tangannya. Salin ulang dari pesan bot tanpa mengubah apa pun.",
+    "LIC_WRONG_ACCOUNT": "Lisensi ini milik akun Telegram lain. Masuk dengan akun tempat lisensi ini dibeli.",
+    "LIC_NO_ACCOUNT": "Masuk ke Telegram untuk memeriksa lisensi ini."
+  },
+  "sidecars": {
+    "missingTitle": "ffmpeg diperlukan untuk mengompresi video",
+    "missingBody": "squeezegram mengunduh salinannya sendiri ({{size}}, build LGPL {{tag}}), memeriksa SHA-256-nya, dan tidak pernah memakai ffmpeg yang ditemukan di PATH.",
+    "customInvalid": "Folder ffmpeg kustom yang diatur di Pengaturan tidak berisi ffmpeg.exe dan ffprobe.exe.",
+    "install": "Unduh ffmpeg (LGPL)",
+    "resume": "Lanjutkan unduhan",
+    "downloading": "Mengunduh ffmpeg…",
+    "extracting": "Memverifikasi dan memasang…",
+    "progressLabel": "Unduhan ffmpeg",
+    "installed": "ffmpeg sudah terpasang.",
+    "useOwn": "Gunakan ffmpeg saya sendiri…",
+    "finder": {
+      "search": "Cari ffmpeg yang sudah terpasang",
+      "searching": "Mencari di lokasi pemasangan yang umum…",
+      "intro": "Hanya folder pemasangan yang dikenal dan folder di PATH yang diperiksa, dan setiap hasil dijalankan sekali untuk memastikan berfungsi. Tidak ada yang dipakai sampai Anda memilihnya.",
+      "none": "Tidak ada ffmpeg yang dapat dipakai di komputer ini.",
+      "found_other": "{{count}} ffmpeg ditemukan",
+      "version": "Versi {{version}}",
+      "use": "Gunakan yang ini",
+      "using": "Memeriksa…",
+      "encoders": "Encoder: {{list}}",
+      "noEncoders": "Tidak ada encoder H.264 yang tercantum",
+      "pathNote": "Ditemukan di PATH Anda. Hanya ditampilkan: squeezegram tidak pernah memilih ffmpeg dari PATH dengan sendirinya.",
+      "recommended": "Direkomendasikan",
+      "recommendation": {
+        "download": "Direkomendasikan: unduh ffmpeg yang diusulkan squeezegram.",
+        "candidate": "Direkomendasikan: gunakan ffmpeg yang ditandai di bawah."
+      },
+      "unusable": "Tidak ada encoder H.264 yang berfungsi dengan ffmpeg ini: tidak dapat mengompresi video di sini.",
+      "weakWarning": "Hanya encoder CPU dasar yang berfungsi dengan ffmpeg ini.",
+      "workingEncoders": "Berfungsi di sini: {{list}}",
+      "reason": {
+        "hw_nvenc": "Komputer Anda memiliki GPU NVIDIA: ffmpeg ini menggunakannya.",
+        "hw_qsv": "Komputer Anda memiliki GPU Intel: ffmpeg ini menggunakannya (Quick Sync).",
+        "hw_amf": "Komputer Anda memiliki GPU AMD: ffmpeg ini menggunakannya.",
+        "cpu_x264": "Menyertakan libx264, cadangan CPU terbaik dan paling akurat untuk target ukuran.",
+        "weak_fallback_only": "Hanya encoder CPU dasar yang berfungsi ({{list}}).",
+        "no_working_encoder": "Tidak ada encoder H.264 yang berfungsi dengannya.",
+        "license_lgpl": "Build LGPL.",
+        "license_gpl": "Build GPL, aman untuk penggunaan lokal.",
+        "candidate_adds_x264": "ffmpeg ini menyertakan libx264, yang tidak ada di unduhan: cadangan CPU yang lebih baik dan ukuran yang lebih akurat.",
+        "candidate_adds_hardware": "ffmpeg ini menggunakan encoder perangkat keras ({{encoder}}) yang tidak dapat dipakai unduhan di sini.",
+        "download_no_candidate": "Tidak ada ffmpeg yang ditemukan di komputer ini, sehingga unduhan adalah pilihan paling sederhana.",
+        "download_no_gain": "Tidak ada ffmpeg yang ditemukan yang melakukan lebih dari unduhan.",
+        "download_hardware_tested": "Unduhan yang terpasang telah diuji di PC ini.",
+        "download_hardware_assumed": "Unduhan belum terpasang: dukungan perangkat kerasnya (NVENC, Quick Sync, AMF) diasumsikan dari build yang ditetapkan."
+      },
+      "gplNote": "Build GPL. squeezegram tidak mendistribusikannya, file ini tetap ada di komputer Anda.",
+      "license": {
+        "gpl": "GPL",
+        "lgpl": "LGPL",
+        "unknown": "Lisensi tidak diketahui"
+      },
+      "origin": {
+        "winget": "winget",
+        "chocolatey": "Chocolatey",
+        "scoop": "Scoop",
+        "program_files": "Program Files",
+        "system_drive": "Direktori utama drive",
+        "path": "PATH"
+      }
+    }
+  },
+  "drop": {
+    "overlay": "Lepaskan untuk menambahkan ke antrean",
+    "hint": "Lepaskan video dan foto di mana saja di jendela ini, atau",
+    "browse": "telusuri berkas…"
+  },
+  "add": {
+    "title": "Tambah berkas",
+    "selected_other": "{{count}} berkas akan ditambahkan",
+    "more_other": "dan {{count}} lainnya",
+    "remove": "Hapus {{name}}",
+    "clear": "Kosongkan",
+    "destination": {
+      "label": "Tujuan",
+      "placeholder": "Pilih tujuan",
+      "unavailableTitle": "Tujuan tidak tersedia",
+      "unavailableBody": "Inti aplikasi tidak dapat menampilkan daftar tujuan, sehingga berkas tidak dapat diantrekan.",
+      "empty": "Belum ada tujuan. Masuk ke Telegram, lalu muat ulang daftar.",
+      "loadError": "Tujuan tidak dapat dimuat.",
+      "check": {
+        "checking": "Memeriksa izin…",
+        "ok": "Anda dapat mengirim ke sini.",
+        "blocked": "Anda tidak dapat mengirim ke sini.",
+        "warning": "Anda dapat mengirim ke sini, dengan peringatan.",
+        "failed": "Izin tidak dapat diperiksa."
+      }
+    },
+    "mode": {
+      "label": "Kirim sebagai",
+      "default": "Default tujuan"
+    },
+    "caption": {
+      "label": "Keterangan (opsional)",
+      "hint": "Berlaku untuk setiap berkas dalam kelompok ini."
+    },
+    "submit_other": "Tambahkan {{count}} berkas ke antrean",
+    "added_other": "{{count}} berkas ditambahkan ke antrean."
+  },
+  "queue": {
+    "start": "Mulai",
+    "pause": "Jeda",
+    "running": "Sedang berjalan: satu berkas per waktu. Jeda berlaku setelah berkas saat ini selesai.",
+    "idle": "Siap: berkas yang Anda tambahkan akan diproses otomatis.",
+    "paused": "Dijeda: tidak ada yang diproses sampai Anda menekan Mulai.",
+    "loadError": "Antrean tidak dapat dimuat.",
+    "empty": {
+      "title": "Antrean kosong",
+      "body": "Lepaskan berkas di mana saja di jendela, atau telusuri di atas."
+    },
+    "finished_other": "Selesai ({{count}})",
+    "listLabel": "Berkas dalam antrean",
+    "finishedLabel": "Berkas yang selesai",
+    "clear": {
+      "button": "Kosongkan antrean",
+      "title": "Kosongkan antrean?",
+      "body": "Berkas yang Anda kosongkan akan keluar dari antrean dan salinan yang sudah disiapkan akan dihapus. Berkas asli Anda tidak pernah dihapus. Berkas yang sedang diproses saat ini tidak tersentuh.",
+      "choices": "Yang akan dikosongkan",
+      "finished": {
+        "label": "Kosongkan yang selesai",
+        "hint_other": "{{count}} berkas terkirim, gagal, atau dibatalkan."
+      },
+      "all": {
+        "label": "Kosongkan semua yang tidak sedang berjalan",
+        "hint_other": "{{count}} berkas, termasuk berkas yang menunggu dikirim. Berkas tersebut tidak akan dikirim."
+      },
+      "unconfirmed_other": "{{count}} berkas ditandai “Perlu diperiksa”: berkas tersebut mungkin sudah sampai ke Telegram. Mengosongkan akan menghapusnya tanpa pemeriksaan.",
+      "removed_other": "{{count}} dihapus.",
+      "nothing": "Tidak ada yang dihapus.",
+      "running_other": "{{count}} berkas masih berjalan dan tetap disimpan."
+    },
+    "state": {
+      "pending_review": "Menunggu konfirmasi",
+      "ready": "Siap",
+      "probing": "Menganalisis",
+      "encoding": "Mengompresi",
+      "remuxing": "Remuxing",
+      "encoded": "Disiapkan",
+      "uploading": "Mengunggah",
+      "waiting_server": "Menunggu Telegram",
+      "sent": "Terkirim",
+      "failed": "Gagal",
+      "unknown": "Perlu diperiksa",
+      "cancelled": "Dibatalkan"
+    },
+    "plan": {
+      "none": "Belum dianalisis",
+      "skip": "Siap apa adanya",
+      "encode": "Kompresi direncanakan",
+      "remux": "Hanya remux",
+      "remux_audio": "Remux, audio dikonversi",
+      "photo": "Konversi foto"
+    },
+    "step": {
+      "prepare": "Siapkan",
+      "send": "Kirim",
+      "waiting": "Belum dimulai",
+      "done": "Selesai"
+    },
+    "phase": {
+      "probing": "Menganalisis",
+      "encoding": "Mengompresi",
+      "encodingCpuFallback": "Mengompresi di prosesor (cadangan)",
+      "remuxing": "Remuxing",
+      "uploading": "Mengunggah",
+      "awaiting_server": "Menunggu konfirmasi Telegram",
+      "waiting_server": "Menunggu Telegram"
+    },
+    "item": {
+      "actions": "Tindakan untuk {{name}}",
+      "moveUp": "Pindahkan {{name}} ke atas",
+      "moveDown": "Pindahkan {{name}} ke bawah",
+      "cancelNamed": "Batalkan {{name}}",
+      "retry": "Coba lagi",
+      "to": "Ke {{name}}",
+      "sentAt": "Dikirim {{time}}",
+      "resolution": "{{width}} × {{height}}",
+      "mode": "Kirim sebagai",
+      "caption": {
+        "label": "Keterangan",
+        "empty": "Tanpa keterangan",
+        "edit": "Ubah keterangan",
+        "save": "Simpan keterangan"
+      },
+      "duplicate": {
+        "body": "Berkas ini sudah pernah dikirim ke tujuan ini. Berkas menunggu sampai Anda mengonfirmasi.",
+        "confirm": "Tetap kirim",
+        "dialogTitle": "Kirim berkas ini lagi?",
+        "dialogBody": "{{name}} sudah pernah dikirim ke tujuan ini. Mengirimnya lagi akan memposting pesan duplikat.",
+        "dialogConfirm": "Kirim lagi"
+      },
+      "watch": {
+        "body": "Ditemukan di folder yang dipantau. Tidak ada yang dikirim tanpa persetujuan Anda.",
+        "approve": "Setujui"
+      },
+      "waiting": {
+        "body": "Telegram meminta untuk memperlambat. Tidak ada yang dikirim; percobaan ulang otomatis pada {{time}}.",
+        "countdown": "Coba lagi dalam {{duration}}"
+      },
+      "unknown": {
+        "body": "Aplikasi berhenti saat berkas ini sedang diunggah. Berkas mungkin sudah sampai ke Telegram atau belum.",
+        "markSent": "Sudah terkirim",
+        "sendAgain": "Kirim ulang",
+        "dialogTitle": "Kirim lagi?",
+        "dialogBody": "Jika unggahan pertama sudah sampai, chat akan menerima {{name}} dua kali.",
+        "search": "Cari di chat",
+        "searching": "Mencari di chat…",
+        "noCandidate": "Tidak ada pesan yang cocok di chat.",
+        "candidatesTitle": "Pesan yang mungkin merupakan berkas ini",
+        "candidate": "{{kind}}, {{when}}",
+        "useCandidate": "Inilah yang benar"
+      },
+      "failed": {
+        "keptHint": "Berkas yang sudah disiapkan disimpan: mencoba lagi tidak mengompresinya ulang."
+      },
+      "cancelDialog": {
+        "title": "Batalkan berkas ini?",
+        "body": "Pekerjaan yang sudah dilakukan pada {{name}}, termasuk salinan yang disiapkan, akan dibuang. Berkas asli tidak pernah disentuh.",
+        "confirm": "Batalkan berkas",
+        "keep": "Biarkan"
+      }
+    }
+  },
+  "history": {
+    "title": "Riwayat",
+    "description": "Berkas terkirim, gagal, dan belum terkonfirmasi, dari yang terbaru.",
+    "tableCaption": "Riwayat pengiriman",
+    "filter": {
+      "label": "Tampilkan",
+      "all": "Semua",
+      "sent": "Terkirim",
+      "failed": "Gagal",
+      "unknown": "Belum terkonfirmasi"
+    },
+    "column": {
+      "file": "Berkas",
+      "destination": "Tujuan",
+      "size": "Ukuran",
+      "mode": "Dikirim sebagai",
+      "status": "Hasil",
+      "date": "Tanggal"
+    },
+    "status": {
+      "sent": "Terkirim",
+      "failed": "Gagal",
+      "unknown": "Belum terkonfirmasi"
+    },
+    "compressed": "Dikompresi",
+    "imported": "Diimpor",
+    "empty": "Belum ada apa-apa di sini.",
+    "loadMore": "Muat lebih banyak",
+    "loadError": "Riwayat tidak dapat dimuat.",
+    "clear": {
+      "button": "Kosongkan riwayat",
+      "title": "Kosongkan riwayat?",
+      "body": "Ini menghapus setiap baris riwayat, bukan hanya yang ditampilkan. Aplikasi juga menggunakannya untuk memperingatkan Anda ketika berkas sudah pernah dikirim ke tujuan yang sama: setelah dikosongkan, berkas yang sudah terkirim dapat dikirim lagi tanpa peringatan apa pun. Antrean dan tujuan Anda tidak terpengaruh.",
+      "confirm": "Kosongkan riwayat",
+      "removed_other": "{{count}} dihapus.",
+      "nothing": "Tidak ada yang dihapus."
+    }
+  },
+  "settings": {
+    "title": "Pengaturan",
+    "loadError": "Pengaturan tidak dapat dimuat.",
+    "save": "Simpan perubahan",
+    "saving": "Menyimpan…",
+    "saved": "Pengaturan disimpan.",
+    "discard": "Buang perubahan",
+    "unsaved": "Perubahan belum disimpan",
+    "invalid": "Perbaiki kolom yang disorot untuk menyimpan.",
+    "license": {
+      "title": "Lisensi",
+      "hint": "Lisensi membuka fitur squeezegram Premium untuk akun Telegram tempat lisensi itu dibeli. Lisensi diperiksa di komputer ini, tanpa permintaan jaringan.",
+      "unavailable": "Status lisensi tidak dapat dibaca.",
+      "status": {
+        "free": "Paket: Gratis",
+        "premium": "Paket: Premium, seumur hidup",
+        "features": "Terbuka: {{list}}",
+        "pending": "Lisensi sudah disimpan. Masuk ke Telegram untuk memeriksanya: lisensi berlaku setelah akun tempat lisensi dibeli masuk.",
+        "otherAccount": "Lisensi yang tersimpan terikat ke akun Telegram lain. Masuk dengan akun tempat lisensi dibeli, atau hapus lisensi.",
+        "invalid": "Lisensi yang tersimpan tidak dapat digunakan. {{message}}"
+      },
+      "feature": {
+        "advanced_encoding": "encoding lanjutan",
+        "multi_destination": "beberapa tujuan",
+        "watched_folder": "folder yang dipantau",
+        "background": "mode latar belakang",
+        "caption_templates": "templat keterangan"
+      },
+      "input": {
+        "label": "Tempel lisensi Anda",
+        "hint": "Bot mengirimkannya dalam sebuah pesan. Lisensi diawali dengan SQZ1."
+      },
+      "activate": "Aktifkan",
+      "activating": "Memeriksa…",
+      "activated": "Lisensi diaktifkan.",
+      "savedPending": "Lisensi disimpan. Masuk ke Telegram untuk memeriksanya.",
+      "buy": "Beli lisensi dari @squeezegram_bot di Telegram",
+      "remove": {
+        "button": "Hapus lisensi",
+        "title": "Hapus lisensi?",
+        "body": "Fitur Premium berhenti di komputer ini. Simpan pesan dari bot: lisensi yang sama dapat diaktifkan lagi.",
+        "confirm": "Hapus lisensi"
+      }
+    },
+    "limit": {
+      "title": "Batas unggah",
+      "premium": {
+        "label": "Telegram Premium",
+        "auto": "Deteksi dari akun saya",
+        "yes": "Premium (4000 MB)",
+        "no": "Bukan Premium (2000 MB)",
+        "hint": "“Deteksi dari akun saya” memakai batas dari akun Telegram yang sedang masuk: 4000 MB dengan Premium, 2000 MB tanpa Premium, atau saat tidak masuk. Batas kustom menggantikannya.",
+        "current": "Diterapkan sekarang: {{mb}} MB, {{source}}.",
+        "currentUnavailable": "Batas yang diterapkan sekarang tidak dapat dibaca.",
+        "source": {
+          "custom": "dari batas kustom",
+          "forcedPremium": "Premium diatur di sini",
+          "forcedStandard": "bukan Premium, diatur di sini",
+          "accountPremium": "terdeteksi: akun Premium",
+          "accountStandard": "terdeteksi: akun standar",
+          "default": "belum masuk ke Telegram"
+        }
+      },
+      "custom": {
+        "label": "Batas kustom (MB)",
+        "hint": "Menggantikan batas Premium. Kosongkan untuk memakainya.",
+        "error": "Masukkan bilangan bulat MB, lebih dari 0."
+      },
+      "margin": {
+        "label": "Margin keamanan (%)",
+        "hint": "Berkas yang dikompresi diusahakan berada sejauh ini di bawah batas. 3 % terbukti andal.",
+        "error": "Masukkan angka dari 0 hingga 49.9."
+      }
+    },
+    "encoding": {
+      "title": "Encoding",
+      "prefer": {
+        "label": "Encoder",
+        "gpu": "Kartu grafis dulu (lebih cepat)",
+        "cpu": "Prosesor dulu",
+        "hint": "Jika jenis pertama gagal uji, jenis lainnya dipakai. Jika kartu grafis berhenti di tengah kompresi (game atau perekam layar yang memakainya bisa menyebabkan ini), berkas dikompresi ulang di prosesor. Jika terus terjadi, pilih “Prosesor dulu”: lebih lambat, tetapi kartu grafis tidak terganggu.",
+        "gpuFailed": "Encoder kartu grafis ({{encoder}}) berhenti selama kompresi dalam sesi ini. squeezegram menggunakan prosesor sampai aplikasi dimulai ulang, lalu mencoba kartu grafis lagi."
+      }
+    },
+    "advanced": {
+      "title": "Encoding lanjutan",
+      "premium": "Premium",
+      "locked": "Termasuk dalam squeezegram Premium. Sampai saat itu, kompresi memakai nilai otomatis yang ditampilkan di sini.",
+      "resolution": {
+        "label": "Resolusi maksimum",
+        "hint": "Video yang lebih besar diperkecil ke ukuran ini; video yang lebih kecil tidak pernah diperbesar. Resolusi yang lebih tinggi menyisakan lebih sedikit bit untuk setiap piksel di bawah batas unggah.",
+        "1080p": "1080p (otomatis)",
+        "1440p": "1440p",
+        "2160p": "2160p (4K)",
+        "original": "Ukuran asli (hingga 4096 piksel lebar)"
+      },
+      "audio": {
+        "label": "Bitrate audio",
+        "hint": "Bitrate yang lebih tinggi terdengar lebih baik dan mengambil ruang dari gambar di bawah batas unggah.",
+        "value": "{{kbps}} kbit/s",
+        "automatic": "{{kbps}} kbit/s (otomatis)"
+      }
+    },
+    "send": {
+      "title": "Jeda antar pengiriman",
+      "hint": "Jeda acak dalam rentang ini mengikuti setiap pengiriman.",
+      "min": "Minimum (detik)",
+      "max": "Maksimum (detik)",
+      "errorInteger": "Masukkan bilangan bulat detik, 0 atau lebih.",
+      "errorOrder": "Nilai minimum tidak boleh lebih besar dari maksimum."
+    },
+    "temp": {
+      "title": "Berkas sementara",
+      "dir": "Folder sementara",
+      "default": "Folder default",
+      "choose": "Pilih…",
+      "useDefault": "Gunakan default",
+      "minFree": "Ruang kosong minimum (GB)",
+      "minFreeHint": "Kompresi tidak dimulai di bawah nilai ini.",
+      "errorInteger": "Masukkan bilangan bulat GB, 0 atau lebih."
+    },
+    "ffmpeg": {
+      "title": "ffmpeg",
+      "dir": "Folder ffmpeg kustom",
+      "default": "Salinan yang diunduh oleh squeezegram",
+      "hint": "Folder yang berisi ffmpeg.exe dan ffprobe.exe, langsung atau di dalam bin.",
+      "choose": "Pilih…",
+      "useDefault": "Gunakan default",
+      "inUse": "Digunakan: {{path}}",
+      "notFound": "Tidak ditemukan ffmpeg yang dapat dipakai."
+    },
+    "appearance": {
+      "title": "Tampilan",
+      "theme": {
+        "label": "Tema",
+        "dark": "Gelap",
+        "light": "Terang",
+        "system": "Sama seperti Windows"
+      },
+      "language": "Bahasa",
+      "languageBeta": "{{name}} (beta)"
+    },
+    "diagnostics": {
+      "title": "Diagnostik",
+      "hint": "squeezegram menyimpan jurnal aktivitasnya, paling lama 7 hari, untuk membantu menemukan penyebab masalah. Jurnal tidak pernah berisi nomor telepon, kode, kata sandi, alamat e-mail, atau keterangan Anda.",
+      "folder": "Folder log",
+      "folderUnavailable": "Jurnal tidak tersedia.",
+      "openFolder": "Buka folder log",
+      "export": "Ekspor laporan debug",
+      "exporting": "Mengekspor…",
+      "exportHint": "Menyimpan berkas .zip berisi jurnal terbaru, versi yang digunakan, dan kode kesalahan terakhir. Nama folder dan chat disamarkan. Tidak ada yang dikirim ke mana pun: Anda yang memutuskan apakah akan membagikannya.",
+      "exported": "Laporan disimpan: {{path}}"
+    },
+    "updates": {
+      "title": "Pembaruan",
+      "current": "Versi saat ini: {{version}}",
+      "kind": {
+        "installer": "Dipasang dengan installer: pembaruan diunduh dan dipasang dari sini.",
+        "portable": "Build portable: versi baru diumumkan tetapi tidak pernah dipasang untuk Anda. Unduh dan ganti folder ini."
+      },
+      "automatic": {
+        "label": "Periksa otomatis",
+        "hint": "Mencari versi baru di GitHub saat aplikasi dimulai, paling banyak sekali sehari. Hanya permintaan web standar yang dikirim: tanpa pengenal, tanpa versi Windows, tanpa data penggunaan."
+      },
+      "checkNow": "Periksa sekarang",
+      "checking": "Memeriksa…",
+      "upToDate": "Anda sudah memakai versi terbaru.",
+      "available": "Versi {{version}} tersedia.",
+      "lastChecked": "Terakhir diperiksa: {{date}}",
+      "neverChecked": "Belum pernah diperiksa."
+    }
+  },
+  "update": {
+    "banner": {
+      "title": "Pembaruan tersedia (versi {{version}})",
+      "install": "Unduh dan pasang",
+      "openPage": "Buka halaman unduhan",
+      "portableHint": "Ini adalah build portable: unduh zip baru dan ganti folder ini.",
+      "queueRunning": "Jeda antrean terlebih dahulu: squeezegram menutup diri untuk memasang pembaruan.",
+      "downloading": "Mengunduh pembaruan…",
+      "installing": "Memasang: squeezegram akan menutup dan memulai ulang.",
+      "progressLabel": "Unduhan pembaruan"
+    }
+  },
+  "recovery": {
+    "title": "Terjadi kesalahan",
+    "body": "Layar ini mengalami kesalahan tak terduga. Detailnya telah ditulis ke jurnal; Anda dapat mengekspornya dari Settings, Diagnostics.",
+    "retry": "Coba lagi",
+    "reload": "Muat ulang aplikasi"
+  },
+  "connection": {
+    "title": "Koneksi Telegram",
+    "testTransport": "Transport uji: masuk dan pengiriman disimulasikan, tidak ada yang sampai ke Telegram.",
+    "starting": "Memulai Telegram…",
+    "closed": "Telegram tidak tersedia di build ini, sehingga masuk tidak mungkin dilakukan.",
+    "loggingOut": "Keluar…",
+    "loadError": "Status masuk tidak dapat dibaca.",
+    "submit": "Lanjutkan",
+    "phone": {
+      "title": "Masuk dengan nomor telepon Anda",
+      "label": "Nomor telepon",
+      "hint": "Dengan kode negara, misalnya +33 6 12 34 56 78.",
+      "useQr": "Gunakan kode QR"
+    },
+    "qr": {
+      "title": "Pindai kode ini dengan Telegram di ponsel Anda",
+      "body": "Buka Telegram, lalu Settings, Devices, Link Desktop Device. Kode diperbarui sendiri.",
+      "alt": "Kode QR masuk Telegram",
+      "usePhone": "Gunakan nomor telepon saya",
+      "request": "Tampilkan kode QR"
+    },
+    "code": {
+      "title": "Masukkan kode masuk",
+      "label": "Kode",
+      "hint": "Telegram mengirimkannya ke perangkat Anda yang lain atau lewat SMS.",
+      "resend": "Kirim ulang kode",
+      "resendIn": "Anda dapat meminta kode baru dalam {{duration}}."
+    },
+    "email": {
+      "title": "Masukkan alamat e-mail Anda",
+      "label": "Alamat e-mail",
+      "hint": "Telegram menggunakannya untuk mengamankan masuk Anda."
+    },
+    "emailCode": {
+      "title": "Masukkan kode yang dikirim ke e-mail Anda",
+      "label": "Kode e-mail"
+    },
+    "password": {
+      "title": "Verifikasi dua langkah",
+      "label": "Kata sandi",
+      "hint": "Petunjuk: {{hint}}"
+    },
+    "other": {
+      "title": "Telegram memerlukan langkah lain",
+      "body": "Langkah ini ({{step}}) tidak dapat dilakukan di squeezegram. Selesaikan di aplikasi Telegram resmi, lalu kembali."
+    },
+    "ready": {
+      "title": "Sudah masuk",
+      "premium": "Premium",
+      "standard": "Akun standar",
+      "limit": "Batas unggah: {{size}}",
+      "caption_other": "Keterangan hingga {{count}} karakter",
+      "logout": "Keluar",
+      "logoutTitle": "Keluar dari Telegram?",
+      "logoutBody": "Sesi lokal dihapus. Anda harus masuk lagi untuk mengirim berkas.",
+      "logoutConfirm": "Keluar"
+    }
+  },
+  "destinations": {
+    "refresh": "Muat ulang dari Telegram",
+    "favorite": "Tambahkan {{name}} ke favorit",
+    "unfavorite": "Hapus {{name}} dari favorit",
+    "favorites": "Favorit",
+    "rename": "Ganti nama {{name}}",
+    "renameLabel": "Nama lokal",
+    "renameHint": "Hanya ditampilkan di squeezegram. Kosongkan untuk memakai nama Telegram.",
+    "save": "Simpan",
+    "unnamed": "Chat tanpa nama",
+    "panelLabel": "Pilih tujuan",
+    "listLabel": "Tujuan",
+    "groups": {
+      "saved": "Pesan Tersimpan",
+      "recent": "Baru digunakan",
+      "folder": "Folder",
+      "chats": "Chat utama",
+      "archived": "Chat diarsipkan ({{count}})",
+      "forums": "Forum ({{count}})",
+      "results": "Hasil yang cocok",
+      "telegram": "Hasil pencarian Telegram",
+      "unnamed": "Tanpa nama ({{count}})"
+    },
+    "badges": {
+      "archived": "diarsipkan",
+      "closed": "ditutup",
+      "unlisted": "dari pencarian",
+      "readOnly": "hanya baca",
+      "checking": "memeriksa…",
+      "cannotSend": "tidak dapat mengirim ke sini"
+    },
+    "topics": {
+      "show": "(tekan panah kanan untuk menampilkan topik)",
+      "hide": "(topik ditampilkan, panah kiri untuk menyembunyikan)",
+      "loading": "Memuat topik…",
+      "error": "Topik tidak dapat dimuat.",
+      "empty": "Tidak ada topik."
+    },
+    "search": {
+      "label": "Saring tujuan",
+      "placeholder": "Saring berdasarkan nama…",
+      "telegram": "Cari “{{query}}” di Telegram",
+      "searching": "Mencari di Telegram…",
+      "noLocal": "Tidak ada chat di sini yang cocok.",
+      "nothing": "Tidak ditemukan, di Telegram juga tidak.",
+      "failed": "Pencarian Telegram gagal.",
+      "count_other": "{{count}} hasil cocok"
+    },
+    "telegramHint": "Chat ini tidak ada dalam daftar Anda.",
+    "filters": {
+      "label": "Tampilkan",
+      "all": "Semua",
+      "main": "Utama",
+      "archived": "Diarsipkan",
+      "folders": "Folder",
+      "forums": "Forum",
+      "announce_other": "{{name}}: {{count}} chat",
+      "empty": "Tidak ada chat di tampilan ini."
+    },
+    "unnamedHint": "Chat tanpa nama, sering kali akun yang sudah dihapus.",
+    "unnamedShow": "Tampilkan",
+    "unnamedHide": "Sembunyikan"
+  }
+}
