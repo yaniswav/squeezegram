@@ -1,0 +1,35 @@
+*.csv
+
+# Session / secrets
+.tdl/
+*.session
+*.key
+*.pem
+.env
+.env.*
+tauri-updater-key*
+
+# Downloaded binaries (fetched by scripts or by the app, never committed).
+# Anchored so that the Rust module src-tauri/src/sidecars/ stays versioned.
+/sidecars/
+/src-tauri/sidecars/
+tdjson*.dll
+
+# Build / deps
+node_modules/
+dist/
+target/
+src-tauri/target/
+src-tauri/gen/
+
+# Logs (the app writes squeezegram-*.jsonl under %LOCALAPPDATA%; copies must not land here)
+*.log
+*.jsonl
+
+# Local tooling and temp
+tmp/
+scratchpad/
+
+# Local-only folders
+/private/
+/docs/

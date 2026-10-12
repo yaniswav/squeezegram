@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>squeezegram</title>
+    <!-- No favicon: stops the browser from requesting /favicon.ico in dev. -->
+    <link rel="icon" href="data:," />
+    <!-- Classic blocking script: applies theme and text direction before first paint (no flash).
+         Kept as an external file so the strict CSP (script-src 'self') needs no inline exception. -->
+    <script src="/theme-init.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,75 @@
+{
+  "steps": [
+    {
+      "expect": "requestQrCodeAuthentication",
+      "reply": { "@type": "ok" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": {
+            "@type": "authorizationStateWaitOtherDeviceConfirmation",
+            "link": "tg://login?token=FIRST"
+          }
+        }
+      ]
+    },
+    {
+      "expect": "getMe",
+      "reply": {
+        "@type": "user",
+        "id": 777000002,
+        "first_name": "Qr",
+        "last_name": "",
+        "usernames": null,
+        "is_premium": false
+      }
+    },
+    {
+      "expect": "getOption",
+      "reply": { "@type": "optionValueInteger", "value": 1024 }
+    },
+    {
+      "expect": "logOut",
+      "reply": { "@type": "ok" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": { "@type": "authorizationStateLoggingOut" }
+        },
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": { "@type": "authorizationStateClosing" }
+        },
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": { "@type": "authorizationStateClosed" }
+        }
+      ]
+    },
+    {
+      "expect": "getOption",
+      "reply": { "@type": "optionValueString", "value": "1.8.68" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": {
+            "@type": "authorizationStateWaitTdlibParameters"
+          }
+        }
+      ]
+    },
+    { "expect": "setNetworkType", "reply": { "@type": "ok" } },
+    {
+      "expect": "setTdlibParameters",
+      "reply": { "@type": "ok" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": {
+            "@type": "authorizationStateWaitPhoneNumber"
+          }
+        }
+      ]
+    }
+  ]
+}

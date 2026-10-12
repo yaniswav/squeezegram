@@ -1,0 +1,58 @@
+# cargo-deny configuration. Run from src-tauri: `cargo deny check`.
+# Reference: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Only the Windows build is shipped, so only its dependency graph is checked.
+targets = ["x86_64-pc-windows-msvc"]
+
+[advisories]
+version = 2
+# Vulnerabilities fail the check (default for version 2).
+# Unmaintained crates only warn.
+unmaintained = "all"
+yanked = "warn"
+ignore = [
+  # proc-macro-error 1.0.4 is unmaintained. It is only used by the Linux/GTK
+  # side of wry, which is not part of the Windows build.
+  { id = "RUSTSEC-2024-0370", reason = "Linux/GTK dependency tree only, absent from the Windows build" },
+  # glib 0.18.5: unsound VariantStrIter. Same Linux/GTK tree, absent from
+  # the Windows build and not upgradable from this repository.
+  { id = "RUSTSEC-2024-0429", reason = "Linux/GTK dependency tree only, absent from the Windows build" },
+]
+
+[licenses]
+version = 2
+# Anything not listed here is rejected, including GPL, AGPL and LGPL.
+# Some entries match no crate today; cargo-deny reports them as warnings.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "Zlib",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "BSL-1.0",
+  "0BSD",
+  "OpenSSL",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+# The application crate has publish = false and no license field.
+ignore = true
+
+[bans]
+# Tauri pulls several duplicate versions that cannot be resolved here.
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,138 @@
+{
+  "steps": [
+    {
+      "expect": "setAuthenticationPhoneNumber",
+      "reply": {
+        "@type": "error",
+        "code": 429,
+        "message": "Too Many Requests: retry after 3600"
+      }
+    },
+    {
+      "expect": "setAuthenticationPhoneNumber",
+      "reply": { "@type": "ok" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": {
+            "@type": "authorizationStateWaitEmailAddress",
+            "allow_apple_id": false,
+            "allow_google_id": false
+          }
+        }
+      ]
+    },
+    {
+      "expect": "setAuthenticationEmailAddress",
+      "reply": { "@type": "ok" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": {
+            "@type": "authorizationStateWaitEmailCode",
+            "allow_apple_id": false,
+            "allow_google_id": false
+          }
+        }
+      ]
+    },
+    {
+      "expect": "checkAuthenticationEmailCode",
+      "reply": { "@type": "ok" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": {
+            "@type": "authorizationStateWaitCode",
+            "code_info": {
+              "@type": "authenticationCodeInfo",
+              "phone_number": "+00000000000",
+              "type": {
+                "@type": "authenticationCodeTypeTelegramMessage",
+                "length": 5
+              },
+              "next_type": {
+                "@type": "authenticationCodeTypeSms",
+                "length": 5
+              },
+              "timeout": 60
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": "resendAuthenticationCode",
+      "reply": { "@type": "ok" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": {
+            "@type": "authorizationStateWaitCode",
+            "code_info": {
+              "@type": "authenticationCodeInfo",
+              "phone_number": "+00000000000",
+              "type": { "@type": "authenticationCodeTypeSms", "length": 5 },
+              "next_type": null,
+              "timeout": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "expect": "checkAuthenticationCode",
+      "reply": {
+        "@type": "error",
+        "code": 400,
+        "message": "PHONE_CODE_INVALID"
+      }
+    },
+    {
+      "expect": "checkAuthenticationCode",
+      "reply": { "@type": "ok" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": {
+            "@type": "authorizationStateWaitPassword",
+            "password_hint": "the usual",
+            "has_recovery_email_address": false,
+            "has_passport_data": false,
+            "recovery_email_address_pattern": ""
+          }
+        }
+      ]
+    },
+    {
+      "expect": "checkAuthenticationPassword",
+      "reply": { "@type": "ok" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": { "@type": "authorizationStateReady" }
+        }
+      ]
+    },
+    {
+      "expect": "getMe",
+      "reply": {
+        "@type": "user",
+        "id": 777000001,
+        "first_name": "Test",
+        "last_name": "Account",
+        "usernames": {
+          "@type": "usernames",
+          "active_usernames": ["test_account"],
+          "disabled_usernames": [],
+          "editable_username": "test_account"
+        },
+        "is_premium": true
+      }
+    },
+    {
+      "expect": "getOption",
+      "reply": { "@type": "optionValueInteger", "value": "4096" }
+    }
+  ]
+}

@@ -1,0 +1,311 @@
+//! squeezegram core.
+//!
+//! Modules:
+//!
+//! - `queue`: item state machine, sequential orchestrator, SQLite persistence
+//! - `transport`: `TelegramTransport` trait, `MockTransport` (debug builds), `TdlibJson`, the
+//!   startup choice between them (`transport::select`) and the send stage
+//! - `media`: ffprobe, plan, encoder detection, ffmpeg encode/remux/photo, BLAKE3 hashing,
+//!   child processes with a Job Object (`media::procs`)
+//! - `sidecars`: ffmpeg/ffprobe resolution and download, path of the bundled `tdjson.dll`
+//! - `watch`: watched folders (file size stability)
+//! - `settings`: versioned settings
+//! - `limit`: the effective upload limit (settings, else the signed-in account)
+//! - `logging`: the JSON Lines journal
+
+mod commands;
+pub mod limit;
+pub mod logging;
+pub mod media;
+pub mod queue;
+pub mod settings;
+pub mod sidecars;
+pub mod transport;
+
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use tauri::webview::PageLoadEvent;
+use tauri::{AppHandle, Manager, RunEvent, WebviewWindow};
+
+use commands::{AppState, TauriEvents};
+use limit::LimitResolver;
+use media::stage::FfmpegStage;
+use queue::orchestrator::Orchestrator;
+use queue::store::Store;
+use settings::SettingsStore;
+use sidecars::SidecarService;
+use transport::TelegramTransport;
+use transport::select::TransportKind;
+use transport::stage::TransportStage;
+
+/// Label of the main window, see `app.windows` in `tauri.conf.json`.
+const MAIN_WINDOW: &str = "main";
+/// `close` then `authorizationStateClosed` took 6 to 22 ms when measured; bounded anyway.
+const TRANSPORT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn show_and_focus(window: &WebviewWindow) -> tauri::Result<()> {
+    window.unminimize()?;
+    window.show()?;
+    window.set_focus()
+}
+
+/// Called in the running instance whenever the user starts the app a second time.
+fn focus_main_window(app: &AppHandle) {
+    tracing::info!(
+        event = "second_instance",
+        "second launch forwarded to this instance"
+    );
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW)
+        && let Err(error) = show_and_focus(&window)
+    {
+        tracing::warn!(event = "window_error", error = %error, "could not focus the main window");
+    }
+}
+
+/// What is loaded before the window: needed by `app_start` (ffmpeg in use, journal level).
+struct Boot {
+    db_path: PathBuf,
+    settings: Arc<SettingsStore>,
+    sidecars: Arc<SidecarService>,
+}
+
+/// Paths and settings; logs nothing (the first journal line must be `app_start`).
+fn boot() -> Result<Boot, Box<dyn std::error::Error>> {
+    let db_path = queue::db::default_path()?;
+    let settings = Arc::new(SettingsStore::load(SettingsStore::path_next_to(&db_path))?);
+    let sidecar_base = SidecarService::default_base().ok_or("LOCALAPPDATA is not set")?;
+    let sidecars = Arc::new(SidecarService::new(sidecar_base, settings.clone()));
+    Ok(Boot {
+        db_path,
+        settings,
+        sidecars,
+    })
+}
+
+/// Opens the database, applies the startup recovery rules and builds the queue.
+fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::error::Error>> {
+    let Boot {
+        db_path,
+        settings,
+        sidecars,
+    } = boot;
+    let mut store = Store::open(&db_path)?;
+    let recovered = queue::recovery::on_startup(&mut store)?;
+    // `SQUEEZEGRAM_TRANSPORT`, identity and `tdjson.dll`; logs `transport_selected`. Nothing
+    // touches the network here.
+    let transport::select::Selection {
+        transport,
+        kind: transport_kind,
+        ..
+    } = transport::select::select(&transport::select::Inputs::from_process(&settings.get()));
+    // The plan and the upload share one limit: settings, else the signed-in account.
+    let limits = Arc::new(LimitResolver::new(
+        settings.clone(),
+        Some(transport.auth_state()),
+    ));
+    let media = Arc::new(FfmpegStage::new(
+        sidecars.clone(),
+        settings.clone(),
+        limits.clone(),
+    ));
+    let send = Arc::new(TransportStage::new(transport.clone(), settings.clone()));
+    let queue = Orchestrator::new(
+        store,
+        media.clone(),
+        send,
+        Arc::new(TauriEvents(app.clone())),
+        settings.get().pause_range(),
+    );
+    Ok(AppState {
+        queue,
+        settings,
+        sidecars,
+        transport,
+        transport_kind,
+        media,
+        limits,
+        recovered: Mutex::new(recovered),
+    })
+}
+
+/// Starts the transport and forwards every login state on `auth://state`. With TDLib the
+/// start stops at `WaitPhone`: no account is signed in until the user types something.
+fn spawn_transport(
+    app: &AppHandle,
+    transport: Arc<dyn TelegramTransport>,
+    kind: TransportKind,
+    queue: Orchestrator,
+) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut states = transport.auth_state();
+        // `TG_LIB_MISSING`, `TG_NOT_CONFIGURED`… reach the UI as an alert.
+        if let Err(error) = transport::select::start(transport.as_ref()).await {
+            let (code, params) = error.code_and_params();
+            queue.alert(None, code, params);
+        }
+        loop {
+            let payload = {
+                let state = states.borrow_and_update();
+                transport::service::log_auth_state(&state);
+                transport::service::auth_payload(&state, kind)
+            };
+            commands::emit_auth_state(&app, &payload);
+            if states.changed().await.is_err() {
+                return;
+            }
+        }
+    });
+}
+
+/// Announces the items changed by the startup recovery once the page can listen.
+fn announce_recovery(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        let ids = std::mem::take(
+            &mut *state
+                .recovered
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        state.queue.emit_changed(&ids);
+    }
+}
+
+/// Journal, then `app_start` with the versions: the first line of every session.
+fn start_journal(boot: &Result<Boot, Box<dyn std::error::Error>>) {
+    let Some(dir) = logging::default_dir() else {
+        eprintln!("journal: LOCALAPPDATA is not set, no journal");
+        return;
+    };
+    let boot = boot.as_ref().ok();
+    let level = boot.and_then(|b| b.settings.get().logging.level);
+    if let Err(error) = logging::init(dir, level.as_deref()) {
+        eprintln!("journal: {error}");
+        return;
+    }
+    let versions = logging::system::versions(boot.map(|b| b.sidecars.as_ref()));
+    logging::app_start(&versions);
+}
+
+pub fn run() {
+    let boot = boot();
+    start_journal(&boot);
+    let boot = match boot {
+        Ok(boot) => Some(boot),
+        Err(error) => {
+            tracing::error!(event = "init_error", step = "boot", error = %error, "startup failed before the window");
+            None
+        }
+    };
+
+    let app = tauri::Builder::default()
+        // Must stay the first plugin: a second launch is forwarded to this instance, then exits.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            focus_main_window(app);
+        }))
+        .plugin(tauri_plugin_dialog::init())
+        .setup(move |app| {
+            let boot = boot.ok_or("startup failed (see the init_error line)")?;
+            let state = open_state(app.handle(), boot).inspect_err(|error| {
+                tracing::error!(event = "init_error", step = "open_state", error = %error, "the queue could not be opened");
+            })?;
+            let queue = state.queue.clone();
+            spawn_transport(
+                app.handle(),
+                state.transport.clone(),
+                state.transport_kind,
+                queue.clone(),
+            );
+            tauri::async_runtime::spawn(async move { queue.run().await });
+            app.manage(state);
+            tracing::info!(event = "setup_done", "core ready");
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::queue_add,
+            commands::queue_list,
+            commands::queue_promote,
+            commands::queue_start,
+            commands::queue_pause,
+            commands::queue_status,
+            commands::queue_cancel,
+            commands::queue_reorder,
+            commands::queue_retry,
+            commands::queue_clear,
+            commands::item_update,
+            commands::item_reconcile,
+            commands::item_resolve_unknown,
+            commands::destinations_refresh,
+            commands::destinations_search,
+            commands::destination_topics,
+            commands::destinations_list,
+            commands::destination_update,
+            commands::destination_check,
+            commands::auth_state,
+            commands::auth_submit,
+            commands::auth_logout,
+            commands::settings_get,
+            commands::settings_set,
+            commands::history_query,
+            commands::history_clear,
+            commands::sidecars_status,
+            commands::encoder_status,
+            commands::limit_status,
+            commands::sidecars_install,
+            commands::sidecars_discover,
+            commands::sidecars_use,
+            commands::log_frontend,
+            commands::log_path,
+            commands::log_open_dir,
+            commands::debug_export,
+        ])
+        // The window is created hidden (tauri.conf.json) and shown once the page has loaded,
+        // so a dark theme never flashes white while the WebView starts.
+        .on_page_load(|webview, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                tracing::info!(event = "page_loaded", "page loaded, window shown");
+                if let Err(error) = webview.window().show() {
+                    tracing::warn!(event = "window_error", error = %error, "could not show the main window");
+                }
+                announce_recovery(webview.app_handle());
+            }
+        })
+        .build(tauri::generate_context!());
+    let app = match app {
+        Ok(app) => app,
+        Err(error) => {
+            tracing::error!(event = "init_error", step = "tauri_build", error = %error, "the application could not be built");
+            panic!("error while building the Tauri application: {error}");
+        }
+    };
+    app.run(|app, event| match event {
+        // Clean shutdown: an item still uploading becomes `unknown`, then
+        // the transport closes (`close`, wait for `authorizationStateClosed`, bounded).
+        RunEvent::ExitRequested { .. } => {
+            tracing::info!(event = "shutdown_start", "exit requested");
+            let Some(state) = app.try_state::<AppState>() else {
+                return;
+            };
+            if let Err(error) = state.queue.shutdown() {
+                tracing::error!(event = "shutdown_error", error_code = error.code(), error = %error, "queue shutdown failed");
+            }
+            let transport = state.transport.clone();
+            let started = Instant::now();
+            let timed_out = tauri::async_runtime::block_on(async move {
+                tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.shutdown())
+                    .await
+                    .is_err()
+            });
+            tracing::info!(
+                event = "transport_shutdown",
+                dur_ms = logging::ms_since(started),
+                timed_out,
+                "Telegram transport closed"
+            );
+        }
+        RunEvent::Exit => logging::app_exit("exit"),
+        _ => {}
+    });
+}

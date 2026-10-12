@@ -1,0 +1,11 @@
+# Not ours or not Prettier's job
+dist
+node_modules
+pnpm-lock.yaml
+src-tauri/target
+src-tauri/gen
+src-tauri/icons
+src-tauri/Cargo.lock
+docs
+legacy
+README.md

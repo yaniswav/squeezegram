@@ -1,0 +1,39 @@
+{
+  "steps": [
+    {
+      "expect": "getOption",
+      "reply": { "@type": "optionValueString", "value": "1.8.68" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": {
+            "@type": "authorizationStateWaitTdlibParameters"
+          }
+        }
+      ]
+    },
+    { "expect": "setNetworkType" },
+    {
+      "expect": "setTdlibParameters",
+      "reply": {
+        "@type": "error",
+        "code": 401,
+        "message": "Wrong database encryption key"
+      }
+    },
+    {
+      "expect": "close",
+      "reply": { "@type": "ok" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": { "@type": "authorizationStateClosing" }
+        },
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": { "@type": "authorizationStateClosed" }
+        }
+      ]
+    }
+  ]
+}

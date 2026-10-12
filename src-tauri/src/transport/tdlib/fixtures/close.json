@@ -1,0 +1,18 @@
+{
+  "steps": [
+    {
+      "expect": "close",
+      "reply": { "@type": "ok" },
+      "after": [
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": { "@type": "authorizationStateClosing" }
+        },
+        {
+          "@type": "updateAuthorizationState",
+          "authorization_state": { "@type": "authorizationStateClosed" }
+        }
+      ]
+    }
+  ]
+}
