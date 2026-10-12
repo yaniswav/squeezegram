@@ -182,11 +182,45 @@ pub struct Telegram {
 /// cut there. Same bound in the page (`DEVICE_NAME_MAX`).
 pub const DEVICE_NAME_MAX_CHARS: usize = 64;
 
-/// A device name the page may save: at most `DEVICE_NAME_MAX_CHARS` once trimmed, no control
-/// character (a line break would reach Telegram as is).
+/// A device name the page may save: at most `DEVICE_NAME_MAX_CHARS` once trimmed, and nothing
+/// that would show differently than typed in Telegram's device list: no control character
+/// (Cc, a line break), line or paragraph separator (Zl, Zp), or format character (Cf: a
+/// right-to-left override such as U+202E could disguise the name).
 fn is_device_name(name: &str) -> bool {
     let name = name.trim();
-    name.chars().count() <= DEVICE_NAME_MAX_CHARS && !name.chars().any(char::is_control)
+    name.chars().count() <= DEVICE_NAME_MAX_CHARS && !name.chars().any(is_hidden_mark)
+}
+
+/// Cc, Zl, Zp and Cf (Unicode 15.1), except what ordinary text needs: the zero-width joiner and
+/// non-joiner (emoji sequences, Persian, Indic scripts) and the emoji tag characters (flags of
+/// England, Scotland, Wales). The page applies the same rule (`HIDDEN_MARK`).
+fn is_hidden_mark(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2028}'
+            | '\u{2029}'
+            | '\u{00AD}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{180E}'
+            | '\u{200B}'
+            | '\u{200E}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+    ) || c.is_control()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -727,6 +761,19 @@ mod tests {
             saved.telegram.device_name.as_deref(),
             Some(longest.as_str())
         );
+        // Joiners and emoji tags are ordinary text: a family emoji, a Persian name, a flag.
+        for fine in [
+            "👨\u{200D}👩\u{200D}👧 PC",
+            "می\u{200C}خواهم",
+            "🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F} laptop",
+        ] {
+            assert!(
+                store
+                    .set(&json!({ "telegram": { "device_name": fine } }))
+                    .is_ok(),
+                "{fine:?}"
+            );
+        }
         let reset = store
             .set(&json!({ "telegram": { "device_name": null } }))
             .unwrap();
@@ -735,6 +782,12 @@ mod tests {
             "x".repeat(DEVICE_NAME_MAX_CHARS + 1),
             "Office\nPC".to_owned(),
             "tab\there".to_owned(),
+            // Shows as "PC gnalb" reversed: a disguised name.
+            "PC \u{202E}blang".to_owned(),
+            "line\u{2028}break".to_owned(),
+            "para\u{2029}graph".to_owned(),
+            "zero\u{200B}width".to_owned(),
+            "\u{FEFF}bom".to_owned(),
         ] {
             let error = store
                 .set(&json!({ "telegram": { "device_name": bad } }))

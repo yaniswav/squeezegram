@@ -194,14 +194,18 @@ const WHOLE = /^\d+$/
 /** `settings::DEVICE_NAME_MAX_CHARS`, counted in characters as Rust does (not UTF-16 units). */
 const DEVICE_NAME_MAX = 64
 
-// A control character (line break, tab…) would reach Telegram's device list as is.
-// eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
+/**
+ * `settings::is_hidden_mark`: control, line/paragraph separator and format characters (a
+ * U+202E override could disguise the name), except the zero-width joiners and the emoji tags
+ * ordinary text uses.
+ */
+const HIDDEN_MARK =
+  /(?!\u200c|\u200d|[\u{e0020}-\u{e007f}])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
 
 function isDeviceName(name: string): boolean {
   const trimmed = name.trim()
 
-  return [...trimmed].length <= DEVICE_NAME_MAX && !CONTROL.test(trimmed)
+  return [...trimmed].length <= DEVICE_NAME_MAX && !HIDDEN_MARK.test(trimmed)
 }
 
 /** Same rules as `Settings::validate` (settings.rs) plus the types serde expects. */
