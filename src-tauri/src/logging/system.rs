@@ -168,9 +168,9 @@ pub fn ffmpeg_info(sidecars: Option<&SidecarService>) -> FfmpegInfo {
     }
 }
 
-/// The `tdjson.dll` the transport would load (`SQUEEZEGRAM_TDJSON`, then
-/// `%LOCALAPPDATA%\squeezegram\tdlib\bin`, then next to the executable), else the first place
-/// searched.
+/// The `tdjson.dll` the transport would load (`SQUEEZEGRAM_TDJSON`, then the build's order
+/// between next to the executable and `%LOCALAPPDATA%\squeezegram\tdlib\bin`, see `library`),
+/// else the first place searched.
 fn tdjson_path() -> Option<PathBuf> {
     match SearchPaths::from_process().locate() {
         Ok((path, _)) => Some(path),

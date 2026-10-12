@@ -482,6 +482,7 @@ mod tests {
                 env: None,
                 local_app_data: Some(dir.path().join("local")),
                 exe_dir: Some(dir.path().join("exe")),
+                bundled_first: release,
             },
             embedded_api_id: Some(FAKE_ID.into()),
             embedded_api_hash: Some(FAKE_HASH.into()),

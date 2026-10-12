@@ -166,6 +166,7 @@ pub(crate) mod tests {
                 env: None,
                 local_app_data: Some(dir.path().join("local")),
                 exe_dir: None,
+                bundled_first: false,
             },
             embedded_api_id: None,
             embedded_api_hash: None,

@@ -1,9 +1,17 @@
 //! Where `tdjson.dll` is and whether it is the pinned build.
 //!
 //! Search order: `SQUEEZEGRAM_TDJSON` (that path only, when set), then
-//! `%LOCALAPPDATA%\squeezegram\tdlib\bin\tdjson.dll` (`scripts\install-tdjson.ps1`), then next
-//! to the executable (installer). The SHA-256 is compared with the pinned TDLib 1.8.68 build;
-//! the caller decides what a mismatch means (warning in debug, refusal in release).
+//! - release build: next to the executable (the DLL the installer or the portable zip ships),
+//!   then `%LOCALAPPDATA%\squeezegram\tdlib\bin\tdjson.dll` as a fallback;
+//! - debug build: `%LOCALAPPDATA%\squeezegram\tdlib\bin\tdjson.dll`
+//!   (`scripts\install-tdjson.ps1`; `target\debug` has no DLL), then next to the executable.
+//!
+//! A release looks beside itself first because the bundled DLL is the one its pin was built
+//! for: a stale copy left in `%LOCALAPPDATA%` by a development setup or an older version would
+//! otherwise win, fail the pin and leave the release without Telegram.
+//!
+//! The SHA-256 is compared with the pinned TDLib 1.8.68 build; the caller decides what a
+//! mismatch means (warning in debug, refusal in release).
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -44,6 +52,8 @@ pub struct SearchPaths {
     pub local_app_data: Option<PathBuf>,
     /// Folder of the executable.
     pub exe_dir: Option<PathBuf>,
+    /// Release order: the DLL next to the executable before the `%LOCALAPPDATA%` one.
+    pub bundled_first: bool,
 }
 
 impl SearchPaths {
@@ -56,6 +66,7 @@ impl SearchPaths {
             exe_dir: std::env::current_exe()
                 .ok()
                 .and_then(|exe| exe.parent().map(Path::to_path_buf)),
+            bundled_first: !cfg!(debug_assertions),
         }
     }
 
@@ -64,14 +75,20 @@ impl SearchPaths {
         if let Some(path) = &self.env {
             return vec![(path.clone(), Origin::Env)];
         }
-        let mut list = Vec::new();
-        if let Some(base) = &self.local_app_data {
-            list.push((installed_path(base), Origin::LocalAppData));
-        }
-        if let Some(dir) = &self.exe_dir {
-            list.push((dir.join(DLL_NAME), Origin::NextToExe));
-        }
-        list
+        let installed = self
+            .local_app_data
+            .as_ref()
+            .map(|base| (installed_path(base), Origin::LocalAppData));
+        let bundled = self
+            .exe_dir
+            .as_ref()
+            .map(|dir| (dir.join(DLL_NAME), Origin::NextToExe));
+        let (first, second) = if self.bundled_first {
+            (bundled, installed)
+        } else {
+            (installed, bundled)
+        };
+        first.into_iter().chain(second).collect()
     }
 
     /// The first candidate that is a file, or every path searched.
@@ -148,7 +165,7 @@ mod tests {
     use crate::transport::tdlib::tests::TempDir;
 
     #[test]
-    fn search_order_env_then_local_app_data_then_exe() {
+    fn debug_order_env_then_local_app_data_then_exe() {
         let dir = TempDir::new("tdjson-search");
         let local = dir.path().join("local");
         let exe = dir.path().join("exe");
@@ -157,6 +174,7 @@ mod tests {
             env: None,
             local_app_data: Some(local.clone()),
             exe_dir: Some(exe.clone()),
+            bundled_first: false,
         };
         let missing = search.locate().unwrap_err();
         assert_eq!(missing, [installed_path(&local), exe.join(DLL_NAME)]);
@@ -178,6 +196,61 @@ mod tests {
         assert_eq!(search.locate().unwrap_err(), std::slice::from_ref(&custom));
         std::fs::write(&custom, b"z").unwrap();
         assert_eq!(search.locate().unwrap(), (custom, Origin::Env));
+    }
+
+    /// A release keeps the DLL it ships: a stale `%LOCALAPPDATA%` copy only serves when none
+    /// is beside the executable.
+    #[test]
+    fn release_order_env_then_exe_then_local_app_data() {
+        let dir = TempDir::new("tdjson-search-release");
+        let local = dir.path().join("local");
+        let exe = dir.path().join("exe");
+        let custom = dir.path().join("custom.dll");
+        let mut search = SearchPaths {
+            env: None,
+            local_app_data: Some(local.clone()),
+            exe_dir: Some(exe.clone()),
+            bundled_first: true,
+        };
+        assert_eq!(
+            search.locate().unwrap_err(),
+            [exe.join(DLL_NAME), installed_path(&local)]
+        );
+
+        // Only the development copy: used as the fallback.
+        let installed = installed_path(&local);
+        std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        std::fs::write(&installed, b"stale").unwrap();
+        assert_eq!(
+            search.locate().unwrap(),
+            (installed.clone(), Origin::LocalAppData)
+        );
+
+        // Both: the bundled one wins.
+        std::fs::create_dir_all(&exe).unwrap();
+        std::fs::write(exe.join(DLL_NAME), b"bundled").unwrap();
+        assert_eq!(
+            search.locate().unwrap(),
+            (exe.join(DLL_NAME), Origin::NextToExe)
+        );
+
+        // Without a known executable folder, the fallback alone.
+        search.exe_dir = None;
+        assert_eq!(search.locate().unwrap(), (installed, Origin::LocalAppData));
+
+        // The variable still wins over both.
+        search.exe_dir = Some(exe);
+        std::fs::write(&custom, b"z").unwrap();
+        search.env = Some(custom.clone());
+        assert_eq!(search.locate().unwrap(), (custom, Origin::Env));
+    }
+
+    #[test]
+    fn the_process_order_follows_the_build() {
+        assert_eq!(
+            SearchPaths::from_process().bundled_first,
+            !cfg!(debug_assertions)
+        );
     }
 
     #[test]
