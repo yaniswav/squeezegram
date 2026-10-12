@@ -20,6 +20,18 @@ pub fn is_media(path: &Path) -> bool {
             .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
+/// Size and modification time (whole seconds since the epoch, 0 if unknown) of a file, as
+/// `items.source_size` and `items.source_mtime` record them; `None` if it is not a file.
+pub fn file_stamp(path: &Path) -> Option<(i64, i64)> {
+    let metadata = std::fs::metadata(path).ok().filter(|m| m.is_file())?;
+    let mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |age| age.as_secs() as i64);
+    Some((metadata.len() as i64, mtime))
+}
+
 /// A folder in which some files were left out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skipped {

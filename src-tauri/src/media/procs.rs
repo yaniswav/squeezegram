@@ -45,6 +45,8 @@ pub struct Spec<'a> {
     pub cancel: Option<&'a CancellationToken>,
     pub collect_stdout: bool,
     pub stderr_lines: usize,
+    /// Runs below normal priority, for work nobody is waiting for.
+    pub low_priority: bool,
 }
 
 impl<'a> Spec<'a> {
@@ -56,7 +58,15 @@ impl<'a> Spec<'a> {
             cancel: None,
             collect_stdout: false,
             stderr_lines: 20,
+            low_priority: false,
         }
+    }
+
+    /// Below-normal priority class (Windows): the process yields the CPU to the app, to a
+    /// running encode and to whatever else the user is doing.
+    pub fn low_priority(mut self) -> Self {
+        self.low_priority = true;
+        self
     }
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
@@ -123,7 +133,11 @@ pub async fn run<F: FnMut(&str)>(spec: Spec<'_>, mut on_line: F) -> std::io::Res
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
+    command.creation_flags(if spec.low_priority {
+        CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS
+    } else {
+        CREATE_NO_WINDOW
+    });
 
     let mut child = command.spawn()?;
     job::attach(&child);
@@ -228,6 +242,8 @@ async fn tail_lines(stream: impl AsyncRead + Unpin, keep: usize) -> Vec<String> 
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
 
 #[cfg(windows)]
 mod job {

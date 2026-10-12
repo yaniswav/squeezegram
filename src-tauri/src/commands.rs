@@ -7,7 +7,7 @@
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::Instant;
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -346,18 +346,7 @@ impl StatusFeed {
 }
 
 fn source_file(path: &str) -> Result<(i64, i64), QueueError> {
-    let unreadable = || QueueError::FileUnreadable(path.to_owned());
-    let metadata = std::fs::metadata(Path::new(path)).map_err(|_| unreadable())?;
-    if !metadata.is_file() {
-        return Err(unreadable());
-    }
-    let mtime = metadata
-        .modified()
-        .ok()
-        .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
-        .map(|age| age.as_secs() as i64)
-        .unwrap_or(0);
-    Ok((metadata.len() as i64, mtime))
+    intake::file_stamp(Path::new(path)).ok_or_else(|| QueueError::FileUnreadable(path.to_owned()))
 }
 
 // --- queue ---
@@ -576,7 +565,7 @@ fn set_encoding(
         }
     }
     queue
-        .with_store(|store| store.set_encoding_override(item_id, options))
+        .set_encoding_override(item_id, options)
         .map_err(CommandError::from)
 }
 
@@ -914,6 +903,13 @@ pub fn settings_set(state: State<'_, AppState>, patch: Value) -> CommandResult<S
     let call = Call::new("settings_set").arg("keys", patch_keys(&patch));
     let result = state.settings.set(&patch).inspect(|settings| {
         state.queue.set_pauses(settings.pause_range());
+        // The badges of the files still waiting were worked out under the old limit and
+        // encoding choices.
+        if (patch.get("limit").is_some() || patch.get("advanced_encoding").is_some())
+            && let Err(error) = state.queue.reanalyze_waiting()
+        {
+            tracing::warn!(event = "queue_error", error_code = error.code(), error = %error, "could not refresh the plans");
+        }
         logging::apply_level(settings.logging.level.as_deref());
         // The tray follows the close choice and the language.
         state.background.refresh();

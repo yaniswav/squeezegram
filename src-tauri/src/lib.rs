@@ -345,6 +345,8 @@ pub fn run() {
                 state.background.clone(),
                 state.transport.auth_state(),
             );
+            let analyzer = queue.clone();
+            tauri::async_runtime::spawn(async move { analyzer.run_analysis().await });
             tauri::async_runtime::spawn(async move { queue.run().await });
             let background = state.background.clone();
             app.manage(state);

@@ -1082,7 +1082,78 @@ impl Store {
         Ok(self.conn.execute("DELETE FROM history", [])?)
     }
 
-    /// Caption and mode, only while the item has not started.
+    /// Items waiting for their turn that no analysis has described yet, by position.
+    pub fn unanalyzed_ids(&self) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM items WHERE state IN (?1, ?2) AND plan_json IS NULL
+             ORDER BY position, id",
+        )?;
+        let rows = stmt.query_map(
+            params![State::Ready.as_str(), State::PendingReview.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Writes what an analysis found (`media_json`, `plan_json`), for the badge, but only if
+    /// `analyzed` is still the item as it was when the analysis began: not started, same file
+    /// (path, size, time), same mode and same encoding choices. Anything else means the result
+    /// describes something else and is dropped. Returns whether it was written.
+    pub fn set_analysis(
+        &mut self,
+        analyzed: &Item,
+        media_json: Option<&str>,
+        plan_json: Option<&str>,
+    ) -> Result<bool> {
+        let tx = self.conn.transaction()?;
+        let current = tx
+            .query_row(
+                &format!("SELECT {ITEM_COLUMNS} FROM items WHERE id = ?1"),
+                [analyzed.id],
+                item_from_row,
+            )
+            .optional()?;
+        let Some(current) = current else {
+            return Ok(false);
+        };
+        let unchanged = current.state.is_not_started()
+            && current.source_path == analyzed.source_path
+            && current.source_size == analyzed.source_size
+            && current.source_mtime == analyzed.source_mtime
+            && current.send_mode == analyzed.send_mode
+            && current.encoding_override == analyzed.encoding_override;
+        if !unchanged {
+            return Ok(false);
+        }
+        tx.execute(
+            "UPDATE items SET media_json = COALESCE(?1, media_json), plan_json = ?2 WHERE id = ?3",
+            params![media_json, plan_json, analyzed.id],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Forgets the plan of the items still waiting, which settings or choices have made stale.
+    /// Returns the ids that had one.
+    pub fn clear_plans(&mut self, ids: &[i64]) -> Result<Vec<i64>> {
+        let tx = self.conn.transaction()?;
+        let mut cleared = Vec::new();
+        for &id in ids {
+            let changed = tx.execute(
+                "UPDATE items SET plan_json = NULL
+                 WHERE id = ?1 AND state IN (?2, ?3) AND plan_json IS NOT NULL",
+                params![id, State::Ready.as_str(), State::PendingReview.as_str()],
+            )?;
+            if changed > 0 {
+                cleared.push(id);
+            }
+        }
+        tx.commit()?;
+        Ok(cleared)
+    }
+
+    /// Caption and mode, only while the item has not started. A new mode drops the plan an
+    /// analysis may have stored: it described the other mode.
     pub fn update_item(&mut self, id: i64, patch: &ItemPatch) -> Result<()> {
         let tx = self.conn.transaction()?;
         if !state::current_state(&tx, id)?.is_not_started() {
@@ -1096,7 +1167,9 @@ impl Store {
         }
         if let Some(mode) = patch.send_mode {
             tx.execute(
-                "UPDATE items SET send_mode = ?1, updated_at = ?2 WHERE id = ?3",
+                "UPDATE items SET send_mode = ?1, updated_at = ?2,
+                                  plan_json = CASE WHEN send_mode = ?1 THEN plan_json END
+                 WHERE id = ?3",
                 params![mode.as_str(), now_iso(), id],
             )?;
         }
@@ -1120,8 +1193,10 @@ impl Store {
         if !state::current_state(&tx, id)?.is_not_started() {
             return Err(QueueError::ItemStarted(id));
         }
+        // The plan an analysis stored was built without these choices.
         tx.execute(
-            "UPDATE items SET encoding_override = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE items SET encoding_override = ?1, updated_at = ?2, plan_json = NULL
+             WHERE id = ?3",
             params![text, now_iso(), id],
         )?;
         tx.commit()?;
@@ -2679,5 +2754,102 @@ mod tests {
         // Once the first one is gone (cancelled), the path may come again.
         store.cancel(id).unwrap();
         assert!(store.add_watched_item(&item).unwrap().is_some());
+    }
+
+    #[test]
+    fn an_analysis_is_stored_only_for_the_item_it_described() {
+        let mut store = memory_store();
+        let id = add_item(&mut store, "a.mp4");
+        let analyzed = store.get_item(id).unwrap();
+        assert_eq!(store.unanalyzed_ids().unwrap(), [id]);
+
+        assert!(
+            store
+                .set_analysis(&analyzed, Some("{\"media\":1}"), Some("{\"plan\":1}"))
+                .unwrap()
+        );
+        let item = store.get_item(id).unwrap();
+        assert_eq!(item.media_json.as_deref(), Some("{\"media\":1}"));
+        assert_eq!(item.plan_json.as_deref(), Some("{\"plan\":1}"));
+        assert!(store.unanalyzed_ids().unwrap().is_empty());
+
+        // A plan alone keeps the media found before.
+        assert!(
+            store
+                .set_analysis(&analyzed, None, Some("{\"plan\":2}"))
+                .unwrap()
+        );
+        assert_eq!(
+            store.get_item(id).unwrap().media_json.as_deref(),
+            Some("{\"media\":1}")
+        );
+
+        // Another mode, other encoding choices, another file or an item that started: dropped.
+        let patch = ItemPatch {
+            send_mode: Some(SendMode::Document),
+            ..Default::default()
+        };
+        store.update_item(id, &patch).unwrap();
+        assert_eq!(
+            store.get_item(id).unwrap().plan_json,
+            None,
+            "the old plan is forgotten"
+        );
+        assert!(!store.set_analysis(&analyzed, None, Some("{}")).unwrap());
+        let now = store.get_item(id).unwrap();
+        assert!(store.set_analysis(&now, None, Some("{}")).unwrap());
+        let changed_file = Item {
+            source_mtime: now.source_mtime + 1,
+            ..now.clone()
+        };
+        assert!(
+            !store
+                .set_analysis(&changed_file, None, Some("{\"x\":1}"))
+                .unwrap()
+        );
+        force_state(&store, id, State::Probing);
+        assert!(!store.set_analysis(&now, None, Some("{\"x\":1}")).unwrap());
+        store.conn().execute("DELETE FROM items", []).unwrap();
+        assert!(
+            !store.set_analysis(&now, None, Some("{}")).unwrap(),
+            "removed item"
+        );
+    }
+
+    #[test]
+    fn choices_and_a_stale_plan_are_cleared_only_for_waiting_items() {
+        let mut store = memory_store();
+        let waiting = add_item(&mut store, "a.mp4");
+        let running = add_item(&mut store, "b.mp4");
+        for id in [waiting, running] {
+            store
+                .conn()
+                .execute("UPDATE items SET plan_json = '{}' WHERE id = ?1", [id])
+                .unwrap();
+        }
+        force_state(&store, running, State::Encoding);
+        assert_eq!(store.clear_plans(&[waiting, running]).unwrap(), [waiting]);
+        assert_eq!(store.get_item(waiting).unwrap().plan_json, None);
+        assert_eq!(
+            store.get_item(running).unwrap().plan_json.as_deref(),
+            Some("{}")
+        );
+
+        // The same mode keeps the plan; new encoding choices drop it.
+        store
+            .conn()
+            .execute("UPDATE items SET plan_json = '{}' WHERE id = ?1", [waiting])
+            .unwrap();
+        let same = ItemPatch {
+            send_mode: Some(SendMode::Video),
+            caption: Some("hello".into()),
+        };
+        store.update_item(waiting, &same).unwrap();
+        assert_eq!(
+            store.get_item(waiting).unwrap().plan_json.as_deref(),
+            Some("{}")
+        );
+        store.set_encoding_override(waiting, None).unwrap();
+        assert_eq!(store.get_item(waiting).unwrap().plan_json, None);
     }
 }

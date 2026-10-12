@@ -227,7 +227,28 @@ pub async fn probe(
     scan_duration: bool,
     cancel: &CancellationToken,
 ) -> Result<MediaInfo, MediaError> {
-    let spec = Spec::new(
+    probe_as(ffprobe, input, scan_duration, cancel, false).await
+}
+
+/// `probe` for a file nobody is waiting for yet (analysis at drop): ffprobe runs below normal
+/// priority.
+pub async fn probe_in_background(
+    ffprobe: &Path,
+    input: &Path,
+    scan_duration: bool,
+    cancel: &CancellationToken,
+) -> Result<MediaInfo, MediaError> {
+    probe_as(ffprobe, input, scan_duration, cancel, true).await
+}
+
+async fn probe_as(
+    ffprobe: &Path,
+    input: &Path,
+    scan_duration: bool,
+    cancel: &CancellationToken,
+    low_priority: bool,
+) -> Result<MediaInfo, MediaError> {
+    let mut spec = Spec::new(
         ffprobe,
         Args::new()
             .all(&[
@@ -243,6 +264,9 @@ pub async fn probe(
     .timeout(PROBE_TIMEOUT)
     .cancel(cancel)
     .collect_stdout();
+    if low_priority {
+        spec = spec.low_priority();
+    }
     let output = procs::run(spec, |_| {})
         .await
         .map_err(|e| MediaError::failed("FFMPEG_MISSING", e.to_string()))?;
@@ -262,7 +286,7 @@ pub async fn probe(
     let mut info = parse(&output.stdout)
         .map_err(|e| MediaError::failed("FILE_UNREADABLE", format!("ffprobe json: {e}")))?;
     if info.duration_s.is_none() && scan_duration && info.video.is_some() {
-        info.duration_s = scan_last_pts(ffprobe, input, cancel).await?;
+        info.duration_s = scan_last_pts(ffprobe, input, cancel, low_priority).await?;
     }
     Ok(info)
 }
@@ -272,8 +296,9 @@ async fn scan_last_pts(
     ffprobe: &Path,
     input: &Path,
     cancel: &CancellationToken,
+    low_priority: bool,
 ) -> Result<Option<f64>, MediaError> {
-    let spec = Spec::new(
+    let mut spec = Spec::new(
         ffprobe,
         Args::new()
             .all(&[
@@ -290,6 +315,9 @@ async fn scan_last_pts(
     )
     .timeout(PROBE_TIMEOUT)
     .cancel(cancel);
+    if low_priority {
+        spec = spec.low_priority();
+    }
     let mut last = None;
     let output = procs::run(spec, |line| {
         if let Ok(value) = line.trim().parse::<f64>() {

@@ -48,6 +48,11 @@ struct FakeMedia {
     encodes: AtomicUsize,
     entered: Notify,
     concurrency: Arc<Concurrency>,
+    /// How long an analysis takes (it ends early if cancelled), and what it saw.
+    analysis_time: Mutex<Duration>,
+    analysis_concurrency: Concurrency,
+    analyses: Mutex<Vec<(i64, SendMode)>>,
+    analyses_cancelled: AtomicUsize,
 }
 
 fn sq_path(source: &str) -> String {
@@ -60,6 +65,30 @@ fn sq_path(source: &str) -> String {
 
 #[async_trait]
 impl MediaStage for FakeMedia {
+    async fn analyze(
+        &self,
+        item: &Item,
+        cancel: &CancellationToken,
+    ) -> std::result::Result<Option<Analysis>, StageError> {
+        let _active = self.analysis_concurrency.enter();
+        self.analyses
+            .lock()
+            .unwrap()
+            .push((item.id, item.send_mode));
+        let time = *self.analysis_time.lock().unwrap();
+        tokio::select! {
+            _ = tokio::time::sleep(time) => {}
+            _ = cancel.cancelled() => {
+                self.analyses_cancelled.fetch_add(1, Ordering::SeqCst);
+                return Err(StageError::Cancelled);
+            }
+        }
+        Ok(Some(Analysis {
+            media_json: Some(json!({ "analyzed": item.id }).to_string()),
+            plan_json: Some(json!({ "analyzed_as": item.send_mode.as_str() }).to_string()),
+        }))
+    }
+
     async fn probe(
         &self,
         item: &Item,
@@ -232,6 +261,10 @@ impl Harness {
             encodes: AtomicUsize::new(0),
             entered: Notify::new(),
             concurrency: concurrency.clone(),
+            analysis_time: Mutex::new(Duration::from_millis(5)),
+            analysis_concurrency: Concurrency::default(),
+            analyses: Mutex::new(Vec::new()),
+            analyses_cancelled: AtomicUsize::new(0),
         });
         let send = Arc::new(FakeSend {
             steps: Mutex::new(VecDeque::new()),
@@ -343,6 +376,26 @@ impl Harness {
             "item {id} stuck in {} instead of {state}",
             self.item(id).state
         );
+    }
+
+    /// Starts the background analysis, as the app does at startup.
+    fn analyze_in_background(&self) -> JoinHandle<()> {
+        let runner = self.orch.clone();
+        tokio::spawn(async move { runner.run_analysis().await })
+    }
+
+    fn slow_analysis(&self, seconds: u64) {
+        *self.media.analysis_time.lock().unwrap() = Duration::from_secs(seconds);
+    }
+
+    async fn wait_plan(&self, id: i64) -> String {
+        for _ in 0..3600 {
+            if let Some(plan) = self.item(id).plan_json {
+                return plan;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("item {id} was never analyzed");
     }
 
     /// Lets the orchestrator run for a while of paused time.
@@ -1019,4 +1072,162 @@ async fn a_file_already_sent_to_one_destination_is_new_to_another() {
     assert_eq!(h.item(ids[1]).hold_reason, None);
     assert_eq!(h.send.order(), [ids[1]]);
     assert_eq!(h.media.encodes.load(Ordering::SeqCst), 1);
+}
+
+// --- analysis at drop ---
+
+#[tokio::test(start_paused = true)]
+async fn an_added_item_is_analyzed_in_the_background_without_starting_the_queue() {
+    let h = Harness::new("analysis-basic", Treatment::Skip);
+    let analysis = h.analyze_in_background();
+    let id = h.add("a.mp4");
+    let plan = h.wait_plan(id).await;
+    assert_eq!(plan, json!({ "analyzed_as": "video" }).to_string());
+    let item = h.item(id);
+    assert_eq!(item.state, Ready, "analysis does not run the item");
+    assert_eq!(item.media_json.as_deref(), Some("{\"analyzed\":1}"));
+    assert!(!h.orch.is_running());
+    assert_eq!(h.send.calls.lock().unwrap().len(), 0);
+    // The page is told, so the badge shows without waiting for the queue.
+    assert!(
+        h.sink
+            .changed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|d| d.id == id)
+            .count()
+            >= 2
+    );
+    analysis.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn at_most_two_files_are_analyzed_at_once() {
+    let h = Harness::new("analysis-two", Treatment::Skip);
+    h.slow_analysis(3);
+    let analysis = h.analyze_in_background();
+    let ids: Vec<i64> = (0..6).map(|n| h.add(&format!("{n}.mp4"))).collect();
+    for id in &ids {
+        h.wait_plan(*id).await;
+    }
+    assert_eq!(h.media.analysis_concurrency.max.load(Ordering::SeqCst), 2);
+    assert_eq!(h.media.analyses.lock().unwrap().len(), 6);
+    analysis.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_or_cleared_item_drops_its_analysis() {
+    let h = Harness::new("analysis-gone", Treatment::Skip);
+    h.slow_analysis(60);
+    let analysis = h.analyze_in_background();
+    let cancelled = h.add("a.mp4");
+    let cleared = h.add("b.mp4");
+    let queued = h.add("c.mp4");
+    h.idle(1).await;
+    assert_eq!(
+        h.media.analyses.lock().unwrap().len(),
+        2,
+        "two under way, one waiting"
+    );
+
+    h.orch.cancel(cancelled).unwrap();
+    h.orch.clear(ClearScope::All).unwrap();
+    h.idle(120).await;
+
+    assert_eq!(h.media.analyses_cancelled.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        h.media.analyses.lock().unwrap().len(),
+        2,
+        "the waiting one was forgotten, not analyzed"
+    );
+    let rows = h.orch.list().unwrap();
+    assert!(rows.iter().all(|item| item.plan_json.is_none()));
+    let _ = (cleared, queued);
+    analysis.abort();
+}
+
+/// The result of an analysis that began before the user changed the mode is never shown: the
+/// item is analyzed again as what it is now.
+#[tokio::test(start_paused = true)]
+async fn a_change_during_the_analysis_makes_it_start_over() {
+    let h = Harness::new("analysis-change", Treatment::Skip);
+    h.slow_analysis(10);
+    let analysis = h.analyze_in_background();
+    let id = h.add("a.mp4");
+    h.idle(2).await;
+    h.orch
+        .update_item(
+            id,
+            &ItemPatch {
+                send_mode: Some(SendMode::Document),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let plan = h.wait_plan(id).await;
+    assert_eq!(plan, json!({ "analyzed_as": "document" }).to_string());
+    assert_eq!(
+        h.media.analyses.lock().unwrap().as_slice(),
+        [(id, SendMode::Video), (id, SendMode::Document)]
+    );
+    assert_eq!(h.media.analyses_cancelled.load(Ordering::SeqCst), 1);
+    analysis.abort();
+}
+
+/// An item whose turn comes while it is still being analyzed is probed by the queue as usual
+/// and keeps the plan of that probing.
+#[tokio::test(start_paused = true)]
+async fn an_item_that_starts_stops_its_analysis_and_keeps_its_probed_plan() {
+    let h = Harness::new("analysis-starts", Treatment::Skip);
+    h.slow_analysis(600);
+    let analysis = h.analyze_in_background();
+    let id = h.add("a.mp4");
+    h.idle(1).await;
+    h.orch.start();
+    h.wait_state(id, Sent).await;
+    assert_eq!(h.media.analyses_cancelled.load(Ordering::SeqCst), 1);
+    let item = h.item(id);
+    assert_eq!(item.plan_json.as_deref(), Some("{\"mode\":\"video\"}"));
+    assert_eq!(item.media_json.as_deref(), Some("{}"));
+    analysis.abort();
+}
+
+/// Items left without a badge by a previous run are analyzed when the app starts.
+#[tokio::test(start_paused = true)]
+async fn items_queued_before_the_start_are_analyzed_at_startup() {
+    let h = Harness::new("analysis-startup", Treatment::Skip);
+    let path = h.dir.file("old.mp4", b"source");
+    let destination_id = h.orch.with_store(|s| Ok(first_destination(s))).unwrap();
+    let ids = h
+        .orch
+        .with_store(|s| {
+            s.add_items(&[NewItem {
+                source_path: path,
+                source_size: 6,
+                source_mtime: 1,
+                destination_id,
+                send_mode: SendMode::Video,
+                caption: String::new(),
+            }])
+        })
+        .unwrap();
+    let analysis = h.analyze_in_background();
+    h.wait_plan(ids[0]).await;
+    analysis.abort();
+}
+
+/// New limit or encoding settings: the badges of the waiting files are worked out again.
+#[tokio::test(start_paused = true)]
+async fn waiting_items_are_analyzed_again_when_the_settings_change() {
+    let h = Harness::new("analysis-settings", Treatment::Skip);
+    let analysis = h.analyze_in_background();
+    let id = h.add("a.mp4");
+    h.wait_plan(id).await;
+    assert_eq!(h.media.analyses.lock().unwrap().len(), 1);
+    h.orch.reanalyze_waiting().unwrap();
+    h.idle(1).await;
+    assert_eq!(h.media.analyses.lock().unwrap().len(), 2);
+    assert!(h.item(id).plan_json.is_some());
+    analysis.abort();
 }

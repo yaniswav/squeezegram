@@ -3,6 +3,7 @@
 //! Media work (probe, encode, remux) and sending are injected through `MediaStage` and
 //! `SendStage`, so the loop is tested on deterministic doubles.
 
+use std::collections::{HashMap, VecDeque};
 use std::hash::{BuildHasher, RandomState};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -47,7 +48,15 @@ pub struct ProbeOutcome {
     pub temp_path: Option<String>,
 }
 
+/// What the media stage learned about a queued file before its turn: the `media_json` and
+/// `plan_json` the probing stores, shown as the badge (compliant, compression planned...).
 #[derive(Debug, Clone, PartialEq)]
+pub struct Analysis {
+    pub media_json: Option<String>,
+    pub plan_json: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaOutput {
     pub output_path: String,
     pub output_size: i64,
@@ -129,6 +138,18 @@ pub struct StageContext {
 
 #[async_trait]
 pub trait MediaStage: Send + Sync {
+    /// Looks at a queued item right after it was added, in the background, so its badge is
+    /// known long before its turn. Writes nothing and starts no encode. `None`: nothing to
+    /// say (the file changed since it was queued, or there is no media tool). The probing
+    /// reuses the result while the file is unchanged. Says nothing by default.
+    async fn analyze(
+        &self,
+        _item: &Item,
+        _cancel: &CancellationToken,
+    ) -> std::result::Result<Option<Analysis>, StageError> {
+        Ok(None)
+    }
+
     async fn probe(
         &self,
         item: &Item,
@@ -236,6 +257,19 @@ struct Current {
     cancel: CancellationToken,
 }
 
+/// Analyses at most this many files at once: ffprobe is quick, and the point is to stay out
+/// of the way of the encode and of the user.
+const ANALYSES_AT_ONCE: usize = 2;
+
+/// Items waiting for an analysis, and the ones being analyzed (with their cancellation, and a
+/// number telling a later analysis of the same item from an earlier one).
+#[derive(Default)]
+struct Analyses {
+    waiting: VecDeque<i64>,
+    running: HashMap<i64, (u64, CancellationToken)>,
+    runs: u64,
+}
+
 struct Inner {
     store: Mutex<Store>,
     media: Arc<dyn MediaStage>,
@@ -247,6 +281,8 @@ struct Inner {
     wake: Notify,
     pauses: Mutex<PauseRange>,
     shutdown: CancellationToken,
+    analyses: Mutex<Analyses>,
+    analysis_wake: Notify,
 }
 
 #[derive(Clone)]
@@ -280,6 +316,8 @@ impl Orchestrator {
                 wake: Notify::new(),
                 pauses: Mutex::new(pauses),
                 shutdown: CancellationToken::new(),
+                analyses: Mutex::new(Analyses::default()),
+                analysis_wake: Notify::new(),
             }),
         }
     }
@@ -330,6 +368,7 @@ impl Orchestrator {
             "items added to the queue"
         );
         self.emit_changed(&ids);
+        self.analyze_soon(&ids);
         self.inner.wake.notify_one();
         Ok(ids)
     }
@@ -340,6 +379,7 @@ impl Orchestrator {
         let id = self.with_store(|store| store.add_watched_item(item))?;
         if let Some(id) = id {
             self.emit_changed(&[id]);
+            self.analyze_soon(&[id]);
         }
         Ok(id)
     }
@@ -362,7 +402,34 @@ impl Orchestrator {
     }
 
     pub fn update_item(&self, id: i64, patch: &ItemPatch) -> Result<()> {
-        self.with_store(|store| store.update_item(id, patch))
+        self.with_store(|store| store.update_item(id, patch))?;
+        if patch.send_mode.is_some() {
+            // The badge described the other mode.
+            self.analyze_again(&[id]);
+        }
+        Ok(())
+    }
+
+    /// `Store::set_encoding_override`; the badge is worked out again with the new choices.
+    pub fn set_encoding_override(
+        &self,
+        id: i64,
+        file: Option<&crate::media::plan::EncodingOverride>,
+    ) -> Result<()> {
+        self.with_store(|store| store.set_encoding_override(id, file))?;
+        self.analyze_again(&[id]);
+        Ok(())
+    }
+
+    /// The limit or the encoding settings changed: the plans shown for the items still waiting
+    /// were built under the old ones, so they are worked out again.
+    pub fn reanalyze_waiting(&self) -> Result<()> {
+        let waiting = self.with_store(|store| {
+            let items = store.items_in_states(&[State::Ready, State::PendingReview])?;
+            Ok(items.into_iter().map(|item| item.id).collect::<Vec<_>>())
+        })?;
+        self.analyze_again(&waiting);
+        Ok(())
     }
 
     /// User retry of a `failed` or `unknown` item (never automatic).
@@ -488,6 +555,7 @@ impl Orchestrator {
         );
         self.with_store(|store| store.cancel(id))?;
         drop(current);
+        self.forget_analyses(&[id]);
         self.emit_changed(&[id]);
         Ok(())
     }
@@ -500,6 +568,7 @@ impl Orchestrator {
         let keep = current.as_ref().map(|current| current.item_id);
         let outcome = self.with_store(|store| store.clear_items(scope, keep))?;
         drop(current);
+        self.forget_analyses(&outcome.removed);
         tracing::info!(
             event = "queue_cleared",
             scope = scope.as_str(),
@@ -597,6 +666,164 @@ impl Orchestrator {
         }
     }
 
+    // --- analysis at drop ---
+
+    /// Queues items for an analysis (those already waiting or running are not queued twice).
+    fn analyze_soon(&self, ids: &[i64]) {
+        let mut analyses = lock(&self.inner.analyses);
+        for &id in ids {
+            if !analyses.waiting.contains(&id) && !analyses.running.contains_key(&id) {
+                analyses.waiting.push_back(id);
+            }
+        }
+        drop(analyses);
+        self.inner.analysis_wake.notify_one();
+    }
+
+    /// The badge of these items is out of date: forget it, drop an analysis under way (it
+    /// describes the old state) and start another.
+    fn analyze_again(&self, ids: &[i64]) {
+        self.forget_analyses(ids);
+        match self.with_store(|store| store.clear_plans(ids)) {
+            Ok(cleared) => self.emit_changed(&cleared),
+            Err(error) => tracing::warn!(
+                event = "queue_error",
+                error_code = error.code(),
+                error = %error,
+                "could not clear stale plans"
+            ),
+        }
+        self.analyze_soon(ids);
+    }
+
+    /// These items are gone, cancelled or about to run: their analyses are dropped, and one
+    /// under way is stopped (its result would be thrown away).
+    fn forget_analyses(&self, ids: &[i64]) {
+        let mut analyses = lock(&self.inner.analyses);
+        analyses.waiting.retain(|id| !ids.contains(id));
+        for id in ids {
+            if let Some((_, cancel)) = analyses.running.remove(id) {
+                cancel.cancel();
+            }
+        }
+    }
+
+    /// The next item to analyze, marked as running.
+    fn next_analysis(&self) -> Option<(i64, u64, CancellationToken)> {
+        let mut analyses = lock(&self.inner.analyses);
+        let id = analyses.waiting.pop_front()?;
+        analyses.runs += 1;
+        let run = analyses.runs;
+        let cancel = self.inner.shutdown.child_token();
+        analyses.running.insert(id, (run, cancel.clone()));
+        let more = !analyses.waiting.is_empty();
+        drop(analyses);
+        if more {
+            // One wake-up is stored at most: pass it on so the other worker takes its share.
+            self.inner.analysis_wake.notify_one();
+        }
+        Some((id, run, cancel))
+    }
+
+    /// Analyzes queued items in the background until shutdown, `ANALYSES_AT_ONCE` at a time.
+    /// Not tied to the queue's pause: it only reads files and sends nothing. Items already
+    /// waiting without a badge (queued by a previous run) are taken first.
+    pub async fn run_analysis(&self) {
+        match self.with_store(|store| store.unanalyzed_ids()) {
+            Ok(ids) => self.analyze_soon(&ids),
+            Err(error) => tracing::warn!(
+                event = "queue_error",
+                error_code = error.code(),
+                error = %error,
+                "could not list the items to analyze"
+            ),
+        }
+        let worker = || async {
+            let shutdown = self.inner.shutdown.clone();
+            loop {
+                if shutdown.is_cancelled() {
+                    return;
+                }
+                match self.next_analysis() {
+                    Some((id, run, cancel)) => self.analyze_one(id, run, &cancel).await,
+                    None => tokio::select! {
+                        _ = self.inner.analysis_wake.notified() => {}
+                        _ = shutdown.cancelled() => return,
+                    },
+                }
+            }
+        };
+        // Two workers, as `ANALYSES_AT_ONCE` says.
+        const _: () = assert!(ANALYSES_AT_ONCE == 2);
+        let (_, _) = tokio::join!(worker(), worker());
+    }
+
+    async fn analyze_one(&self, id: i64, run: u64, cancel: &CancellationToken) {
+        let finished = || {
+            let mut analyses = lock(&self.inner.analyses);
+            if analyses.running.get(&id).is_some_and(|(n, _)| *n == run) {
+                analyses.running.remove(&id);
+            }
+        };
+        // Gone, or not waiting any more: nothing to describe.
+        let Ok(item) = self.get(id) else {
+            return finished();
+        };
+        if !item.state.is_not_started() || item.plan_json.is_some() {
+            return finished();
+        }
+        let started = std::time::Instant::now();
+        let result = self.inner.media.analyze(&item, cancel).await;
+        finished();
+        // Cancelled, removed or about to run meanwhile: whatever it found is dropped.
+        if cancel.is_cancelled() {
+            return;
+        }
+        match result {
+            Ok(Some(analysis)) => {
+                let written = self.with_store(|store| {
+                    store.set_analysis(
+                        &item,
+                        analysis.media_json.as_deref(),
+                        analysis.plan_json.as_deref(),
+                    )
+                });
+                match written {
+                    Ok(true) => {
+                        tracing::info!(
+                            event = "item_analyzed",
+                            item_id = id,
+                            dur_ms = crate::logging::ms_since(started),
+                            has_plan = analysis.plan_json.is_some(),
+                            "item analyzed before its turn"
+                        );
+                        self.emit_changed(&[id]);
+                    }
+                    Ok(false) => tracing::debug!(
+                        event = "analysis_dropped",
+                        item_id = id,
+                        "the item changed during its analysis"
+                    ),
+                    Err(error) => tracing::warn!(
+                        event = "queue_error",
+                        item_id = id,
+                        error_code = error.code(),
+                        error = %error,
+                        "could not store an analysis"
+                    ),
+                }
+            }
+            Ok(None) | Err(StageError::Cancelled) => {}
+            // Not a failure of the item: its probing reports the problem when its turn comes.
+            Err(StageError::Failed { code, .. }) => tracing::debug!(
+                event = "analysis_failed",
+                item_id = id,
+                error_code = code.as_str(),
+                "analysis before the turn found nothing"
+            ),
+        }
+    }
+
     /// Takes the next `ready` (→ `probing`) or `encoded` item and makes it current.
     fn pick_next(&self) -> Result<Option<(Item, CancellationToken)>> {
         let mut current = lock(&self.inner.current);
@@ -624,6 +851,8 @@ impl Orchestrator {
             cancel: cancel.clone(),
         });
         drop(current);
+        // Its own probing starts now: an analysis still running would only compete with it.
+        self.forget_analyses(&[item.id]);
         self.emit_changed(&[item.id]);
         Ok(Some((item, cancel)))
     }

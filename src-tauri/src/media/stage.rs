@@ -18,8 +18,9 @@ use super::{MediaError, Result, hash};
 use crate::entitlements::{Entitlements, Feature};
 use crate::limit::LimitResolver;
 use crate::queue::events::{Phase, Progress};
+use crate::queue::intake;
 use crate::queue::orchestrator::{
-    MediaOutput, MediaStage, ProbeOutcome, StageContext, StageError, Treatment,
+    Analysis, MediaOutput, MediaStage, ProbeOutcome, StageContext, StageError, Treatment,
 };
 use crate::queue::store::{Item, SendMode};
 use crate::settings::{AdvancedEncoding, Settings, SettingsStore};
@@ -72,6 +73,35 @@ fn plan_input<'a>(
         target_bytes: choice.target_mb.map(|mb| mb * MIB),
         moov_first,
     }
+}
+
+/// The probe of `item` stored by an earlier look at it (the analysis at drop, or a previous
+/// attempt), if the file is still the one it described: same size and modification time as
+/// when it was queued. `stamp` is the file's now.
+fn reusable_info(item: &Item, stamp: Option<(i64, i64)>) -> Option<MediaInfo> {
+    if stamp != Some((item.source_size, item.source_mtime)) {
+        return None;
+    }
+    serde_json::from_str(item.media_json.as_deref()?).ok()
+}
+
+/// Whether the `moov` atom of an MP4 comes first; `None` for other files.
+async fn moov_first_of(source: &Path) -> Option<bool> {
+    if !source
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("mp4"))
+    {
+        return None;
+    }
+    let path = source.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        std::fs::File::open(path)
+            .ok()
+            .and_then(|mut f| probe::moov_first(&mut f))
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Result of `item_encoding_estimate`.
@@ -624,6 +654,53 @@ impl FfmpegStage {
         }
     }
 
+    /// What the badge of a queued item needs: ffprobe (unless an earlier look already has it)
+    /// and the plan under the current settings. No hash, no encoder detection, no file written.
+    /// `None` when the file is not the one that was queued.
+    async fn analyze_inner(
+        &self,
+        item: &Item,
+        cancel: &CancellationToken,
+    ) -> Result<Option<Analysis>> {
+        let source = PathBuf::from(&item.source_path);
+        let stamp = intake::file_stamp(&source);
+        if stamp != Some((item.source_size, item.source_mtime)) {
+            return Ok(None);
+        }
+        let info = if item.send_mode == SendMode::Document {
+            None
+        } else if let Some(info) = reusable_info(item, stamp) {
+            Some(info)
+        } else {
+            let resolved = self.sidecars.resolve().map_err(missing)?;
+            let scan = !plan::is_image(&source);
+            Some(probe::probe_in_background(&resolved.ffprobe, &source, scan, cancel).await?)
+        };
+        let settings = self.settings.get();
+        let (choice, _) = encoding_choice(
+            &settings,
+            self.entitlements.as_ref(),
+            item.encoding_override.as_ref(),
+        );
+        let input = plan_input(
+            &source,
+            item,
+            self.limits.current().limit_bytes,
+            &settings,
+            &choice,
+            moov_first_of(&source).await,
+        );
+        // A file that cannot be planned (too large, unreadable) keeps what ffprobe found; the
+        // probing fails it with the right code when its turn comes.
+        let plan_json = plan::build_plan(info.as_ref(), &input)
+            .ok()
+            .and_then(|plan| serde_json::to_string(&plan).ok());
+        Ok(Some(Analysis {
+            media_json: info.and_then(|i| serde_json::to_string(&i).ok()),
+            plan_json,
+        }))
+    }
+
     async fn probe_inner(&self, item: &Item, ctx: &StageContext) -> Result<ProbeOutcome> {
         let started = std::time::Instant::now();
         let settings = self.settings.get();
@@ -654,10 +731,14 @@ impl FfmpegStage {
         let hashing = hash::content_id(source.clone(), ctx.cancel.clone(), move |fraction| {
             hash_fraction.store(fraction.to_bits(), std::sync::atomic::Ordering::Relaxed);
         });
+        // The analysis at drop already ran ffprobe on this file: not again if it is unchanged.
+        let reused = reusable_info(item, intake::file_stamp(&source));
+        let info_reused = reused.is_some();
         let probing = async {
-            match &resolved {
-                None => Ok(None),
-                Some(r) => {
+            match (&resolved, reused) {
+                (None, _) => Ok(None),
+                (Some(_), Some(info)) => Ok(Some(info)),
+                (Some(r), None) => {
                     let scan = !plan::is_image(&source);
                     probe::probe(&r.ffprobe, &source, scan, &ctx.cancel)
                         .await
@@ -677,22 +758,7 @@ impl FfmpegStage {
             }
         };
 
-        let moov_first = if source
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("mp4"))
-        {
-            let path = source.clone();
-            tokio::task::spawn_blocking(move || {
-                std::fs::File::open(path)
-                    .ok()
-                    .and_then(|mut f| probe::moov_first(&mut f))
-            })
-            .await
-            .ok()
-            .flatten()
-        } else {
-            None
-        };
+        let moov_first = moov_first_of(&source).await;
 
         let (choice, advanced) = encoding_choice(
             &settings,
@@ -711,6 +777,7 @@ impl FfmpegStage {
         tracing::info!(
             event = "media_probe",
             dur_ms = crate::logging::ms_since(started),
+            info_reused,
             json = summary.as_str(),
             "probe and identity done"
         );
@@ -929,6 +996,20 @@ impl FfmpegStage {
 
 #[async_trait]
 impl MediaStage for FfmpegStage {
+    async fn analyze(
+        &self,
+        item: &Item,
+        cancel: &CancellationToken,
+    ) -> std::result::Result<Option<Analysis>, StageError> {
+        self.analyze_inner(item, cancel).await.map_err(|error| {
+            tracing::debug!(event = "analysis_error", error = %error, "analysis at drop failed");
+            match error {
+                MediaError::Cancelled => StageError::Cancelled,
+                other => StageError::failed(other.code().unwrap_or("FFMPEG_FAILED")),
+            }
+        })
+    }
+
     async fn probe(
         &self,
         item: &Item,
@@ -1672,5 +1753,40 @@ mod tests {
         );
         let error = stage_error(MediaError::failed("DISK_SPACE", "x"));
         assert_eq!(error, StageError::failed("DISK_SPACE"));
+    }
+
+    fn analyzed_item(media_json: Option<&str>) -> Item {
+        let mut store = crate::queue::test_util::memory_store();
+        let id = crate::queue::test_util::add_item(&mut store, "a.mp4");
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET media_json = ?1, source_size = 10, source_mtime = 1 WHERE id = ?2",
+                rusqlite::params![media_json, id],
+            )
+            .unwrap();
+        store.get_item(id).unwrap()
+    }
+
+    const INFO: &str =
+        r#"{"format_name":"mov,mp4","duration_s":3.0,"bit_rate":null,"video":null,"audio":null}"#;
+
+    /// The ffprobe of the analysis at drop is reused only for the file it was made on.
+    #[test]
+    fn an_earlier_probe_is_reused_only_while_the_file_is_unchanged() {
+        let item = analyzed_item(Some(INFO));
+        let reused = reusable_info(&item, Some((10, 1))).unwrap();
+        assert_eq!(reused.duration_s, Some(3.0));
+        assert!(
+            reusable_info(&item, Some((11, 1))).is_none(),
+            "size changed"
+        );
+        assert!(
+            reusable_info(&item, Some((10, 2))).is_none(),
+            "modified since"
+        );
+        assert!(reusable_info(&item, None).is_none(), "file gone");
+        assert!(reusable_info(&analyzed_item(None), Some((10, 1))).is_none());
+        assert!(reusable_info(&analyzed_item(Some("{")), Some((10, 1))).is_none());
     }
 }

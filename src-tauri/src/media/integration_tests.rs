@@ -642,6 +642,71 @@ async fn cpu_fallback_encoders_smoke() {
     }
 }
 
+/// The analysis at drop gives the badge of a real clip, and the probing that follows reuses
+/// its ffprobe: same media, same plan kind. A file modified since it was queued is not
+/// analyzed.
+#[tokio::test]
+async fn the_analysis_at_drop_matches_the_probing_and_is_refused_for_a_changed_file() {
+    let Some(mut env) = Env::new(1) else { return };
+    let clip = noisy_clip(&env, "drop.mkv", 5);
+    let mut item = env.item(&clip, SendMode::Video);
+    let (size, mtime) = crate::queue::intake::file_stamp(&clip).unwrap();
+    env.store
+        .conn()
+        .execute(
+            "UPDATE items SET source_size = ?1, source_mtime = ?2 WHERE id = ?3",
+            rusqlite::params![size, mtime, item.id],
+        )
+        .unwrap();
+    item = env.store.get_item(item.id).unwrap();
+    let cancel = CancellationToken::new();
+
+    let analysis = env.stage.analyze(&item, &cancel).await.unwrap().unwrap();
+    let analyzed: Plan = serde_json::from_str(analysis.plan_json.as_deref().unwrap()).unwrap();
+    assert_eq!(analyzed.kind, Kind::Encode, "5 s of noise do not fit 1 MB");
+    assert!(analysis.media_json.is_some());
+
+    // Stored on the row, as the orchestrator does, then probed: the same answer.
+    env.store
+        .conn()
+        .execute(
+            "UPDATE items SET media_json = ?1, plan_json = ?2 WHERE id = ?3",
+            rusqlite::params![analysis.media_json, analysis.plan_json, item.id],
+        )
+        .unwrap();
+    let item = env.store.get_item(item.id).unwrap();
+    let probed = env
+        .stage
+        .probe(&item, &env.ctx(&item, &cancel))
+        .await
+        .unwrap();
+    assert_eq!(probed.media_json, analysis.media_json);
+    assert_eq!(plan_of(&probed).kind, analyzed.kind);
+    assert_eq!(plan_of(&probed).duration_s, analyzed.duration_s);
+
+    // The file changed since it was queued: nothing to say about it.
+    std::fs::write(&clip, b"something else").unwrap();
+    assert_eq!(env.stage.analyze(&item, &cancel).await.unwrap(), None);
+
+    // A document needs no ffprobe: its badge is "as is".
+    let note = env.path("note.bin");
+    std::fs::write(&note, b"hello").unwrap();
+    let mut doc = env.item(&note, SendMode::Document);
+    let (size, mtime) = crate::queue::intake::file_stamp(&note).unwrap();
+    env.store
+        .conn()
+        .execute(
+            "UPDATE items SET source_size = ?1, source_mtime = ?2 WHERE id = ?3",
+            rusqlite::params![size, mtime, doc.id],
+        )
+        .unwrap();
+    doc = env.store.get_item(doc.id).unwrap();
+    let analysis = env.stage.analyze(&doc, &cancel).await.unwrap().unwrap();
+    let plan: Plan = serde_json::from_str(analysis.plan_json.as_deref().unwrap()).unwrap();
+    assert_eq!(plan.kind, Kind::Skip);
+    assert_eq!(analysis.media_json, None);
+}
+
 /// Average brightness (0-255) of a picture, read back with ffmpeg.
 fn mean_luma(dir: &Path, picture: &Path) -> u8 {
     let out = std::process::Command::new(dir.join("ffmpeg.exe"))
