@@ -22,6 +22,9 @@ target/
 src-tauri/target/
 src-tauri/gen/
 
+# Local release build output (installer, portable zip, checksums); see scripts/build-release.ps1
+/dist-release/
+
 # Logs (the app writes squeezegram-*.jsonl under %LOCALAPPDATA%; copies must not land here)
 *.log
 *.jsonl
