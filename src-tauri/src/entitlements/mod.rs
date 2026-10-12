@@ -28,6 +28,8 @@ pub enum Feature {
     AdvancedEncoding,
     /// More than one destination (chats or forum topics) for one `queue_add`: one item per file
     /// and destination, one encode per file. Refused in `commands::add_files` without it.
+    /// Only the batch is paid: reusing an encoded file is not gated, so a free user who queues
+    /// the same file for two destinations in two adds also gets one encode.
     MultiDestination,
     /// Declared, not wired to anything yet.
     WatchedFolder,
