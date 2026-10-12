@@ -1200,6 +1200,19 @@ pub async fn proxy_set(state: State<'_, AppState>, input: ProxyInput) -> Command
     call.finish(result)
 }
 
+/// `pingProxy` needs a running TDLib client; there is none after a start that failed (an
+/// unreadable secret, a refused proxy), which TDLib reports as "not authorized". The user is
+/// told to apply the proxy instead, which starts TDLib through it.
+fn proxy_test_error(error: TransportError) -> CommandError {
+    match error {
+        TransportError::NotAuthorized => CommandError {
+            code: "PROXY_TEST_UNAVAILABLE",
+            params: json!({}),
+        },
+        error => error.into(),
+    }
+}
+
 /// Round trip to Telegram through the proxy of the form (a secret left out: the stored one),
 /// without saving or applying it.
 #[tauri::command]
@@ -1213,7 +1226,11 @@ pub async fn proxy_test(state: State<'_, AppState>, input: ProxyInput) -> Comman
             code: "PROXY_INVALID",
             params: json!({ "field": "kind" }),
         })?;
-        let latency = state.transport.test_proxy(&proxy).await?;
+        let latency = state
+            .transport
+            .test_proxy(&proxy)
+            .await
+            .map_err(proxy_test_error)?;
         Ok(ProxyTest {
             latency_ms: u64::try_from(latency.as_millis()).unwrap_or(u64::MAX),
         })
@@ -1787,6 +1804,18 @@ mod tests {
             tdlib::proxy::load_secret(&tdlib_dir).unwrap().as_deref(),
             Some(MT),
             "and its secret"
+        );
+    }
+
+    #[test]
+    fn a_test_without_a_running_client_says_to_apply_first() {
+        assert_eq!(
+            proxy_test_error(TransportError::NotAuthorized).code,
+            "PROXY_TEST_UNAVAILABLE"
+        );
+        assert_eq!(
+            proxy_test_error(TransportError::Proxy("x".into())).code,
+            "TG_PROXY_FAILED"
         );
     }
 
