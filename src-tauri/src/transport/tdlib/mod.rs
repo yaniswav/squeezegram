@@ -1045,6 +1045,14 @@ impl<B: TdBindings> TelegramTransport for TdlibJson<B> {
         self.inner.verify_sent(probe).await
     }
 
+    async fn message_link(
+        &self,
+        target: &Target,
+        message_id: i64,
+    ) -> Result<Option<String>, TransportError> {
+        self.inner.message_link(target, message_id).await
+    }
+
     /// Under the lifecycle lock, so a start in progress applies either the old choice or this
     /// one, never half of each.
     async fn set_proxy(&self, proxy: Option<Proxy>) -> Result<(), TransportError> {

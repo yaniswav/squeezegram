@@ -1,4 +1,5 @@
-//! `upload` and `verify_sent`, named after `td_api.tl` of TDLib 1.8.68 (commit c15d3f5a).
+//! `upload`, `verify_sent` and `message_link`, named after `td_api.tl` of TDLib 1.8.68
+//! (commit c15d3f5a).
 //!
 //! 1.8.68 restructured the media contents: `inputMessageVideo{video: inputVideo{video,
 //! thumbnail, cover, start_timestamp, added_sticker_file_ids, duration, width, height,
@@ -28,7 +29,7 @@ use super::chats::{ChatType, chat_id};
 use super::json::{self as j, int, int_or_zero};
 use super::{Inner, TdBindings};
 use crate::transport::{
-    AuthState, Caption, EntityKind, Forbidden, MediaKind, Payload, Phase, Progress, Sent,
+    AuthState, Caption, EntityKind, Forbidden, MediaKind, Payload, PeerKind, Phase, Progress, Sent,
     SentCandidate, SentProbe, Target, Thumbnail, TransportError, UploadRequest, Verdict,
 };
 
@@ -739,6 +740,80 @@ impl<B: TdBindings> Inner<B> {
                 )))
             }
         }
+    }
+
+    /// `message_link`, read only. Only supergroups and channels have message links: anything
+    /// else is `None` without a request. `getMessageLink` (`chat_id`, `message_id`,
+    /// `media_timestamp`, `checklist_task_id`, `poll_option_id`, `for_album`,
+    /// `in_message_thread`) only works on a message TDLib holds, and without a message
+    /// database one sent in an earlier session is not held: `getMessage` loads it first. A
+    /// message deleted since (404) or one TDLib refuses a link for (400)
+    /// is `None`; anything else is an error. The link itself is never logged.
+    pub(super) async fn message_link(
+        &self,
+        target: &Target,
+        message_id: i64,
+    ) -> Result<Option<String>, TransportError> {
+        if target.peer.kind != PeerKind::Channel {
+            return Ok(None);
+        }
+        let chat_id = chat_id(&self.known_chat(&target.peer).await?)?;
+        let timeout = self.config.request_timeout;
+        let unavailable = |error: &TransportError| {
+            matches!(
+                error,
+                TransportError::Other {
+                    code: 400 | 404,
+                    ..
+                }
+            )
+        };
+        let found = match self
+            .request(
+                "getMessage",
+                json!({ "@type": "getMessage", "chat_id": chat_id, "message_id": message_id }),
+                timeout,
+            )
+            .await
+        {
+            Err(error) if unavailable(&error) => None,
+            answer => Some(answer?),
+        };
+        let link = match found {
+            None => None,
+            Some(_) => match self
+                .request(
+                    "getMessageLink",
+                    json!({
+                        "@type": "getMessageLink",
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "media_timestamp": 0,
+                        "checklist_task_id": 0,
+                        "poll_option_id": "",
+                        "for_album": false,
+                        // A forum topic's message is linked inside its topic.
+                        "in_message_thread": target.topic_id.is_some(),
+                    }),
+                    timeout,
+                )
+                .await
+            {
+                Err(error) if unavailable(&error) => None,
+                answer => answer?["link"]
+                    .as_str()
+                    .filter(|link| link.starts_with("https://t.me/"))
+                    .map(str::to_owned),
+            },
+        };
+        tracing::debug!(
+            event = "message_link",
+            chat = redact(chat_id).as_str(),
+            found = found.is_some(),
+            linked = link.is_some(),
+            "message link read"
+        );
+        Ok(link)
     }
 
     /// `verify_sent`, read only: `searchChatMessages` (filter by media kind, the topic, the

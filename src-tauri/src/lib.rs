@@ -378,6 +378,8 @@ pub fn run() {
             commands::codec_support,
             commands::item_reconcile,
             commands::item_resolve_unknown,
+            commands::item_duplicate,
+            commands::open_telegram_link,
             commands::destinations_refresh,
             commands::destinations_search,
             commands::destination_topics,

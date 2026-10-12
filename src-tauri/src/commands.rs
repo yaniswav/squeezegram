@@ -41,7 +41,7 @@ use crate::transport::identity_settings::{
 };
 use crate::transport::proxy::{Proxy, ProxyField, ProxyKind};
 use crate::transport::select::TransportKind;
-use crate::transport::service::{self, AuthPayload, DestinationCheck, ServiceError};
+use crate::transport::service::{self, AuthPayload, DestinationCheck, DuplicateInfo, ServiceError};
 use crate::transport::{
     AuthInput, AuthState, SentCandidate, TelegramTransport, TransportError, tdlib,
 };
@@ -708,6 +708,61 @@ pub fn item_resolve_unknown(
         .arg("with_message_id", message_id.is_some());
     let result = state.queue.resolve_unknown(item_id, action, message_id);
     call.finish(result.map(|_| ()).map_err(Into::into))
+}
+
+/// Read only: when and where the content of an item held as a duplicate was already sent,
+/// with the link of that message when Telegram has one; `null` when there is nothing to show.
+#[tauri::command]
+pub async fn item_duplicate(
+    state: State<'_, AppState>,
+    item_id: i64,
+) -> CommandResult<Option<DuplicateInfo>> {
+    let call = Call::quiet("item_duplicate").item(item_id);
+    let result = service::duplicate_info(state.transport.as_ref(), &state.queue, item_id).await;
+    let call = match &result {
+        Ok(info) => call.arg("linked", info.as_ref().is_some_and(|i| i.link.is_some())),
+        Err(_) => call,
+    };
+    call.finish(result.map_err(Into::into))
+}
+
+/// Longest `t.me` message link accepted (a public username is at most 32 characters).
+const MAX_TELEGRAM_LINK: usize = 128;
+
+/// A message link as `getMessageLink` writes it: `https://t.me/` then letters, digits, `_`,
+/// `-` and `/` only. Nothing else may reach `explorer.exe`, which would open any URL or path.
+fn is_telegram_link(url: &str) -> bool {
+    url.len() <= MAX_TELEGRAM_LINK
+        && url.strip_prefix("https://t.me/").is_some_and(|rest| {
+            !rest.is_empty()
+                && !rest.contains("//")
+                && rest
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_-/".contains(&b))
+        })
+}
+
+/// Opens a Telegram message link in the browser (or Telegram, if it handles `t.me`). Only a
+/// `https://t.me/` link passes; the link is never written to the journal.
+#[tauri::command]
+pub fn open_telegram_link(url: String) -> CommandResult<()> {
+    let call = Call::new("open_telegram_link");
+    let result = if is_telegram_link(&url) {
+        std::process::Command::new(explorer_exe())
+            .arg(&url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| {
+                tracing::warn!(event = "command_error_detail", error = %error, "explorer did not start");
+                CommandError::io()
+            })
+    } else {
+        Err(CommandError {
+            code: "LINK_REFUSED",
+            params: json!({}),
+        })
+    };
+    call.finish(result)
 }
 
 // --- destinations ---
@@ -1545,6 +1600,35 @@ mod tests {
 
     use super::*;
     use crate::settings::{ApiOverride, Settings};
+
+    #[test]
+    fn only_telegram_message_links_are_opened() {
+        for good in [
+            "https://t.me/c/1234567890/42",
+            "https://t.me/c/1234567890/2/42",
+            "https://t.me/some_channel/42",
+            "https://t.me/Some-Group/7",
+        ] {
+            assert!(is_telegram_link(good), "{good}");
+        }
+        for bad in [
+            "",
+            "https://t.me/",
+            "http://t.me/c/1/2",
+            "https://t.me.evil.example/c/1/2",
+            "https://t.me@evil.example/x",
+            "https://t.me/c/1/2?single",
+            "https://t.me/c/1/2 --new-window",
+            "https://t.me/c/1/2\"..\\x.exe",
+            "https://t.me/..//evil",
+            "tg://resolve?domain=x",
+            "C:\\Windows\\System32\\calc.exe",
+            "file:///C:/x",
+            &format!("https://t.me/{}", "a".repeat(200)),
+        ] {
+            assert!(!is_telegram_link(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn report_settings_hide_identity() {

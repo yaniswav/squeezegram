@@ -1,6 +1,7 @@
 //! What the Telegram commands do, kept out of `commands.rs` so it runs in tests on the mock:
 //! destinations cache (`destinations_refresh`), pre-send check (`destination_check`),
-//! reconciliation (`item_reconcile`, read only) and the `auth://state` payload.
+//! reconciliation (`item_reconcile`, read only), what a duplicate was sent as
+//! (`item_duplicate`, read only) and the `auth://state` payload.
 
 use std::path::Path;
 use std::time::Duration;
@@ -15,7 +16,9 @@ use super::{
 };
 use crate::media::plan::{Kind, Plan};
 use crate::queue::orchestrator::Orchestrator;
-use crate::queue::store::{Destination, Item, NewDestination, SendMode};
+use crate::queue::store::{
+    Destination, HOLD_DUPLICATE, HistoryFilter, HistoryStatus, Item, NewDestination, SendMode,
+};
 use crate::queue::{QueueError, State, iso, parse_iso};
 
 /// `loadChats` page size; about 84 chats on the developer's own account.
@@ -276,6 +279,78 @@ pub async fn check_destination(
             .map(|s| seconds_up(s.wait_remaining)),
         checked_at: iso(chrono::DateTime::<chrono::Utc>::from(check.checked_at)),
     })
+}
+
+// ---------- duplicates ----------
+
+/// The earlier send of the content an item is held for (`item_duplicate`): when, where, and
+/// the link of that message when Telegram has one (supergroups and channels).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DuplicateInfo {
+    pub sent_at: String,
+    pub destination_id: i64,
+    pub message_id: Option<i64>,
+    /// Always `https://t.me/…`.
+    pub link: Option<String>,
+}
+
+/// `item_duplicate`, read only: the last `sent` history line of the item's content and
+/// destination. `None` when the item is not held as a duplicate, or the line is gone (history
+/// cleared). A link that cannot be read (signed out, offline) leaves the date and destination.
+pub async fn duplicate_info(
+    transport: &dyn TelegramTransport,
+    queue: &Orchestrator,
+    item_id: i64,
+) -> Result<Option<DuplicateInfo>> {
+    let found = queue.with_store(|store| {
+        let item = store.get_item(item_id)?;
+        let Some(content_id) = item
+            .content_id
+            .filter(|_| item.hold_reason.as_deref() == Some(HOLD_DUPLICATE))
+        else {
+            return Ok(None);
+        };
+        let filter = HistoryFilter {
+            destination_id: Some(item.destination_id),
+            status: Some(HistoryStatus::Sent),
+            content_id: Some(content_id),
+            limit: Some(1),
+            ..HistoryFilter::default()
+        };
+        let Some(entry) = store.query_history(&filter)?.into_iter().next() else {
+            return Ok(None);
+        };
+        let destination = store.get_destination(entry.destination_id)?;
+        Ok(Some((entry, destination)))
+    })?;
+    let Some((entry, destination)) = found else {
+        return Ok(None);
+    };
+    let link = match (entry.message_id, target_of(&destination)) {
+        (Some(message_id), Some(target)) => {
+            match transport.message_link(&target, message_id).await {
+                Ok(link) => link,
+                Err(error) => {
+                    tracing::warn!(
+                        event = "message_link_failed",
+                        item_id,
+                        destination_id = destination.id,
+                        error_code = error.code_and_params().0,
+                        error = %error,
+                        "link of the earlier message unavailable"
+                    );
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    Ok(Some(DuplicateInfo {
+        sent_at: entry.sent_at,
+        destination_id: destination.id,
+        message_id: entry.message_id,
+        link,
+    }))
 }
 
 // ---------- reconciliation ----------
@@ -783,6 +858,110 @@ mod tests {
         let json = serde_json::to_value(&candidates[0]).unwrap();
         assert_eq!(json["kind"], "video");
         assert_eq!(json["file_name"], "a_sq.mp4");
+    }
+
+    /// A held duplicate in a supergroup gets the link of the earlier message; in Saved
+    /// Messages only the date and destination; signed out, the same without failing.
+    #[tokio::test]
+    async fn a_held_duplicate_links_to_the_earlier_message_where_telegram_has_links() {
+        let mock = MockTransport::authorized();
+        let queue = queue();
+        let list = refresh_destinations(&mock, &queue).await.unwrap();
+        let group = find(&list, MOCK_SLOW_GROUP, 0);
+        let saved = find(&list, MOCK_SAVED, 0);
+        let now = chrono::Utc::now().timestamp();
+        let mut held = Vec::new();
+        for destination in [&group, &saved] {
+            let target = target_of(destination).unwrap();
+            let message_id = mock.seed_message(target, MediaKind::Video, "a_sq.mp4", 3, now);
+            let id = queue
+                .add(&[NewItem {
+                    source_path: "C:\\videos\\a.mp4".into(),
+                    source_size: 10,
+                    source_mtime: 1,
+                    destination_id: destination.id,
+                    send_mode: SendMode::Video,
+                    caption: String::new(),
+                }])
+                .unwrap()[0];
+            queue
+                .with_store(|s| {
+                    s.conn().execute(
+                        "INSERT INTO history (content_id, source_path, file_name, destination_id,
+                                              size_sent, mode, status, message_id, sent_at)
+                         VALUES ('10:abc', 'a.mp4', 'a.mp4', ?1, 3, 'video', 'sent', ?2,
+                                 '2026-10-01T08:00:00.000Z')",
+                        rusqlite::params![destination.id, message_id],
+                    )?;
+                    force_state(s, id, State::PendingReview);
+                    s.conn().execute(
+                        "UPDATE items SET content_id = '10:abc', hold_reason = 'duplicate'
+                         WHERE id = ?1",
+                        [id],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+            held.push((id, message_id));
+        }
+
+        let (group_item, group_message) = held[0];
+        let info = duplicate_info(&mock, &queue, group_item)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            info,
+            DuplicateInfo {
+                sent_at: "2026-10-01T08:00:00.000Z".into(),
+                destination_id: group.id,
+                message_id: Some(group_message),
+                link: Some(format!(
+                    "https://t.me/c/{}/{group_message}",
+                    MOCK_SLOW_GROUP.raw_id
+                )),
+            }
+        );
+        let in_saved = duplicate_info(&mock, &queue, held[1].0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (in_saved.destination_id, in_saved.link),
+            (saved.id, None),
+            "Saved Messages has no message links"
+        );
+
+        // Signed out: the date and destination are still given.
+        mock.log_out().await.unwrap();
+        let offline = duplicate_info(&mock, &queue, group_item)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (offline.message_id, offline.link),
+            (Some(group_message), None)
+        );
+
+        // Not held as a duplicate, or history cleared: nothing to show.
+        queue
+            .with_store(|s| {
+                s.conn().execute(
+                    "UPDATE items SET hold_reason = NULL WHERE id = ?1",
+                    [group_item],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            duplicate_info(&mock, &queue, group_item).await.unwrap(),
+            None
+        );
+        queue.clear_history().unwrap();
+        assert_eq!(
+            duplicate_info(&mock, &queue, held[1].0).await.unwrap(),
+            None
+        );
     }
 
     #[test]

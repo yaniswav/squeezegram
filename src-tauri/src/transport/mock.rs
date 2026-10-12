@@ -869,6 +869,22 @@ impl TelegramTransport for MockTransport {
         Ok(candidates)
     }
 
+    /// Supergroups and channels only, like Telegram: `https://t.me/c/<raw id>/<message id>`.
+    async fn message_link(
+        &self,
+        target: &Target,
+        message_id: i64,
+    ) -> Result<Option<String>, TransportError> {
+        self.ensure_ready()?;
+        let sent = self
+            .lock()
+            .messages
+            .iter()
+            .any(|m| m.id == message_id && m.target.peer == target.peer);
+        Ok((sent && target.peer.kind == PeerKind::Channel)
+            .then(|| format!("https://t.me/c/{}/{message_id}", target.peer.raw_id)))
+    }
+
     async fn set_proxy(&self, proxy: Option<Proxy>) -> Result<(), TransportError> {
         self.lock().proxy = proxy;
         Ok(())

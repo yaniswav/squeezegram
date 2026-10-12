@@ -627,6 +627,14 @@ pub trait TelegramTransport: Send + Sync {
     /// Read only: messages of the destination that may be this upload; the user decides.
     async fn verify_sent(&self, probe: &SentProbe) -> Result<Vec<SentCandidate>, TransportError>;
 
+    /// Read only: the `https://t.me/` link of a message sent to `target`. `None` where Telegram
+    /// has none (private chats, basic groups, Saved Messages) and for a message deleted since.
+    async fn message_link(
+        &self,
+        target: &Target,
+        message_id: i64,
+    ) -> Result<Option<String>, TransportError>;
+
     /// Every connection goes through `proxy` (`None`: direct). Kept for the next start when no
     /// client runs; applied before the first network request of a start, and at once otherwise.
     async fn set_proxy(&self, proxy: Option<proxy::Proxy>) -> Result<(), TransportError>;
@@ -723,6 +731,10 @@ impl TelegramTransport for NoTransport {
     }
 
     async fn verify_sent(&self, _: &SentProbe) -> Result<Vec<SentCandidate>, TransportError> {
+        self.refuse()
+    }
+
+    async fn message_link(&self, _: &Target, _: i64) -> Result<Option<String>, TransportError> {
         self.refuse()
     }
 

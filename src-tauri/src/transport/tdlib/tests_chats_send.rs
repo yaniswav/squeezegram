@@ -1503,3 +1503,73 @@ async fn real_tdjson_readonly_dialogs() {
     drop(transport);
     step("dropped");
 }
+
+/// `message_link`, read only: the message is loaded first (no message database), then linked
+/// inside its forum topic; a message deleted since has no link, and a private chat none
+/// either, without a single request.
+#[tokio::test]
+async fn message_links_load_the_message_then_ask_for_its_link() {
+    let dir = TempDir::new("message-link");
+    let transport = started(&[], &dir).await;
+    let forum = -1_000_000_000_000 - FORUM;
+    let link = "https://t.me/c/1234567890/2/3145728";
+    transport.bindings().push_steps(super::tests::steps(json!([
+        { "expect": "createSupergroupChat", "reply": { "@type": "chat", "id": forum } },
+        { "expect": "getMessage", "reply": { "@type": "message", "id": FINAL, "chat_id": forum } },
+        { "expect": "getMessageLink",
+          "reply": { "@type": "messageLink", "link": link, "is_public": false } },
+        { "expect": "createSupergroupChat", "reply": { "@type": "chat", "id": forum } },
+        { "expect": "getMessage",
+          "reply": { "@type": "error", "code": 404, "message": "Message not found" } }
+    ])));
+    let topic = target(PeerKind::Channel, FORUM, Some(2));
+    assert_eq!(
+        transport
+            .message_link(&topic, FINAL)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(link)
+    );
+    let replay = transport.bindings();
+    let request = &replay.sent_of("getMessageLink")[0];
+    assert_eq!(
+        (
+            &request["chat_id"],
+            &request["message_id"],
+            &request["media_timestamp"],
+            &request["checklist_task_id"],
+            &request["poll_option_id"],
+            &request["for_album"],
+            &request["in_message_thread"],
+        ),
+        (
+            &json!(forum),
+            &json!(FINAL),
+            &json!(0),
+            &json!(0),
+            &json!(""),
+            &json!(false),
+            &json!(true),
+        )
+    );
+    assert!(
+        position_of(&replay.calls(), "send:getMessage")
+            < position_of(&replay.calls(), "send:getMessageLink")
+    );
+
+    assert_eq!(
+        transport.message_link(&topic, FINAL).await.unwrap(),
+        None,
+        "deleted since"
+    );
+    let sent = replay.sent().len();
+    assert_eq!(transport.message_link(&saved(), FINAL).await.unwrap(), None);
+    assert_eq!(replay.sent().len(), sent, "no request for a private chat");
+    assert_read_only(replay);
+    finish(&transport, "message_link").await;
+}
+
+fn position_of(calls: &[String], call: &str) -> usize {
+    calls.iter().position(|c| c == call).unwrap()
+}
