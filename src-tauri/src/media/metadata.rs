@@ -96,11 +96,17 @@ fn tiff_orientation(tiff: &[u8]) -> Option<u16> {
     let count = usize::from(u16_at(ifd)?);
     (0..count).find_map(|index| {
         let entry = ifd + 2 + index * 12;
-        // SHORT, one value, stored in the first two bytes of the value field.
-        (u16_at(entry)? == ORIENTATION_TAG && u16_at(entry + 2)? == 3)
-            .then(|| u16_at(entry + 8))
-            .flatten()
-            .filter(|value| (1..=8).contains(value))
+        if u16_at(entry)? != ORIENTATION_TAG {
+            return None;
+        }
+        // One value, in the value field itself: a SHORT as the standard says, or a LONG as
+        // some tools write it.
+        let value = match u16_at(entry + 2)? {
+            3 => u16_at(entry + 8)?,
+            4 => u16::try_from(u32_at(entry + 8)?).ok()?,
+            _ => return None,
+        };
+        (1..=8).contains(&value).then_some(value)
     })
 }
 
@@ -494,6 +500,17 @@ pub(crate) mod tests {
     #[test]
     fn exif_orientation_is_read_in_both_byte_orders() {
         assert_eq!(tiff_orientation(&camera_tiff(6)), Some(6));
+        // Written as a LONG (type 4), big and little endian.
+        let mut long_be = camera_tiff(6);
+        long_be[13] = 4;
+        long_be[18..22].copy_from_slice(&6u32.to_be_bytes());
+        assert_eq!(tiff_orientation(&long_be), Some(6));
+        let mut long_le = orientation_tiff(5);
+        long_le[12] = 4;
+        assert_eq!(tiff_orientation(&long_le), Some(5));
+        let mut rational = orientation_tiff(5);
+        rational[12] = 5;
+        assert_eq!(tiff_orientation(&rational), None, "not an integer type");
         assert_eq!(tiff_orientation(&orientation_tiff(8)), Some(8));
         assert_eq!(tiff_orientation(&camera_tiff(9)), None, "out of range");
         assert_eq!(
