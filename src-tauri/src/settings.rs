@@ -53,6 +53,25 @@ pub struct Settings {
     /// Proxy for Telegram. Absent from older files: no proxy. Changed only through
     /// `proxy_set`, which also stores the secret and applies it to the transport.
     pub network: Network,
+    /// What leaves with a file sent without re-encoding. Absent from older files: the defaults.
+    pub privacy: Privacy,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Privacy {
+    /// "Remove location and camera data": a JPEG, PNG or WebP sent as it is goes out as a copy
+    /// without its Exif, XMP and the like, and an MP4 sent without re-encoding whose container
+    /// names a place or a camera is remuxed without its metadata (`media::metadata`, `plan`).
+    pub strip_metadata: bool,
+}
+
+impl Default for Privacy {
+    fn default() -> Self {
+        Self {
+            strip_metadata: true,
+        }
+    }
 }
 
 /// `proxy: null`: direct connection. The secret of the proxy is not here (`transport::proxy`).
@@ -290,6 +309,7 @@ impl Default for Settings {
             advanced_encoding: AdvancedEncoding::default(),
             background: Background::default(),
             network: Network::default(),
+            privacy: Privacy::default(),
         }
     }
 }
@@ -569,7 +589,8 @@ mod tests {
                 "preset": "balanced", "target_mb": null
               },
               "background": { "close_action": "quit" },
-              "network": { "proxy": null }
+              "network": { "proxy": null },
+              "privacy": { "strip_metadata": true }
             })
         );
     }
@@ -832,6 +853,31 @@ mod tests {
             assert_eq!(error.code(), "SETTINGS_INVALID", "{bad:?}");
         }
         assert_eq!(store.get(), reset, "a refused patch changes nothing");
+    }
+
+    #[test]
+    fn metadata_is_removed_unless_turned_off_older_files_included() {
+        let dir = TestDir::new("settings-privacy");
+        let path = dir.path().join(FILE_NAME);
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("privacy");
+        std::fs::write(&path, old.to_string()).unwrap();
+        let store = SettingsStore::load(path).unwrap();
+        assert!(
+            store.get().privacy.strip_metadata,
+            "on for files written before"
+        );
+        let off = store
+            .set(&json!({ "privacy": { "strip_metadata": false } }))
+            .unwrap();
+        assert!(!off.privacy.strip_metadata);
+        assert_eq!(
+            store
+                .set(&json!({ "privacy": { "strip_metadata": "yes" } }))
+                .unwrap_err()
+                .code(),
+            "SETTINGS_INVALID"
+        );
     }
 
     #[test]

@@ -84,6 +84,10 @@ pub struct MediaInfo {
     pub bit_rate: Option<u64>,
     pub video: Option<VideoInfo>,
     pub audio: Option<AudioInfo>,
+    /// The container names a place or a camera (`private_tag`); only this flag is kept, never
+    /// the values. Absent from items probed before it existed.
+    #[serde(default)]
+    pub private_tags: bool,
 }
 
 // --- raw ffprobe JSON ---
@@ -101,6 +105,8 @@ struct RawFormat {
     format_name: Option<String>,
     duration: Option<String>,
     bit_rate: Option<String>,
+    #[serde(default)]
+    tags: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -182,6 +188,18 @@ fn video_of(raw: &RawStream) -> VideoInfo {
     }
 }
 
+/// A container tag that says where or with what a video was shot: `location` (MP4 `©xyz`,
+/// Android), `com.apple.quicktime.location.ISO6709`, `make`/`model` and their QuickTime and
+/// Android forms, serial numbers.
+fn private_tag(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    ["location", "gps", "serial", "manufacturer"]
+        .iter()
+        .any(|part| key.contains(part))
+        || key.ends_with("make")
+        || key.ends_with("model")
+}
+
 /// Reduces ffprobe's JSON (`-show_format -show_streams`). The video stream is the first one
 /// that is not a cover picture; the audio stream is the default one, else the first.
 pub fn parse(json: &str) -> Result<MediaInfo, serde_json::Error> {
@@ -217,6 +235,7 @@ pub fn parse(json: &str) -> Result<MediaInfo, serde_json::Error> {
             channels: s.channels,
             bit_rate: bits(&s.bit_rate),
         }),
+        private_tags: raw.format.tags.keys().any(|key| private_tag(key)),
     })
 }
 
@@ -419,6 +438,42 @@ mod tests {
         assert_eq!(video.rotation, -90);
         assert_eq!(video.rotated_size(), (2160, 3840));
         assert!(!video.has_alpha());
+    }
+
+    #[test]
+    fn location_and_camera_tags_are_flagged_never_kept() {
+        let with = |tags: &str| {
+            parse(&format!(
+                r#"{{"streams":[],"format":{{"format_name":"mov,mp4","tags":{tags}}}}}"#
+            ))
+            .unwrap()
+        };
+        for tags in [
+            r#"{"location":"+48.8584+002.2945/","location-eng":"+48.8584+002.2945/"}"#,
+            r#"{"com.apple.quicktime.location.ISO6709":"+48.8584+002.2945+035.000/"}"#,
+            r#"{"com.apple.quicktime.make":"FakeMaker","com.apple.quicktime.model":"FakePhone"}"#,
+            r#"{"com.android.manufacturer":"FakeMaker"}"#,
+        ] {
+            let info = with(tags);
+            assert!(info.private_tags, "{tags}");
+            let stored = serde_json::to_string(&info).unwrap();
+            assert!(
+                !stored.contains("48.8584") && !stored.contains("Fake"),
+                "{stored}"
+            );
+        }
+        for tags in [
+            r#"{"major_brand":"isom","encoder":"Lavf61","creation_time":"2026-01-01T00:00:00Z"}"#,
+            "{}",
+        ] {
+            assert!(!with(tags).private_tags, "{tags}");
+        }
+        // Items probed before the flag existed read as "none".
+        let old: MediaInfo = serde_json::from_str(
+            r#"{"format_name":null,"duration_s":null,"bit_rate":null,"video":null,"audio":null}"#,
+        )
+        .unwrap();
+        assert!(!old.private_tags);
     }
 
     #[test]

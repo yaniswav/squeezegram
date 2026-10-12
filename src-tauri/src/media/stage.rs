@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::detect::{self, Detection, Encoder, Tools};
 use super::encode::{self, EncoderStop, Job};
+use super::metadata;
 use super::plan::{self, EncodingOverride, Kind, MIB, Plan, PlanInput, VideoCodec};
 use super::probe::{self, MediaInfo};
 use super::{MediaError, Result, hash};
@@ -127,6 +128,22 @@ pub struct CodecSupport {
     pub hevc_encoder: Option<&'static str>,
     /// Why not: `no_hevc_encoder` (ffmpeg has none that works here) or `ffmpeg_unavailable`.
     pub reason: Option<&'static str>,
+}
+
+/// Largest image read whole to remove its metadata. Far above any photo; a bigger file is sent as
+/// it is (and the plan says so in the journal).
+const STRIP_MAX_BYTES: i64 = 256 * MIB as i64;
+
+/// A JPEG, PNG or WebP by its first bytes, small enough for `metadata::strip`.
+fn strippable_image(source: &Path, size: i64) -> bool {
+    use std::io::Read;
+
+    let mut head = [0u8; metadata::SNIFF_LEN];
+    size <= STRIP_MAX_BYTES
+        && std::fs::File::open(source)
+            .and_then(|mut file| file.read_exact(&mut head))
+            .is_ok()
+        && metadata::sniff(&head).is_some()
 }
 
 struct Cached {
@@ -592,7 +609,7 @@ impl FfmpegStage {
                 estimate.outcome = "photo";
                 estimate.bytes = None;
             }
-            Kind::Remux | Kind::RemuxAudio | Kind::Skip => {}
+            Kind::Remux | Kind::RemuxAudio | Kind::Skip | Kind::Strip => {}
         }
         Ok(estimate)
     }
@@ -783,6 +800,13 @@ impl FfmpegStage {
         );
         let mut plan = plan::build_plan(info.as_ref(), &input)
             .map_err(|e| MediaError::failed(e.code(), e.to_string()))?;
+        if settings.privacy.strip_metadata {
+            let private = plan::PrivateData {
+                image: plan.kind == Kind::Skip && strippable_image(&source, item.source_size),
+                video_tags: info.as_ref().is_some_and(|info| info.private_tags),
+            };
+            plan = plan::without_private_data(plan, &source, private);
+        }
 
         if plan.kind == Kind::Encode
             && let Some(resolved) = &resolved
@@ -842,7 +866,8 @@ impl FfmpegStage {
 
         let treatment = match plan.kind {
             Kind::Encode | Kind::Photo => Treatment::Encode,
-            Kind::Remux | Kind::RemuxAudio => Treatment::Remux,
+            // A quick copy of the file, as a remux is: `media.remux` runs it (`run_plan`).
+            Kind::Remux | Kind::RemuxAudio | Kind::Strip => Treatment::Remux,
             Kind::Skip => Treatment::Skip,
         };
         let temp_path = (treatment != Treatment::Skip).then(|| {
@@ -898,6 +923,7 @@ impl FfmpegStage {
             }
             Kind::Photo => encode::photo(&job).await?,
             Kind::Remux | Kind::RemuxAudio => encode::remux(&job).await?,
+            Kind::Strip => encode::strip(&job).await?,
             Kind::Skip => {
                 return Err(MediaError::failed(
                     "FFMPEG_FAILED",

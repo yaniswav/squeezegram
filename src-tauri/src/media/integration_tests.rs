@@ -865,3 +865,230 @@ fn real_download_of_the_pinned_build() {
     println!("downloaded and installed in {:.1?}", started.elapsed());
     assert!(dir.join("ffmpeg").join("bin").join("ffmpeg.exe").is_file());
 }
+
+// ---------- location and camera data of files sent as they are ----------
+
+/// An H.264 encoder of this ffmpeg: the pinned LGPL build has libopenh264, others libx264.
+fn h264_encoder(ffmpeg: &Path) -> &'static str {
+    let out = std::process::Command::new(ffmpeg.join("ffmpeg.exe"))
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .expect("ffmpeg starts");
+    if String::from_utf8_lossy(&out.stdout).contains("libopenh264") {
+        "libopenh264"
+    } else {
+        "libx264"
+    }
+}
+
+/// MD5 of the decoded pixels, orientation applied as ffmpeg does by default.
+fn decoded_md5(ffmpeg: &Path, path: &Path) -> String {
+    let out = std::process::Command::new(ffmpeg.join("ffmpeg.exe"))
+        .args(["-hide_banner", "-nostdin", "-loglevel", "error", "-i"])
+        .arg(path)
+        .args(["-f", "md5", "-"])
+        .output()
+        .expect("ffmpeg starts");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+fn no_private_bytes(path: &Path) {
+    let data = std::fs::read(path).unwrap();
+    for secret in super::metadata::tests::SECRETS {
+        assert!(
+            !super::metadata::tests::contains(&data, secret),
+            "{} left in {}",
+            String::from_utf8_lossy(secret),
+            path.display()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_photo_sent_as_a_file_loses_its_location_not_its_pixels_or_orientation() {
+    let Some(mut env) = Env::new(50) else { return };
+    let plain = env.path("plain.jpg");
+    generate(
+        &env.ffmpeg,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240",
+            "-frames:v",
+            "1",
+            plain.to_str().unwrap(),
+        ],
+    );
+    // A fake camera Exif (GPS position, serial number, orientation 6) right after SOI.
+    let encoded = std::fs::read(&plain).unwrap();
+    let mut exif = b"Exif\0\0".to_vec();
+    exif.extend_from_slice(&super::metadata::tests::camera_tiff(6));
+    let mut source = encoded[..2].to_vec();
+    source.extend_from_slice(&[0xff, 0xe1]);
+    source.extend_from_slice(&u16::try_from(exif.len() + 2).unwrap().to_be_bytes());
+    source.extend_from_slice(&exif);
+    source.extend_from_slice(&encoded[2..]);
+    let src = env.path("IMG_0001.JPG");
+    std::fs::write(&src, &source).unwrap();
+
+    let (_, probe, result) = env
+        .run(&src, SendMode::Document, &CancellationToken::new())
+        .await;
+    let probe = probe.unwrap();
+    assert_eq!(plan_of(&probe).kind, Kind::Strip);
+    assert_eq!(probe.treatment, Treatment::Remux);
+    let output = PathBuf::from(result.unwrap().unwrap().output_path);
+    assert_eq!(output.file_name().unwrap(), "IMG_0001.JPG", "same name");
+    assert_ne!(output.parent(), src.parent(), "written in the item folder");
+    assert_eq!(
+        std::fs::read(&src).unwrap(),
+        source,
+        "the original is untouched"
+    );
+    no_private_bytes(&output);
+    // Same pixels, same orientation applied by a decoder.
+    assert_eq!(
+        decoded_md5(&env.ffmpeg, &output),
+        decoded_md5(&env.ffmpeg, &src)
+    );
+    let (before, after) = (env.ffprobe(&src).await, env.ffprobe(&output).await);
+    assert_eq!(
+        after.video.unwrap().rotated_size(),
+        before.video.unwrap().rotated_size()
+    );
+
+    // Turned off: sent as it is.
+    let Some(mut off) = Env::with(
+        50,
+        Arc::new(crate::entitlements::FreeOnly),
+        &json!({ "privacy": { "strip_metadata": false } }),
+    ) else {
+        return;
+    };
+    let (_, probe, result) = off
+        .run(&src, SendMode::Document, &CancellationToken::new())
+        .await;
+    assert_eq!(probe.unwrap().treatment, Treatment::Skip);
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn an_elongated_png_sent_as_a_file_loses_its_text_and_exif_chunks() {
+    let Some(mut env) = Env::new(50) else { return };
+    let plain = env.path("plain.png");
+    // 2000x100: over the photo ratio, so the plan sends it as it is.
+    generate(
+        &env.ffmpeg,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=2000x100",
+            "-frames:v",
+            "1",
+            plain.to_str().unwrap(),
+        ],
+    );
+    let encoded = std::fs::read(&plain).unwrap();
+    // After the signature and IHDR (8 + 25 bytes): fake text and Exif chunks.
+    let mut source = encoded[..33].to_vec();
+    super::metadata::png_chunk(&mut source, b"tEXt", b"Comment\0FAKE COMMENT");
+    super::metadata::png_chunk(
+        &mut source,
+        b"eXIf",
+        &super::metadata::tests::camera_tiff(1),
+    );
+    source.extend_from_slice(&encoded[33..]);
+    let src = env.path("banner.png");
+    std::fs::write(&src, &source).unwrap();
+
+    let (_, probe, result) = env
+        .run(&src, SendMode::Photo, &CancellationToken::new())
+        .await;
+    let plan = plan_of(&probe.unwrap());
+    assert_eq!(
+        (plan.kind, plan.note.as_deref()),
+        (Kind::Strip, Some("photo_ratio"))
+    );
+    let output = PathBuf::from(result.unwrap().unwrap().output_path);
+    no_private_bytes(&output);
+    assert_eq!(
+        decoded_md5(&env.ffmpeg, &output),
+        decoded_md5(&env.ffmpeg, &src)
+    );
+}
+
+#[tokio::test]
+async fn a_compliant_mp4_with_a_location_is_remuxed_without_it() {
+    let Some(mut env) = Env::new(50) else { return };
+    let src = env.path("walk.mp4");
+    let encoder = h264_encoder(&env.ffmpeg);
+    generate(
+        &env.ffmpeg,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240:rate=30",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-t",
+            "3",
+            "-c:v",
+            encoder,
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            "-metadata",
+            "location=+48.8584+002.2945/",
+            src.to_str().unwrap(),
+        ],
+    );
+    assert!(env.ffprobe(&src).await.private_tags);
+    let (_, probe, result) = env
+        .run(&src, SendMode::Video, &CancellationToken::new())
+        .await;
+    let plan = plan_of(&probe.unwrap());
+    assert_eq!(
+        (plan.kind, plan.note.as_deref()),
+        (Kind::Remux, Some("private_tags"))
+    );
+    let output = PathBuf::from(result.unwrap().unwrap().output_path);
+    let info = env.ffprobe(&output).await;
+    assert!(!info.private_tags, "no location left");
+    assert_eq!(info.video.unwrap().codec, "h264");
+    let data = std::fs::read(&output).unwrap();
+    assert!(!super::metadata::tests::contains(&data, b"48.8584"));
+
+    // Without a location the same file is sent as it is.
+    let plain = env.path("plain.mp4");
+    generate(
+        &env.ffmpeg,
+        &[
+            "-i",
+            src.to_str().unwrap(),
+            "-c",
+            "copy",
+            "-map_metadata",
+            "-1",
+            "-movflags",
+            "+faststart",
+            plain.to_str().unwrap(),
+        ],
+    );
+    let (_, probe, _) = env
+        .run(&plain, SendMode::Video, &CancellationToken::new())
+        .await;
+    assert_eq!(probe.unwrap().treatment, Treatment::Skip);
+}

@@ -186,6 +186,9 @@ pub enum Kind {
     /// Already sendable: the source is the output.
     Skip,
     Photo,
+    /// Sendable as it is, but carrying location or camera data: a copy without them, pixels
+    /// untouched (`metadata`). Images only; a video in that case is remuxed.
+    Strip,
 }
 
 impl Kind {
@@ -197,6 +200,7 @@ impl Kind {
             Kind::RemuxAudio => "remux_audio",
             Kind::Skip => "skip",
             Kind::Photo => "photo",
+            Kind::Strip => "strip",
         }
     }
 }
@@ -440,6 +444,37 @@ fn plan_photo(video: &VideoInfo, input: &PlanInput<'_>) -> Result<Plan, PlanErro
     Ok(plan)
 }
 
+/// What a file the plan sends as it is (`Skip`) holds that "Remove location and camera data"
+/// takes out; the stage finds it (first bytes, ffprobe tags), the plan stays free of I/O.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PrivateData {
+    /// A JPEG, PNG or WebP (`metadata::sniff`), small enough to be read whole.
+    pub image: bool,
+    /// The container names a place or a camera (`MediaInfo::private_tags`).
+    pub video_tags: bool,
+}
+
+/// A `Skip` plan when the user removes location and camera data: an image becomes a stripped
+/// copy under its own name (the recipient sees the same file name), a video whose container
+/// carries such tags is remuxed (`-map_metadata -1`, streams copied). Any other plan, and any
+/// other file (HEIC, a video in document mode, which is not probed), is left as it is.
+pub fn without_private_data(mut plan: Plan, source: &Path, private: PrivateData) -> Plan {
+    if plan.kind != Kind::Skip {
+        return plan;
+    }
+    if private.image {
+        plan.kind = Kind::Strip;
+        plan.output_name = source.file_name().map_or_else(
+            || plan.output_name.clone(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+    } else if private.video_tags && plan.video_index.is_some() && !is_image(source) {
+        plan.kind = Kind::Remux;
+        plan.note = Some("private_tags".into());
+    }
+    plan
+}
+
 /// Dimensions after the Telegram limits: `f = min(1, 9800/(w+h), 4096/max(w,h))`, even.
 pub fn photo_size(width: u32, height: u32) -> PhotoSize {
     let (w, h) = (f64::from(width), f64::from(height));
@@ -500,6 +535,7 @@ mod tests {
                 channels: Some(2),
                 bit_rate: None,
             }),
+            private_tags: false,
         }
     }
 
@@ -851,6 +887,57 @@ mod tests {
             uhd.contains("min(3840,iw)") && uhd.contains("min(2160,ih)"),
             "{uhd}"
         );
+    }
+
+    #[test]
+    fn private_data_turns_only_a_sent_as_is_plan_into_a_copy_or_a_remux() {
+        let image = PrivateData {
+            image: true,
+            video_tags: false,
+        };
+        let tags = PrivateData {
+            image: false,
+            video_tags: true,
+        };
+        // A photo sent as a file keeps its name.
+        let photo = PathBuf::from(r"C:\in\IMG_0042.JPG");
+        let mut doc = input(&photo, MIB);
+        doc.send_mode = SendMode::Document;
+        let skip = build_plan(None, &doc).unwrap();
+        let stripped = without_private_data(skip.clone(), &photo, image);
+        assert_eq!(
+            (stripped.kind, stripped.output_name.as_str()),
+            (Kind::Strip, "IMG_0042.JPG")
+        );
+        assert_eq!(
+            without_private_data(skip.clone(), &photo, PrivateData::default()),
+            skip
+        );
+        // Document mode does not probe: a video there has no tags to act on.
+        let clip = PathBuf::from("clip.mp4");
+        let mut doc_video = input(&clip, MIB);
+        doc_video.send_mode = SendMode::Document;
+        let skip = build_plan(None, &doc_video).unwrap();
+        assert_eq!(without_private_data(skip.clone(), &clip, tags), skip);
+
+        // A compliant MP4 with a location is remuxed, without one it is sent as is.
+        let compliant = info(video("h264", "High", "yuv420p"), Some("aac"), Some(10.0));
+        let skip = build_plan(Some(&compliant), &input(&clip, MIB)).unwrap();
+        assert_eq!(skip.kind, Kind::Skip);
+        let remux = without_private_data(skip.clone(), &clip, tags);
+        assert_eq!(
+            (remux.kind, remux.note.as_deref()),
+            (Kind::Remux, Some("private_tags"))
+        );
+        assert_eq!(
+            without_private_data(skip.clone(), &clip, PrivateData::default()),
+            skip
+        );
+
+        // Plans that re-encode already drop everything.
+        let encode = build_plan(Some(&compliant), &input(&clip, 200 * MIB)).unwrap();
+        assert_eq!(encode.kind, Kind::Encode);
+        assert_eq!(without_private_data(encode.clone(), &clip, tags), encode);
     }
 
     #[test]

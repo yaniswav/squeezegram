@@ -1,9 +1,11 @@
-//! Media pipeline: ffprobe, plan, encoder detection, encode/remux/photo, BLAKE3 identity
+//! Media pipeline: ffprobe, plan, encoder detection, encode/remux/photo, metadata removal of
+//! files sent as they are, BLAKE3 identity
 //! `stage` plugs it into the orchestrator.
 
 pub mod detect;
 pub mod encode;
 pub mod hash;
+pub mod metadata;
 pub mod plan;
 pub mod probe;
 pub mod procs;

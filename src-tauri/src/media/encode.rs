@@ -10,6 +10,7 @@ use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::detect::{Encoder, Tools};
+use super::metadata;
 use super::plan::{self, EncodePreset, Kind, PHOTO_MAX_BYTES, PhotoSize, Plan, VideoCodec};
 use super::probe;
 use super::procs::{self, Args, Ending, Spec};
@@ -799,6 +800,44 @@ async fn remux_inner(job: &Job<'_>) -> Result<Produced> {
         ));
     }
     verify_duration(job, &part).await?;
+    finish(job)
+}
+
+/// A copy of the image without its location and camera data (`metadata`), pixels untouched,
+/// under the source's name in the item's folder. The source is only read.
+pub async fn strip(job: &Job<'_>) -> Result<Produced> {
+    let result = strip_inner(job).await;
+    if result.is_err() {
+        cleanup(job);
+    }
+    result
+}
+
+async fn strip_inner(job: &Job<'_>) -> Result<Produced> {
+    let source_size = std::fs::metadata(job.input)?.len();
+    prepare(job, source_size)?;
+    let (input, part) = (job.input.to_path_buf(), job.part());
+    let failed = |detail: String| MediaError::failed("METADATA_STRIP_FAILED", detail);
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let data = std::fs::read(&input)?;
+        // A file that does not parse is refused, never sent with what it holds.
+        let stripped = metadata::strip(&data)
+            .map_err(|error| MediaError::failed("METADATA_STRIP_FAILED", error.to_string()))?
+            .ok_or_else(|| {
+                MediaError::failed("METADATA_STRIP_FAILED", "not a JPEG, PNG or WebP file")
+            })?;
+        std::fs::write(&part, stripped)?;
+        Ok(())
+    })
+    .await
+    .map_err(|error| failed(error.to_string()))??;
+    if job.cancel.is_cancelled() {
+        return Err(MediaError::Cancelled);
+    }
+    job.progress.report(Progress {
+        percent: 100.0,
+        ..Default::default()
+    });
     finish(job)
 }
 
