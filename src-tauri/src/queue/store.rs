@@ -863,10 +863,21 @@ impl Store {
 
     /// Next item the orchestrator may run at `now`, by position: `ready`, or `encoded` (retry,
     /// waiting_server recovered at startup, or held by its destination's minimum interval)
-    /// once its `next_run_at` has come. An item still waiting lets the ones behind it run.
+    /// once its `next_run_at` has come. An item held by its destination's interval lets the
+    /// ones behind it run; a FLOOD_WAIT carried over a restart holds them all, as it did before
+    /// the restart: it is about the account, and every other upload would meet its own 429 and
+    /// could lengthen the restriction.
     pub fn next_runnable(&self, now: DateTime<Utc>) -> Result<Option<Item>> {
-        Ok(self
-            .items_in_states(&[State::Ready, State::Encoded])?
+        let items = self.items_in_states(&[State::Ready, State::Encoded])?;
+        let flood_wait = items.iter().any(|item| {
+            item.state == State::Encoded
+                && item.last_error.as_deref() == Some(FLOOD_WAIT_CODE)
+                && scheduled_at(item).is_some_and(|at| at > now)
+        });
+        if flood_wait {
+            return Ok(None);
+        }
+        Ok(items
             .into_iter()
             .find(|item| scheduled_at(item).is_none_or(|at| at <= now)))
     }
@@ -2964,6 +2975,34 @@ mod tests {
         // Only an encoded item is held this way.
         let error = store.defer(behind, due).unwrap_err();
         assert_eq!(error.code(), "ILLEGAL_TRANSITION");
+    }
+
+    #[test]
+    fn a_flood_wait_carried_over_a_restart_holds_every_item() {
+        let mut store = memory_store();
+        let first = add_item(&mut store, "a.mp4");
+        let flooded = add_item(&mut store, "b.mp4");
+        let now = parse_iso("2026-10-12T10:00:00.000Z").unwrap();
+        let until = now + chrono::Duration::seconds(45);
+        force_state(&store, flooded, State::Encoded);
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET last_error = 'TG_FLOOD_WAIT', next_run_at = ?1 WHERE id = ?2",
+                params![iso(until), flooded],
+            )
+            .unwrap();
+        assert_eq!(
+            store.next_runnable(now).unwrap(),
+            None,
+            "not even the first"
+        );
+        assert_eq!(store.next_scheduled(now).unwrap(), Some(until));
+        assert_eq!(
+            store.next_runnable(until).unwrap().map(|i| i.id),
+            Some(first),
+            "then the queue goes on in order"
+        );
     }
 
     #[test]

@@ -1512,3 +1512,40 @@ fn a_new_interval_leaves_a_flood_wait_schedule_alone() {
     orch.update_destination(chat, &favorite).unwrap();
     assert_eq!(next_run(ids[0]).as_deref(), Some(later));
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_flood_wait_recovered_at_startup_holds_the_queue_until_it_ends() {
+    let h = Harness::new("orch-flood-recovered", Treatment::Skip);
+    let chats = h.chats(2);
+    // Another destination's item first in the queue, the recovered one behind it.
+    let other = h.add_to("other.mp4", &[(chats[1], SendMode::Video)])[0];
+    let flooded = h.add_to("a.mp4", &[(chats[0], SendMode::Video)])[0];
+    let source = h.item(flooded).source_path;
+    let until = iso(h.clock.now() + chrono::Duration::seconds(60));
+    h.orch
+        .with_store(|s| {
+            s.conn().execute(
+                "UPDATE items SET state = 'encoded', last_error = 'TG_FLOOD_WAIT',
+                        next_run_at = ?1, output_path = ?2, output_size = 6,
+                        content_id = '6:a.mp4'
+                 WHERE id = ?3",
+                rusqlite::params![until, source, flooded],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let started = Instant::now();
+    h.orch.start();
+    h.idle(30).await;
+    assert!(
+        h.send.order().is_empty(),
+        "nothing goes during the server's wait"
+    );
+    assert_eq!(h.item(other).state, Ready, "not even prepared");
+
+    h.wait_state(flooded, Sent).await;
+    h.wait_state(other, Sent).await;
+    assert_eq!(h.send.order(), [other, flooded], "then in queue order");
+    let first = h.send.calls_for(other)[0] - started;
+    assert!(first >= Duration::from_secs(60), "{first:?}");
+}
