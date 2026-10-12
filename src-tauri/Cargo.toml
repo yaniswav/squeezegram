@@ -45,7 +45,7 @@ blake3 = { version = "1.8", features = ["rayon"] }
 # TDLib transport: `tdjson.dll` loaded at run time (a release without it still starts, TG_LIB_MISSING).
 libloading = "0.8"
 # TDLib JSON `bytes` fields (database_encryption_key) are base64; license keys are base64url.
-base64 = "0.22"
+base64 = "0.23"
 # License keys: Ed25519 verification only. No `rand_core`: the app never
 # signs; `fast` keeps the precomputed tables of curve25519-dalek.
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "fast"] }
