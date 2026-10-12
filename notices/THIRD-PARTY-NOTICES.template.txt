@@ -1,0 +1,204 @@
+squeezegram @@VERSION@@ - THIRD-PARTY NOTICES
+================================================================================
+
+squeezegram itself is licensed under the PolyForm Noncommercial License 1.0.0
+(file LICENSE, https://polyformproject.org/licenses/noncommercial/1.0.0/).
+It contains and uses the third-party components below, each under its own
+licence. Those licences apply to those components, not to squeezegram.
+
+This file is generated at release time by scripts/generate-notices.ps1 from
+three inputs, so that it cannot drift from what is built:
+
+  - the static sections below (native libraries and the licence texts in
+    notices/licenses/), maintained by hand in notices/THIRD-PARTY-NOTICES.template.txt;
+  - the Rust crates of src-tauri/Cargo.lock, by cargo-about (src-tauri/about.toml);
+  - the npm production packages of pnpm-lock.yaml, by pnpm (notices/npm.json).
+
+Contents
+
+  1. tdjson.dll: TDLib, OpenSSL, zlib, SQLCipher / SQLite
+  2. Other native code inside squeezegram.exe: SQLite, WebView2 loader
+  3. Rust crates compiled into squeezegram.exe
+  4. npm packages bundled into the user interface
+  5. FFmpeg (NOT included, downloaded by the user's action)
+  6. Not distributed with squeezegram
+
+================================================================================
+1. tdjson.dll
+================================================================================
+
+tdjson.dll is a Windows x86_64 build of TDLib (Telegram Database Library)
+1.8.68, made for squeezegram from the unmodified upstream sources
+(https://github.com/tdlib/td, commit c15d3f5a5de6e3ba5839822c451152e5e18bb700).
+It is not an official Telegram binary. Its SHA-256 is pinned in squeezegram
+(048af1d1c97ef9b860dd5de132c4d2d901d444691ec86fc15012e5896dbde6b8). The
+squeezegram repository publishes it, with its own short notice, as the asset of
+the release "tdjson-1.8.68": https://github.com/yaniswav/squeezegram/releases
+
+It contains the following components, linked statically.
+
+--------------------------------------------------------------------------------
+1.1 TDLib 1.8.68 - Boost Software License 1.0
+--------------------------------------------------------------------------------
+
+Copyright Aliaksei Levin (levlam@telegram.org), Arseny Smirnov
+(arseny30@gmail.com) 2014-2026. Source: https://github.com/tdlib/td
+
+The code generator used while building TDLib (td/generate/tl-parser, GPL-2.0)
+is a build tool; none of it is part of tdjson.dll.
+
+@@LICENSE:BSL-1.0.txt@@
+
+--------------------------------------------------------------------------------
+1.2 OpenSSL 3.6.5 - Apache License 2.0
+--------------------------------------------------------------------------------
+
+Copyright 1995-2026 The OpenSSL Project Authors. All Rights Reserved.
+Source and licence: https://www.openssl.org/source/ and
+https://github.com/openssl/openssl (tag openssl-3.6.5).
+OpenSSL 3 is licensed under the Apache License 2.0 (the text below), without
+the advertising clause of the older OpenSSL / SSLeay licence. It ships no
+NOTICE file.
+
+@@LICENSE:Apache-2.0.txt@@
+
+--------------------------------------------------------------------------------
+1.3 zlib 1.3.2 - zlib licence
+--------------------------------------------------------------------------------
+
+Source: https://zlib.net/ and https://github.com/madler/zlib (tag v1.3.2).
+
+@@LICENSE:zlib.txt@@
+
+--------------------------------------------------------------------------------
+1.4 SQLCipher and SQLite (inside TDLib) - Zetetic BSD-style licence
+--------------------------------------------------------------------------------
+
+TDLib embeds SQLite 3.31.0 with the SQLCipher changes (td/sqlite/sqlite in the
+TDLib sources). SQLite itself is in the public domain
+(https://www.sqlite.org/copyright.html). The SQLCipher changes are under the
+following licence, which is the file td/sqlite/sqlite/LICENSE of the TDLib
+commit above (https://www.zetetic.net/sqlcipher/license/):
+
+@@LICENSE:SQLCipher-Zetetic.txt@@
+
+================================================================================
+2. Other native code inside squeezegram.exe
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 SQLite (application database) - public domain
+--------------------------------------------------------------------------------
+
+The crate rusqlite is built with its "bundled" feature, which compiles the
+SQLite amalgamation of the crate libsqlite3-sys into squeezegram.exe. This is
+plain SQLite, not SQLCipher. SQLite is in the public domain; the author's
+statement is:
+
+  The author disclaims copyright to this source code. In place of
+  a legal notice, here is a blessing:
+
+    May you do good and not evil.
+    May you find forgiveness for yourself and forgive others.
+    May you share freely, never taking more than you give.
+
+(https://www.sqlite.org/copyright.html). The Rust crates rusqlite and
+libsqlite3-sys that wrap it are listed in section 3.
+
+--------------------------------------------------------------------------------
+2.2 Microsoft Edge WebView2 loader - BSD 3-Clause
+--------------------------------------------------------------------------------
+
+On the MSVC target the crate webview2-com-sys links WebView2LoaderStatic.lib,
+the static loader of the Microsoft Edge WebView2 SDK, into squeezegram.exe. It
+is licensed as follows (LICENSE.txt of the NuGet package Microsoft.Web.WebView2,
+https://www.nuget.org/packages/Microsoft.Web.WebView2). The WebView2 Runtime
+itself is not included: see section 6.
+
+@@LICENSE:WebView2-BSD-3-Clause.txt@@
+
+================================================================================
+3. Rust crates compiled into squeezegram.exe
+================================================================================
+
+@@RUST_CRATES@@
+
+--------------------------------------------------------------------------------
+3.1 Crates under the Mozilla Public License 2.0
+--------------------------------------------------------------------------------
+
+These crates are used unmodified, as published on https://crates.io. The
+source code of each is available there (https://crates.io/crates/<name>) and at
+the repository given below. The MPL-2.0 applies to those files only, not to
+squeezegram.
+
+@@MPL_CRATES@@
+
+================================================================================
+4. npm packages bundled into the user interface
+================================================================================
+
+@@NPM_PACKAGES@@
+
+================================================================================
+5. FFmpeg - NOT included, downloaded by the user's action
+================================================================================
+
+Neither the installer nor the portable zip contains FFmpeg. squeezegram runs
+ffmpeg.exe and ffprobe.exe as separate processes (it does not link to FFmpeg
+libraries) and obtains them in one of two ways:
+
+  a) The user presses "Download ffmpeg (LGPL)" in the app. squeezegram then
+     downloads one pinned file from the GitHub release of the BtbN
+     FFmpeg-Builds project, checks its SHA-256 and unpacks it into
+     %LOCALAPPDATA%\squeezegram\sidecars. Nothing is downloaded without this
+     action, and the file comes from BtbN's release, not from a copy hosted by
+     the squeezegram project.
+
+       File:    ffmpeg-n9.0.2-22-g46d8f462ee-win64-lgpl-9.0.zip
+       URL:     https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-05-13-07/ffmpeg-n9.0.2-22-g46d8f462ee-win64-lgpl-9.0.zip
+       Size:    171475153 bytes
+       SHA-256: 1c73d2256f0198805daf0f765feab8d3f21d3ab85e8dda0c2bb44ce1e3a126c7
+
+  b) The user points the app to an FFmpeg they obtained themselves. That
+     build, and its licence, are then the user's responsibility.
+
+Licence of the pinned build. It is the "lgpl" variant: configured with
+--enable-version3 and without --enable-gpl or --enable-nonfree, hence licensed
+under the GNU Lesser General Public License version 3 (the LICENSE.txt inside
+the archive is the LGPL-3.0 text; https://www.gnu.org/licenses/lgpl-3.0.txt;
+see also https://ffmpeg.org/legal.html). The app never downloads a GPL build.
+It includes the H.264 encoder libopenh264 (Cisco, BSD-2-Clause,
+https://github.com/cisco/openh264) and other libraries under their own
+licences; the build scripts below list them.
+
+Corresponding source of the pinned build:
+
+  - FFmpeg: commit 46d8f462eeb87ee1f704d8c44a0ee24fca471ad1 (release n9.0.2 plus
+    22 commits), https://github.com/FFmpeg/FFmpeg/tree/46d8f462eeb87ee1f704d8c44a0ee24fca471ad1
+    and https://github.com/FFmpeg/FFmpeg/archive/46d8f462eeb87ee1f704d8c44a0ee24fca471ad1.tar.gz
+  - Build scripts, patches and the list of bundled libraries with their
+    versions: https://github.com/BtbN/FFmpeg-Builds, tag
+    autobuild-2026-10-05-13-07
+    (https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-10-05-13-07)
+
+BtbN keeps only recent builds, so that URL may stop working one day. If the
+squeezegram project ever hosts the FFmpeg binary itself, it will host the
+corresponding source archive in the same place.
+
+================================================================================
+6. Not distributed with squeezegram
+================================================================================
+
+  - Microsoft Edge WebView2 Runtime and the Microsoft Visual C++ Redistributable
+    (x64) are required on the target machine. They are not part of the installer
+    or the zip. The installer asks Microsoft's own bootstrapper to install the
+    WebView2 Runtime when it is missing.
+  - tdl (AGPL-3.0) was only a development tool of the project and is part of no
+    build.
+  - Development and build tools (compilers, bundlers, linters, test tools) are
+    not distributed, except for the traces they leave in the output files that
+    are credited above (for example the Tailwind CSS notice in the stylesheet).
+
+The licence analysis in this file is a reading of the licence texts by the
+developer, not legal advice.

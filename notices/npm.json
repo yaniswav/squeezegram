@@ -1,0 +1,15 @@
+{
+  "exclude": {
+    "typescript": "Type checker, never part of dist/ (pulled into the production closure by a peer dependency).",
+    "@types/react": "Type declarations only, erased at build time.",
+    "@types/react-dom": "Type declarations only, erased at build time.",
+    "csstype": "Type declarations only, erased at build time."
+  },
+  "include": {
+    "tailwindcss": "Development dependency, but its preflight styles and utility classes are compiled into the stylesheet, which carries its MIT banner."
+  },
+  "copyrightHolders": {
+    "@tauri-apps/plugin-dialog": "2019-2022, The Tauri Programme in the Commons Conservancy",
+    "react-remove-scroll-bar": "Anton Korzunov"
+  }
+}
