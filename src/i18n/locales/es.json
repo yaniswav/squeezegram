@@ -59,6 +59,7 @@
     "SIDECAR_INVALID": "Esta carpeta no contiene un ffmpeg y un ffprobe que funcionen, así que no se usó.",
     "UPDATE_FAILED": "La actualización falló.",
     "UPDATE_CHECK_FAILED": "No se pudo buscar actualizaciones. Compruebe su conexión e inténtelo de nuevo.",
+    "UPDATE_NOT_PUBLISHED": "No update information is available yet. Try again later.",
     "UPDATE_DOWNLOAD_FAILED": "No se pudo descargar la actualización. Compruebe su conexión e inténtelo de nuevo.",
     "UPDATE_SIGNATURE_INVALID": "La actualización descargada no superó la comprobación de firma, así que no se instaló.",
     "UPDATE_INSTALL_FAILED": "No se pudo instalar la actualización. Su versión actual no ha cambiado.",

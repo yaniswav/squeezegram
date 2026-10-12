@@ -59,6 +59,7 @@
     "SIDECAR_INVALID": "Ce dossier ne contient pas de ffmpeg et ffprobe fonctionnels : il n'a pas été utilisé.",
     "UPDATE_FAILED": "La mise à jour a échoué.",
     "UPDATE_CHECK_FAILED": "Impossible de rechercher les mises à jour. Vérifiez votre connexion et réessayez.",
+    "UPDATE_NOT_PUBLISHED": "No update information is available yet. Try again later.",
     "UPDATE_DOWNLOAD_FAILED": "La mise à jour n'a pas pu être téléchargée. Vérifiez votre connexion et réessayez.",
     "UPDATE_SIGNATURE_INVALID": "La mise à jour téléchargée n'a pas passé la vérification de sa signature : elle n'a pas été installée.",
     "UPDATE_INSTALL_FAILED": "La mise à jour n'a pas pu être installée. Votre version actuelle est inchangée.",

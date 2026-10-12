@@ -164,6 +164,7 @@ test("every update error code the core can return has an English text", () => {
 
   for (const code of [
     "UPDATE_CHECK_FAILED",
+    "UPDATE_NOT_PUBLISHED",
     "UPDATE_DOWNLOAD_FAILED",
     "UPDATE_SIGNATURE_INVALID",
     "UPDATE_INSTALL_FAILED",

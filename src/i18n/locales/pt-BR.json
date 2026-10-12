@@ -59,6 +59,7 @@
     "SIDECAR_INVALID": "Esta pasta não contém um ffmpeg e um ffprobe funcionais, por isso não foi usada.",
     "UPDATE_FAILED": "A atualização falhou.",
     "UPDATE_CHECK_FAILED": "Não foi possível verificar atualizações. Verifique sua conexão e tente novamente.",
+    "UPDATE_NOT_PUBLISHED": "No update information is available yet. Try again later.",
     "UPDATE_DOWNLOAD_FAILED": "Não foi possível baixar a atualização. Verifique sua conexão e tente novamente.",
     "UPDATE_SIGNATURE_INVALID": "A atualização baixada não passou na verificação de assinatura, por isso não foi instalada.",
     "UPDATE_INSTALL_FAILED": "Não foi possível instalar a atualização. Sua versão atual não foi alterada.",

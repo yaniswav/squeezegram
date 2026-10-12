@@ -177,6 +177,7 @@ pub struct UpdateError {
 
 impl UpdateError {
     pub const CHECK_FAILED: &'static str = "UPDATE_CHECK_FAILED";
+    pub const NOT_PUBLISHED: &'static str = "UPDATE_NOT_PUBLISHED";
     pub const DOWNLOAD_FAILED: &'static str = "UPDATE_DOWNLOAD_FAILED";
     pub const SIGNATURE_INVALID: &'static str = "UPDATE_SIGNATURE_INVALID";
     pub const INSTALL_FAILED: &'static str = "UPDATE_INSTALL_FAILED";
@@ -197,15 +198,21 @@ impl UpdateError {
     /// Where the failure happened, for the journal (`check`, `download`, `install`).
     pub fn phase(&self) -> &'static str {
         match self.code {
-            Self::CHECK_FAILED => "check",
+            Self::CHECK_FAILED | Self::NOT_PUBLISHED => "check",
             Self::INSTALL_FAILED => "install",
             _ => "download",
         }
     }
 
-    /// An error of the check request or of the manifest it returned.
+    /// An error of the check request or of the manifest it returned. A 404 on `latest.json`
+    /// means no release is published yet: the connection is fine, so it has its own code
+    /// instead of the "check your connection" text.
     pub fn from_check(error: &tauri_plugin_updater::Error) -> Self {
-        Self::new(Self::CHECK_FAILED, cause_of(error))
+        let code = match error {
+            tauri_plugin_updater::Error::ReleaseNotFound => Self::NOT_PUBLISHED,
+            _ => Self::CHECK_FAILED,
+        };
+        Self::new(code, cause_of(error))
     }
 
     /// An error of the download: a signature that does not verify has its own code.
@@ -499,10 +506,16 @@ mod tests {
     #[test]
     fn errors_carry_a_code_per_phase_and_a_fixed_cause() {
         use tauri_plugin_updater::Error;
-        let check = UpdateError::from_check(&Error::ReleaseNotFound);
+        let check = UpdateError::from_check(&Error::Network("down".into()));
         assert_eq!(check.code, "UPDATE_CHECK_FAILED");
-        assert_eq!(check.cause, "release_not_found");
+        assert_eq!(check.cause, "network");
         assert_eq!(check.phase(), "check");
+
+        // No release published yet (404 on latest.json): not a connection problem.
+        let unpublished = UpdateError::from_check(&Error::ReleaseNotFound);
+        assert_eq!(unpublished.code, "UPDATE_NOT_PUBLISHED");
+        assert_eq!(unpublished.cause, "release_not_found");
+        assert_eq!(unpublished.phase(), "check");
 
         let network = UpdateError::from_download(&Error::Network("HTTP 404".into()));
         assert_eq!(network.code, "UPDATE_DOWNLOAD_FAILED");

@@ -59,6 +59,7 @@
     "SIDECAR_INVALID": "Folder ini tidak berisi ffmpeg dan ffprobe yang berfungsi, sehingga tidak digunakan.",
     "UPDATE_FAILED": "Pembaruan gagal.",
     "UPDATE_CHECK_FAILED": "Pemeriksaan pembaruan gagal. Periksa koneksi, lalu coba lagi.",
+    "UPDATE_NOT_PUBLISHED": "No update information is available yet. Try again later.",
     "UPDATE_DOWNLOAD_FAILED": "Pembaruan tidak dapat diunduh. Periksa koneksi, lalu coba lagi.",
     "UPDATE_SIGNATURE_INVALID": "Pembaruan yang diunduh tidak lolos pemeriksaan tanda tangannya, sehingga tidak dipasang.",
     "UPDATE_INSTALL_FAILED": "Pembaruan tidak dapat dipasang. Versi Anda saat ini tidak berubah.",

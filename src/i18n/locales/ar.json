@@ -59,6 +59,7 @@
     "SIDECAR_INVALID": "لا يحتوي هذا المجلد على ffmpeg وffprobe يعملان، لذلك لم يُستخدم.",
     "UPDATE_FAILED": "فشل التحديث.",
     "UPDATE_CHECK_FAILED": "تعذّر التحقق من التحديثات. تحقّق من اتصالك ثم حاول مرة أخرى.",
+    "UPDATE_NOT_PUBLISHED": "No update information is available yet. Try again later.",
     "UPDATE_DOWNLOAD_FAILED": "تعذّر تنزيل التحديث. تحقّق من اتصالك ثم حاول مرة أخرى.",
     "UPDATE_SIGNATURE_INVALID": "لم يجتز التحديث الذي تم تنزيله فحص توقيعه، لذلك لم يُثبَّت.",
     "UPDATE_INSTALL_FAILED": "تعذّر تثبيت التحديث. بقيت النسخة الحالية كما هي.",
