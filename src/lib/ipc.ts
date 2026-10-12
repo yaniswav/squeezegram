@@ -1481,9 +1481,10 @@ export function telegramIdentity(): Promise<TelegramIdentity> {
 }
 
 /**
- * Stores a personal API identity, used from the next start: the `api_hash` is kept encrypted
- * by the core and never returned. Rejects with `TG_SIGN_OUT_FIRST` while an account is signed
- * in, `SETTINGS_INVALID { field }` for a malformed value.
+ * Stores a personal API identity, used from the next start with its own Telegram session: the
+ * `api_hash` is kept encrypted by the core and never returned. Rejects with
+ * `TG_TRANSPORT_BUSY` while the transport starts or signs out, `SETTINGS_INVALID { field }`
+ * for a malformed value.
  */
 export function apiIdentitySet(
   apiId: string,
@@ -1492,7 +1493,7 @@ export function apiIdentitySet(
   return call("api_identity_set", telegramIdentityDecoder, { apiId, apiHash })
 }
 
-/** Back to the product's identity from the next start; same sign-out rule. */
+/** Back to the product's identity (and its session) from the next start; same rule. */
 export function apiIdentityClear(): Promise<TelegramIdentity> {
   return call("api_identity_clear", telegramIdentityDecoder)
 }

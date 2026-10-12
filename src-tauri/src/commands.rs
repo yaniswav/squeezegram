@@ -145,8 +145,8 @@ impl From<ServiceError> for CommandError {
 impl From<IdentityChangeError> for CommandError {
     fn from(error: IdentityChangeError) -> Self {
         match error {
-            IdentityChangeError::SignedIn => Self {
-                code: "TG_SIGN_OUT_FIRST",
+            IdentityChangeError::Busy => Self {
+                code: "TG_TRANSPORT_BUSY",
                 params: json!({}),
             },
             // The field only: what was typed never leaves the core.
@@ -923,8 +923,9 @@ pub fn telegram_identity(state: State<'_, AppState>) -> TelegramIdentity {
     Call::quiet("telegram_identity").done(state.identity.status(&state.settings.get()))
 }
 
-/// Personal API identity (F32), used from the next start. Refused with `TG_SIGN_OUT_FIRST`
-/// while an account is signed in, `SETTINGS_INVALID { field }` for a malformed value. The
+/// Personal API identity (F32), used from the next start with its own TDLib session. Refused
+/// with `TG_TRANSPORT_BUSY` while the transport starts or signs out, `SETTINGS_INVALID
+/// { field }` for a malformed value. The
 /// result says only whether an `api_hash` is stored; neither value reaches the journal.
 #[tauri::command]
 pub fn api_identity_set(
@@ -940,7 +941,7 @@ pub fn api_identity_set(
     call.finish(result.map_err(Into::into))
 }
 
-/// Back to the product's identity, from the next start; same sign-out rule as the set.
+/// Back to the product's identity (and its session), from the next start; same rule.
 #[tauri::command]
 pub fn api_identity_clear(state: State<'_, AppState>) -> CommandResult<TelegramIdentity> {
     let call = Call::new("api_identity_clear");
@@ -1398,8 +1399,8 @@ mod tests {
 
     #[test]
     fn identity_refusals_carry_a_code_and_no_value() {
-        let signed_in: CommandError = IdentityChangeError::SignedIn.into();
-        assert_eq!(signed_in.code, "TG_SIGN_OUT_FIRST");
+        let busy: CommandError = IdentityChangeError::Busy.into();
+        assert_eq!(busy.code, "TG_TRANSPORT_BUSY");
         let invalid: CommandError = IdentityChangeError::Invalid("api_hash").into();
         assert_eq!(
             (invalid.code, invalid.params),

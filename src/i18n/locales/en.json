@@ -81,7 +81,7 @@
     "TG_UPLOAD_FAILED": "Telegram reported that the upload failed.",
     "TG_LIB_MISSING": "The Telegram library (tdjson.dll) is missing or damaged.",
     "TG_NOT_CONFIGURED": "This build has no valid Telegram API identity (api_id and api_hash), so it can't connect to Telegram.",
-    "TG_SIGN_OUT_FIRST": "Sign out of Telegram first: a signed-in session belongs to the API identity it was created with.",
+    "TG_TRANSPORT_BUSY": "Telegram is starting or signing out. Try again in a moment.",
     "TG_NOT_IMPLEMENTED": "This Telegram feature is not available yet in this version.",
     "CANCELLED": "Cancelled.",
     "FILES_SKIPPED_one": "{{count}} file that is not a video or photo was skipped in this folder.",
@@ -595,8 +595,8 @@
     "apiIdentity": {
       "title": "Advanced: your own API identity",
       "hint": "squeezegram connects to Telegram with its own api_id. If you created one at my.telegram.org, you can use it instead.",
-      "warning": "Changing the identity means signing in again: a Telegram session belongs to the api_id it was created with. Sign out first; the change applies after squeezegram restarts.",
-      "signOutFirst": "You are signed in. Sign out on the Connection page before changing the identity.",
+      "warning": "Each identity keeps its own Telegram session on this computer. With your own api_id you sign in again the first time; going back to squeezegram's identity finds its session again. The change applies after squeezegram restarts.",
+      "busy": "Telegram is starting or signing out: wait a moment before changing the identity.",
       "product": "squeezegram's own identity is in use.",
       "saved": "Your api_id {{apiId}} is saved, with its api_hash (stored encrypted for your Windows account, never shown again).",
       "hashMissing": "Your api_id {{apiId}} is saved, but its api_hash can't be read on this Windows account. Enter both again, or remove them.",
@@ -617,7 +617,7 @@
       "remove": {
         "button": "Remove",
         "title": "Go back to squeezegram's identity?",
-        "body": "Your api_id and api_hash are deleted from this computer. After the restart, sign in again.",
+        "body": "Your api_id and api_hash are deleted from this computer. After the restart, squeezegram's identity and its session are used again.",
         "confirm": "Remove"
       }
     },

@@ -688,8 +688,8 @@ const API_HASH = /^[0-9a-fA-F]{32}$/
 /**
  * Advanced (F32): the user's own `api_id`/`api_hash` instead of the product's. The hash is
  * sent once to the core, which keeps it encrypted; it is never read back, only "saved".
- * Changes need the account signed out (a session belongs to its `api_id`) and apply at the
- * next start.
+ * Changes apply at the next start, each identity with its own session (a session belongs to
+ * its `api_id`); the core refuses them while the transport starts or signs out.
  */
 function ApiIdentitySection({
   identity,
@@ -710,7 +710,7 @@ function ApiIdentitySection({
   const [error, setError] = useState<ErrorReport | null>(null)
   const [confirming, setConfirming] = useState(false)
 
-  const signedIn = session === "ready" || session === "logging_out"
+  const transportBusy = session === "starting" || session === "logging_out"
   const own = identity.api_id !== null
   const idError = touched && !isApiId(apiId.trim())
   const hashError = touched && !API_HASH.test(apiHash.trim())
@@ -777,9 +777,9 @@ function ApiIdentitySection({
           {t("settings.apiIdentity.restart")}
         </p>
       )}
-      {signedIn && (
+      {transportBusy && (
         <p className="text-sm text-muted-foreground">
-          {t("settings.apiIdentity.signOutFirst")}
+          {t("settings.apiIdentity.busy")}
         </p>
       )}
 
@@ -789,7 +789,7 @@ function ApiIdentitySection({
             type="button"
             variant="outline"
             size="sm"
-            disabled={!isDesktop() || signedIn}
+            disabled={!isDesktop() || transportBusy}
             onClick={open}
           >
             <KeyRound data-icon="inline-start" />
@@ -802,7 +802,7 @@ function ApiIdentitySection({
               type="button"
               variant="outline"
               size="sm"
-              disabled={!isDesktop() || signedIn}
+              disabled={!isDesktop() || transportBusy}
               onClick={() => setConfirming(true)}
             >
               <Trash2 data-icon="inline-start" />
@@ -875,7 +875,7 @@ function ApiIdentitySection({
             <Button
               type="submit"
               size="sm"
-              disabled={!isDesktop() || busy || signedIn}
+              disabled={!isDesktop() || busy || transportBusy}
             >
               <Save data-icon="inline-start" />
               {busy

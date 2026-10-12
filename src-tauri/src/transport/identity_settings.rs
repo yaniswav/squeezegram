@@ -6,11 +6,12 @@
 //! is stored, and the journal only that the identity changed (`tg_identity_changed`), never
 //! the `api_id` nor the `api_hash`.
 //!
-//! A TDLib session belongs to the `api_id` it signed in with (SPEC: a new `api_id` means a new
-//! database, `logOut` then a new sign-in). So the identity only changes while no account is
-//! signed in: the page asks the user to sign out first, and the core refuses otherwise. The
-//! transport is not rebuilt in place (every service holds it); the new identity is used from
-//! the next start.
+//! A TDLib session belongs to the `api_id` it signed in with, and TDLib does not check it: so
+//! each identity has its own session folder (`select::session_dir`). A change never touches
+//! the running session, which may stay signed in; after the restart the other identity's
+//! session opens (a new sign-in the first time, the earlier session when switching back). The
+//! transport is not rebuilt in place (every service holds it). Only while the transport is
+//! starting or signing out is a change refused, so it never races those steps.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -50,8 +51,8 @@ pub struct TelegramIdentity {
 /// Why a change of the personal identity was refused. Never carries a typed value.
 #[derive(Debug)]
 pub enum IdentityChangeError {
-    /// An account is signed in (or signing out): its session belongs to the current `api_id`.
-    SignedIn,
+    /// The transport is starting or signing out: try again once it is done.
+    Busy,
     /// `api_id` or `api_hash` is not of the expected form.
     Invalid(&'static str),
     /// No TDLib folder to store the `api_hash` in (`LOCALAPPDATA` missing), or it failed.
@@ -65,10 +66,10 @@ pub fn touches_api_override(patch: &Value) -> bool {
     patch.pointer("/telegram/api_override").is_some()
 }
 
-/// A signed-in session would be orphaned by a new `api_id`.
-fn require_signed_out(auth: &AuthState) -> Result<(), IdentityChangeError> {
+/// A change while the transport opens its database or signs out would race that step.
+fn require_idle(auth: &AuthState) -> Result<(), IdentityChangeError> {
     match auth {
-        AuthState::Ready(_) | AuthState::LoggingOut => Err(IdentityChangeError::SignedIn),
+        AuthState::Starting | AuthState::LoggingOut => Err(IdentityChangeError::Busy),
         _ => Ok(()),
     }
 }
@@ -105,7 +106,7 @@ impl IdentityRuntime {
         api_id: &str,
         api_hash: &str,
     ) -> Result<TelegramIdentity, IdentityChangeError> {
-        require_signed_out(auth)?;
+        require_idle(auth)?;
         let api_id = identity::parse_api_id(Some(api_id))
             .map_err(|_| IdentityChangeError::Invalid("api_id"))?;
         identity::check_api_hash(Some(api_hash))
@@ -130,7 +131,7 @@ impl IdentityRuntime {
         settings: &SettingsStore,
         auth: &AuthState,
     ) -> Result<TelegramIdentity, IdentityChangeError> {
-        require_signed_out(auth)?;
+        require_idle(auth)?;
         let saved = settings
             .set(&json!({ "telegram": { "api_override": null } }))
             .map_err(IdentityChangeError::Settings)?;
@@ -211,7 +212,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_malformed_or_signed_in_change_writes_nothing() {
+    fn a_malformed_or_busy_change_writes_nothing() {
         let dir = TempDir::new("identity-refused");
         let runtime = IdentityRuntime::new(&inputs(&dir));
         let settings = store(&dir);
@@ -234,12 +235,12 @@ pub(crate) mod tests {
             );
         }
         let refused = runtime
-            .set_override(&settings, &signed_in(), FAKE_ID, FAKE_HASH)
+            .set_override(&settings, &AuthState::Starting, FAKE_ID, FAKE_HASH)
             .unwrap_err();
-        assert!(matches!(refused, IdentityChangeError::SignedIn));
+        assert!(matches!(refused, IdentityChangeError::Busy));
         assert!(matches!(
             runtime.clear_override(&settings, &AuthState::LoggingOut),
-            Err(IdentityChangeError::SignedIn)
+            Err(IdentityChangeError::Busy)
         ));
 
         assert_eq!(settings.get(), Settings::default());
@@ -260,8 +261,9 @@ pub(crate) mod tests {
         let runtime = IdentityRuntime::new(&next_start);
         let settings = store(&dir);
 
+        // Signed in: allowed, the running session is not touched (it has its own folder).
         let status = runtime
-            .set_override(&settings, &AuthState::WaitPhone, FAKE_ID, FAKE_HASH)
+            .set_override(&settings, &signed_in(), FAKE_ID, FAKE_HASH)
             .unwrap();
         assert_eq!(status.api_id, Some(13_572_468));
         assert!(status.api_hash_saved && status.restart_required);

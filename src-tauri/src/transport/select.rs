@@ -8,6 +8,10 @@
 //! that does not match the pinned SHA-256 is a warning in a debug build and a refusal in a
 //! release.
 //!
+//! Each identity has its own TDLib session (`session_dir`): TDLib does not check `api_id`
+//! against an existing database, it reuses the authorization it holds. Sharing one folder
+//! would leave a user who switched to their own `api_id` signed in under the product's.
+//!
 //! Choosing never touches the network: `TdlibJson` is only built here. Its `start` (at app
 //! launch) goes as far as `WaitPhone` and signs in to no account until the user types
 //! something.
@@ -30,6 +34,8 @@ use crate::settings::Settings;
 
 /// `tdlib` | `mock` | `none`.
 pub const TRANSPORT_ENV: &str = "SQUEEZEGRAM_TRANSPORT";
+/// Session folder of a personal identity, under `tdlib`: `custom-<api_id>`.
+const PERSONAL_SESSION_PREFIX: &str = "custom-";
 const DEVICE_PREFIX: &str = "squeezegram";
 
 /// Sent to the front in the `auth://state` payload (`transport`), so it can flag the mock.
@@ -244,8 +250,9 @@ fn tdlib(inputs: &Inputs, reason: &'static str) -> Selection {
             "dll_hash_mismatch",
         );
     }
+    let personal = inputs.override_api_id.map(|_| identity.api_id);
     let config = TdlibConfig::new(
-        dir,
+        session_dir(&dir, personal),
         identity.api_id,
         identity.api_hash,
         inputs.device_model(),
@@ -254,6 +261,18 @@ fn tdlib(inputs: &Inputs, reason: &'static str) -> Selection {
         transport: Arc::new(TdlibJson::with_dll(library.path, config)),
         kind: TransportKind::Tdlib,
         reason,
+    }
+}
+
+/// Where TDLib keeps the session (database, files, `key.bin`, log) of an identity. The
+/// product's stays in `tdlib` itself, where every existing session already is; a personal
+/// `api_id` gets `tdlib\custom-<api_id>`, with its own DPAPI key. Switching never shares a
+/// session, and switching back finds the earlier one. `api_hash.bin` and `bin\tdjson.dll`
+/// stay in `tdlib`: they are not part of a session.
+pub(crate) fn session_dir(tdlib_dir: &std::path::Path, personal_api_id: Option<i32>) -> PathBuf {
+    match personal_api_id {
+        None => tdlib_dir.to_path_buf(),
+        Some(api_id) => tdlib_dir.join(format!("{PERSONAL_SESSION_PREFIX}{api_id}")),
     }
 }
 
@@ -414,6 +433,7 @@ mod tests {
     use crate::logging::testing::TestJournal;
     use crate::transport::AuthState;
     use crate::transport::tdlib::tests::TempDir;
+    use std::path::Path;
 
     // Fake identity: 8 digits and 32 hex, never the product's real one.
     const FAKE_ID: &str = "24681357";
@@ -651,6 +671,49 @@ mod tests {
             resolve_identity(&inputs, &tdlib_dir),
             Err(TransportError::NotConfigured("api_id_invalid"))
         ));
+    }
+
+    #[test]
+    fn each_identity_has_its_own_session_folder() {
+        let tdlib = Path::new(r"C:\local\squeezegram\tdlib");
+        // The product's session stays where existing installs have it.
+        assert_eq!(session_dir(tdlib, None), tdlib);
+        let mine = session_dir(tdlib, Some(97_531_864));
+        assert_eq!(mine, tdlib.join("custom-97531864"));
+        let other = session_dir(tdlib, Some(12_345));
+        assert_ne!(mine, other);
+        // No folder holds another identity's database (`db`), files or key.
+        for (a, b) in [(&mine, &other), (&mine, &tdlib.to_path_buf())] {
+            for part in ["db", "files", "key.bin"] {
+                assert_ne!(a.join(part), b.join(part));
+            }
+        }
+        assert!(!["db", "files", "bin"].contains(&mine.file_name().unwrap().to_str().unwrap()));
+    }
+
+    /// The folder `select` gives TDLib follows the identity in effect at each start: a switch
+    /// to a personal `api_id` and back never opens the other identity's database.
+    #[cfg(windows)]
+    #[test]
+    fn a_switch_of_identity_never_reuses_the_other_session() {
+        let _serial = SERIAL.blocking_lock();
+        let dir = TempDir::new("select-session");
+        let mut inputs = inputs(&dir, false);
+        let tdlib_dir = inputs.tdlib_dir().unwrap();
+        let folder = |inputs: &Inputs| {
+            let identity = resolve_identity(inputs, &tdlib_dir).unwrap();
+            session_dir(&tdlib_dir, inputs.override_api_id.map(|_| identity.api_id))
+        };
+        let product = folder(&inputs);
+        assert_eq!(product, tdlib_dir);
+
+        identity::store_override_hash(&tdlib_dir, OVERRIDE_HASH).unwrap();
+        inputs.override_api_id = Some(OVERRIDE_ID);
+        let personal = folder(&inputs);
+        assert_eq!(personal, tdlib_dir.join(format!("custom-{OVERRIDE_ID}")));
+
+        inputs.override_api_id = None;
+        assert_eq!(folder(&inputs), product, "back to the product's session");
     }
 
     #[test]
