@@ -786,6 +786,7 @@ mod tests {
             tg_sent_at: None,
             created_at: String::new(),
             updated_at: String::new(),
+            encoding_override: None,
         };
         let destination = Destination {
             id: 1,

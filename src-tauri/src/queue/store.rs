@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::state::{self, Changes, Column};
 use super::{QueueError, Result, State, db, now_iso};
+use crate::media::plan::EncodingOverride;
 use crate::transport::ChatFolder;
 
 pub const HOLD_DUPLICATE: &str = "duplicate";
@@ -76,13 +77,16 @@ pub struct Item {
     pub tg_sent_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Encoding choices of this file (schema v5); `None`: the global settings apply. Read by
+    /// the media stage only while the license grants `advanced_encoding`.
+    pub encoding_override: Option<EncodingOverride>,
 }
 
 const ITEM_COLUMNS: &str = "id, position, source_path, source_size, source_mtime, content_id,
     identity_weak, destination_id, send_mode, caption, state, hold_reason, origin, media_json,
     plan_json, temp_path, output_path, output_size, progress_phase, progress_pct, attempts,
     last_error, next_run_at, tg_message_id, tg_sent_at, created_at, updated_at, batch_index,
-    batch_count";
+    batch_count, encoding_override";
 
 fn invalid(column: usize, error: QueueError) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, Box::new(error))
@@ -121,6 +125,10 @@ fn item_from_row(row: &Row<'_>) -> rusqlite::Result<Item> {
         updated_at: row.get(26)?,
         batch_index: row.get(27)?,
         batch_count: row.get(28)?,
+        // Hand-edited or from a newer version: read as "no override" rather than failing a list.
+        encoding_override: row
+            .get::<_, Option<String>>(29)?
+            .and_then(|text| serde_json::from_str(&text).ok()),
     })
 }
 
@@ -455,17 +463,29 @@ pub struct ReusableOutput {
 }
 
 /// Whether two plans (`plan_json`) give the same file. The encoder is left out: it is picked
-/// per run (a GPU that stopped earlier in the session is skipped) and every one makes H.264
-/// under the same limit, bitrate, scaling and audio, which are what the settings decided.
+/// per run (a GPU that stopped earlier in the session is skipped) and every encoder of a codec
+/// makes that codec under the same limit, bitrate, scaling and audio, which are what the
+/// settings and the item's own choices decided. The codec is NOT left out (HEVC and H.264
+/// files differ), nor are the preset, the target size and the filter chain: a per-file override
+/// reaches a plan only through those fields, so comparing plans compares the overrides.
+/// A plan stored before these fields existed reads as H.264, balanced, no target.
 fn same_plan(a: &str, b: &str) -> bool {
-    let without_encoder = |text: &str| {
+    let normalized = |text: &str| {
         let mut plan: serde_json::Value = serde_json::from_str(text).ok()?;
-        if let Some(fields) = plan.as_object_mut() {
-            fields.remove("encoder");
-        }
+        let fields = plan.as_object_mut()?;
+        fields.remove("encoder");
+        fields
+            .entry("video_codec")
+            .or_insert_with(|| serde_json::json!("h264"));
+        fields
+            .entry("preset")
+            .or_insert_with(|| serde_json::json!("balanced"));
+        fields
+            .entry("target_bytes")
+            .or_insert(serde_json::Value::Null);
         Some(plan)
     };
-    match (without_encoder(a), without_encoder(b)) {
+    match (normalized(a), normalized(b)) {
         (Some(a), Some(b)) => a == b,
         _ => false,
     }
@@ -1032,6 +1052,30 @@ impl Store {
                 params![mode.as_str(), now_iso(), id],
             )?;
         }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Per-file encoding choices, only while the item has not started; `None` goes back to the
+    /// global settings. Once an item has started, its plan (and maybe an encoded file) exists:
+    /// changing the choices would either be ignored or throw that work away, so it is refused.
+    pub fn set_encoding_override(
+        &mut self,
+        id: i64,
+        file: Option<&EncodingOverride>,
+    ) -> Result<()> {
+        let text = file
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| QueueError::InvalidValue(format!("encoding_override: {e}")))?;
+        let tx = self.conn.transaction()?;
+        if !state::current_state(&tx, id)?.is_not_started() {
+            return Err(QueueError::ItemStarted(id));
+        }
+        tx.execute(
+            "UPDATE items SET encoding_override = ?1, updated_at = ?2 WHERE id = ?3",
+            params![text, now_iso(), id],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -1893,6 +1937,155 @@ mod tests {
                 assert!(Path::new(&output).exists(), "held by the item that took it");
             }
         }
+    }
+
+    #[test]
+    fn the_codec_preset_and_target_decide_whether_an_encode_is_reused() {
+        let dir = TestDir::new("store-reusable-codec");
+        let (store, [first, second, _document], _source, output) =
+            one_file_three_destinations(&dir);
+        set_output(&store, first, &output);
+        force_state(&store, first, State::Sent);
+        // What `build_plan` writes for an encode, with the fields this test varies.
+        let plan = |encoder: &str, codec: &str, preset: &str, target: Option<u64>, vf: &str| {
+            serde_json::json!({
+                "kind": "encode", "limit_bytes": 100, "video_bps": 5000, "encoder": encoder,
+                "vf": vf, "video_codec": codec, "preset": preset, "target_bytes": target
+            })
+            .to_string()
+        };
+        let base = plan("h264_nvenc", "h264", "balanced", None, "scale");
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET content_id = '3:abc', plan_json = ?1 WHERE id = ?2",
+                params![base, first],
+            )
+            .unwrap();
+        let found = |wanted: &str| {
+            store
+                .reusable_output(second, "3:abc", SendMode::Video, Some(wanted))
+                .unwrap()
+                .map(|reused| reused.item_id)
+        };
+        assert_eq!(found(&base), Some(first));
+        // Another H.264 encoder (a GPU that stopped this session) makes the same file.
+        assert_eq!(
+            found(&plan("libx264", "h264", "balanced", None, "scale")),
+            Some(first)
+        );
+        // A HEVC encode is another file, whatever encoder made either.
+        assert_eq!(
+            found(&plan("hevc_nvenc", "hevc", "balanced", None, "scale")),
+            None,
+            "codec"
+        );
+        assert_eq!(
+            found(&plan("h264_nvenc", "h264", "quality", None, "scale")),
+            None,
+            "preset"
+        );
+        assert_eq!(
+            found(&plan("h264_nvenc", "h264", "balanced", Some(40), "scale")),
+            None,
+            "target size"
+        );
+        // A per-file cap reaches the plan through the filter chain.
+        assert_eq!(
+            found(&plan("h264_nvenc", "h264", "balanced", None, "scale-1440")),
+            None,
+            "resolution"
+        );
+
+        // The other way round: a HEVC file is reused by a HEVC plan, on any HEVC encoder.
+        let hevc = plan("hevc_nvenc", "hevc", "faster", Some(40), "scale");
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET plan_json = ?1 WHERE id = ?2",
+                params![hevc, first],
+            )
+            .unwrap();
+        assert_eq!(
+            found(&plan("hevc_qsv", "hevc", "faster", Some(40), "scale")),
+            Some(first)
+        );
+        assert_eq!(
+            found(&base),
+            None,
+            "an H.264 plan does not take a HEVC file"
+        );
+    }
+
+    #[test]
+    fn plans_stored_before_the_codec_existed_still_match_h264_ones() {
+        let old = r#"{"kind":"encode","limit_bytes":100,"video_bps":5,"encoder":"h264_nvenc"}"#;
+        let new = r#"{"kind":"encode","limit_bytes":100,"video_bps":5,"encoder":"libx264",
+            "video_codec":"h264","preset":"balanced","target_bytes":null}"#;
+        let hevc = r#"{"kind":"encode","limit_bytes":100,"video_bps":5,"encoder":"hevc_nvenc",
+            "video_codec":"hevc","preset":"balanced","target_bytes":null}"#;
+        assert!(same_plan(old, new) && same_plan(new, old));
+        assert!(!same_plan(old, hevc) && !same_plan(hevc, old));
+        assert!(!same_plan("not json", old));
+    }
+
+    #[test]
+    fn encoding_choices_change_only_before_the_item_starts() {
+        use crate::media::plan::{ResolutionCap, VideoCodec};
+
+        let mut store = memory_store();
+        let id = add_item(&mut store, "a.mp4");
+        assert_eq!(store.get_item(id).unwrap().encoding_override, None);
+        let choices = EncodingOverride {
+            video_codec: VideoCodec::Hevc,
+            max_resolution: ResolutionCap::P2160,
+            target_mb: None,
+        };
+        for state in [State::PendingReview, State::Ready] {
+            force_state(&store, id, state);
+            store.set_encoding_override(id, Some(&choices)).unwrap();
+            assert_eq!(
+                store.get_item(id).unwrap().encoding_override,
+                Some(choices.clone())
+            );
+            store.set_encoding_override(id, None).unwrap();
+            assert_eq!(store.get_item(id).unwrap().encoding_override, None);
+        }
+        store.set_encoding_override(id, Some(&choices)).unwrap();
+        for state in [
+            State::Probing,
+            State::Encoding,
+            State::Encoded,
+            State::Failed,
+            State::Sent,
+        ] {
+            force_state(&store, id, state);
+            for attempt in [Some(&choices), None] {
+                assert!(
+                    matches!(
+                        store.set_encoding_override(id, attempt),
+                        Err(QueueError::ItemStarted(_))
+                    ),
+                    "{state:?}"
+                );
+            }
+        }
+        // The refused attempts left the choices as they were.
+        assert_eq!(store.get_item(id).unwrap().encoding_override, Some(choices));
+        assert!(matches!(
+            store.set_encoding_override(404, None),
+            Err(QueueError::ItemNotFound(404))
+        ));
+        // A hand-edited or newer row reads as no choices instead of breaking the list.
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET encoding_override = '{\"video_codec\":\"av1\"}' WHERE id = ?1",
+                [id],
+            )
+            .unwrap();
+        assert_eq!(store.get_item(id).unwrap().encoding_override, None);
+        assert_eq!(store.list_items().unwrap().len(), 1);
     }
 
     #[test]

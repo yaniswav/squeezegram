@@ -18,7 +18,8 @@ use crate::entitlements::store::StoreError;
 use crate::entitlements::{self, EntitlementStatus, Entitlements, Feature, LicenseEntitlements};
 use crate::limit::{EffectiveLimit, LimitResolver};
 use crate::logging::{self, export, frontend};
-use crate::media::stage::{FfmpegStage, GpuFailure};
+use crate::media::plan::EncodingOverride;
+use crate::media::stage::{CodecSupport, EncodeEstimate, FfmpegStage, GpuFailure};
 use crate::queue::events::{
     EventSink, QUEUE_ALERT, QUEUE_CHANGED, QUEUE_PROGRESS, QUEUE_STATUS, QueueAlert, QueueChanged,
     QueueProgress, QueueStatus, SIDECARS_PROGRESS, SIDECARS_STATUS, SidecarProgress,
@@ -540,6 +541,99 @@ pub fn item_update(
         .arg("caption", patch.caption.is_some())
         .arg("send_mode", patch.send_mode.map(SendMode::as_str))
         .finish(state.queue.update_item(item_id, &patch).map_err(Into::into))
+}
+
+/// `item_encoding_set` without the Tauri state: a choice needs the license and a target in
+/// range; going back to the settings (`None`) needs neither.
+fn set_encoding(
+    entitlements: &dyn Entitlements,
+    queue: &Orchestrator,
+    item_id: i64,
+    options: Option<&EncodingOverride>,
+) -> CommandResult<()> {
+    if let Some(file) = options {
+        if !entitlements.allows(Feature::AdvancedEncoding) {
+            return Err(CommandError::not_licensed(Feature::AdvancedEncoding));
+        }
+        if !file.is_valid() {
+            return Err(CommandError {
+                code: "SETTINGS_INVALID",
+                params: json!({}),
+            });
+        }
+    }
+    queue
+        .with_store(|store| store.set_encoding_override(item_id, options))
+        .map_err(CommandError::from)
+}
+
+/// Per-file encoding choices (F14): codec, maximum resolution and target size of one item,
+/// `null` to go back to the global settings. Premium (`advanced_encoding`), checked here and
+/// again when the plan is built; going back to the settings never needs the license. Only while
+/// the item has not started (`ITEM_STARTED` otherwise): an encoded file is never silently
+/// replaced, to encode it differently cancel the item and queue the file again.
+#[tauri::command]
+pub fn item_encoding_set(
+    state: State<'_, AppState>,
+    item_id: i64,
+    options: Option<EncodingOverride>,
+) -> CommandResult<()> {
+    let call = Call::new("item_encoding_set")
+        .item(item_id)
+        .arg("reset", options.is_none());
+    let call = match &options {
+        Some(file) => call
+            .arg("codec", file.video_codec.as_str())
+            .arg("target_mb", file.target_mb),
+        None => call,
+    };
+    let result = set_encoding(
+        state.entitlements.as_ref(),
+        &state.queue,
+        item_id,
+        options.as_ref(),
+    );
+    call.finish(result)
+}
+
+/// Read only: the output size of a queued item under `options` (or the global settings when
+/// `null`), for the options panel. Runs ffprobe on the source, never an encode.
+#[tauri::command]
+pub async fn item_encoding_estimate(
+    state: State<'_, AppState>,
+    item_id: i64,
+    options: Option<EncodingOverride>,
+) -> CommandResult<EncodeEstimate> {
+    let call = Call::quiet("item_encoding_estimate").item(item_id);
+    let result: CommandResult<EncodeEstimate> = async {
+        let item = state.queue.with_store(|store| store.get_item(item_id))?;
+        state
+            .media
+            .estimate(&item, options.as_ref())
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    event = "command_error_detail",
+                    error_code = error.code(),
+                    error = %error,
+                    "estimate failed"
+                );
+                CommandError {
+                    code: error.code().unwrap_or("FFMPEG_FAILED"),
+                    params: json!({}),
+                }
+            })
+    }
+    .await;
+    call.finish(result)
+}
+
+/// Whether HEVC can be encoded on this computer (a GPU encoder passed its test encode, once per
+/// ffmpeg). Settings and the item options disable the HEVC choice with the reason when not.
+#[tauri::command]
+pub async fn codec_support(state: State<'_, AppState>) -> CommandResult<CodecSupport> {
+    let support = state.media.codec_support().await;
+    Call::quiet("codec_support").finish(Ok(support))
 }
 
 /// Read only: messages of the destination that may be this `unknown` item.
@@ -1311,5 +1405,58 @@ mod tests {
         assert_eq!(queue.list().unwrap().len(), before);
         let none = add_files(&queue, &Licensed, &paths, &[], None, None).unwrap_err();
         assert_eq!(none.code, "DESTINATION_NOT_FOUND");
+    }
+
+    #[test]
+    fn a_files_encoding_choices_need_the_license_and_a_started_item_refuses_them() {
+        use crate::media::plan::{ResolutionCap, VideoCodec};
+
+        let dir = TestDir::new("commands-encoding");
+        let paths = [dir.file("a.mp4", b"a")];
+        let queue = idle_queue();
+        let chat = queue
+            .with_store(|store| Ok(first_destination(store)))
+            .unwrap();
+        let id = add_files(&queue, &Licensed, &paths, &[chat], None, None).unwrap()[0];
+        let stored = || queue.with_store(|store| store.get_item(id)).unwrap();
+        let hevc = |target_mb| EncodingOverride {
+            video_codec: VideoCodec::Hevc,
+            max_resolution: ResolutionCap::P1440,
+            target_mb,
+        };
+
+        let refused = set_encoding(&FreeOnly, &queue, id, Some(&hevc(None))).unwrap_err();
+        assert_eq!(refused.code, "FEATURE_NOT_LICENSED");
+        assert_eq!(refused.params, json!({ "feature": "advanced_encoding" }));
+        assert_eq!(stored().encoding_override, None, "nothing stored");
+
+        set_encoding(&Licensed, &queue, id, Some(&hevc(Some(25)))).unwrap();
+        assert_eq!(stored().encoding_override, Some(hevc(Some(25))));
+        for bad in [Some(0), Some(5000)] {
+            let invalid = set_encoding(&Licensed, &queue, id, Some(&hevc(bad))).unwrap_err();
+            assert_eq!(invalid.code, "SETTINGS_INVALID", "{bad:?}");
+        }
+        assert_eq!(stored().encoding_override, Some(hevc(Some(25))), "kept");
+
+        // Going back to the settings never needs the license (it may have been lost).
+        set_encoding(&FreeOnly, &queue, id, None).unwrap();
+        assert_eq!(stored().encoding_override, None);
+
+        // Once the item has started its plan exists: refused, whatever the license.
+        set_encoding(&Licensed, &queue, id, Some(&hevc(None))).unwrap();
+        queue
+            .with_store(|store| {
+                store
+                    .conn()
+                    .execute("UPDATE items SET state = 'encoded' WHERE id = ?1", [id])
+                    .map(|_| ())
+                    .map_err(QueueError::from)
+            })
+            .unwrap();
+        for options in [None, Some(&hevc(None))] {
+            let started = set_encoding(&Licensed, &queue, id, options).unwrap_err();
+            assert_eq!(started.code, "ITEM_STARTED");
+        }
+        assert_eq!(stored().encoding_override, Some(hevc(None)), "unchanged");
     }
 }

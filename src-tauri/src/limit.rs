@@ -329,6 +329,9 @@ mod tests {
                 margin: 0.03,
                 audio_kbps: 128,
                 cap: ResolutionCap::P1080,
+                codec: plan::VideoCodec::H264,
+                preset: plan::EncodePreset::Balanced,
+                target_bytes: None,
                 moov_first: None,
             };
             plan::build_plan(Some(&info), &input).unwrap()

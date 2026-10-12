@@ -8,7 +8,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::{QueueError, Result};
 
 /// Migrations in order: entry `i` brings the schema to version `i + 1`.
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
+const MIGRATIONS: &[&str] = &[
+    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
+];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
@@ -152,6 +154,16 @@ ALTER TABLE items ADD COLUMN batch_index INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE items ADD COLUMN batch_count INTEGER NOT NULL DEFAULT 1;
 ";
 
+/// v6: per-file encoding choices (`advanced_encoding`, F14).
+/// - `encoding_override`: JSON `{ "video_codec", "max_resolution", "target_mb" }` of
+///   `media::plan::EncodingOverride`; NULL = the global settings apply.
+///
+/// No backfill: every existing item keeps NULL, which is what it was encoded or will be
+/// encoded with.
+const SCHEMA_V6: &str = "
+ALTER TABLE items ADD COLUMN encoding_override TEXT;
+";
+
 /// `%APPDATA%\squeezegram\squeezegram.db`.
 pub fn default_path() -> Result<PathBuf> {
     let app_data = std::env::var_os("APPDATA").ok_or(QueueError::NoAppData)?;
@@ -245,7 +257,7 @@ mod tests {
     #[test]
     fn fresh_database_gets_the_latest_schema() {
         let conn = open_in_memory().unwrap();
-        assert_eq!(schema_version(&conn).unwrap(), 5);
+        assert_eq!(schema_version(&conn).unwrap(), 6);
         assert_eq!(
             tables(&conn),
             [
@@ -518,7 +530,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let conn = open(&path).unwrap();
-        assert_eq!(schema_version(&conn).unwrap(), 5);
+        assert_eq!(schema_version(&conn).unwrap(), 6);
         let row: (String, Option<i64>, bool, Option<String>) = conn
             .query_row(
                 "SELECT path, destination_id, enabled, send_mode FROM watch_folders WHERE id = 1",
@@ -571,6 +583,71 @@ mod tests {
             )
             .unwrap();
         assert_eq!(row, ("{name}".to_owned(), 1, 1));
+    }
+
+    /// A v5 database moves to v6 in place: queued items keep their rows and read as "no
+    /// per-file choices", the global settings keep applying to them.
+    #[test]
+    fn v5_database_migrates_to_v6() {
+        use crate::media::plan::{EncodingOverride, ResolutionCap, VideoCodec};
+        use crate::queue::store::Store;
+
+        let dir = TestDir::new("db-v5-v6");
+        let path = dir.path().join("squeezegram.db");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for sql in [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5] {
+                tx.execute_batch(sql).unwrap();
+            }
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '5')",
+                [],
+            )
+            .unwrap();
+            tx.execute_batch(
+                "INSERT INTO destinations (id, peer_kind, peer_id, title)
+                 VALUES (1, 'user', 7, 'Saved Messages');
+                 INSERT INTO items (id, position, source_path, source_size, source_mtime,
+                     destination_id, send_mode, caption, state, origin, created_at, updated_at,
+                     batch_index, batch_count, plan_json)
+                 VALUES (3, 1, 'a.mp4', 1, 1, 1, 'video', 'hi', 'ready', 'manual', 'x', 'x', 2, 4, NULL),
+                        (4, 2, 'b.mp4', 1, 1, 1, 'video', '', 'encoded', 'manual', 'x', 'x', 1, 1,
+                         '{\"kind\":\"encode\"}');",
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let mut store = Store::open(&path).unwrap();
+        assert_eq!(schema_version(store.conn()).unwrap(), SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 6);
+        let items = store.list_items().unwrap();
+        assert_eq!(items.len(), 2);
+        for item in &items {
+            assert_eq!(item.encoding_override, None, "item {}", item.id);
+        }
+        // What v5 had is untouched.
+        let first = &items[0];
+        assert_eq!(
+            (first.caption.as_str(), first.batch_index, first.batch_count),
+            ("hi", 2, 4)
+        );
+        assert_eq!(items[1].plan_json.as_deref(), Some("{\"kind\":\"encode\"}"));
+
+        // The new column works: set, read back, reset.
+        let choices = EncodingOverride {
+            video_codec: VideoCodec::Hevc,
+            max_resolution: ResolutionCap::Original,
+            target_mb: Some(30),
+        };
+        store.set_encoding_override(3, Some(&choices)).unwrap();
+        assert_eq!(store.get_item(3).unwrap().encoding_override, Some(choices));
+        store.set_encoding_override(3, None).unwrap();
+        assert_eq!(store.get_item(3).unwrap().encoding_override, None);
+        // Reopening does not migrate again.
+        drop(store);
+        let conn = open(&path).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
     }
 
     #[test]

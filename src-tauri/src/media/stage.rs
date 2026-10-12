@@ -1,6 +1,6 @@
 //! The real `MediaStage`: probe + identity, then encode, remux or photo.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,10 +8,11 @@ use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use super::detect::{self, Detection, Encoder, Tools};
 use super::encode::{self, EncoderStop, Job};
-use super::plan::{self, Kind, Plan, PlanInput};
+use super::plan::{self, EncodingOverride, Kind, MIB, Plan, PlanInput, VideoCodec};
 use super::probe::{self, MediaInfo};
 use super::{MediaError, Result, hash};
 use crate::entitlements::{Entitlements, Feature};
@@ -26,20 +27,76 @@ use crate::sidecars::{Resolved, SidecarService};
 
 const PROGRESS_TICK: Duration = Duration::from_millis(250);
 
-/// The resolution cap and audio bitrate of a plan, and whether they come from the advanced
-/// settings (`true`) or are the automatic ones.
+/// The encoding choices of a plan (cap, audio bitrate, codec, preset, target size), and whether
+/// they come from the advanced settings (`true`) or are the automatic ones.
 ///
 /// The license is asked here, when the plan is built: a value saved while the feature was
-/// granted (or written into `settings.json` by hand) has no effect without it.
+/// granted (or written into `settings.json` or the item's row by hand) has no effect without
+/// it. The item's own choices (`file`) replace the settings' codec, cap and target.
 pub(crate) fn encoding_choice(
     settings: &Settings,
     entitlements: &dyn Entitlements,
+    file: Option<&EncodingOverride>,
 ) -> (AdvancedEncoding, bool) {
-    if entitlements.allows(Feature::AdvancedEncoding) {
-        (settings.advanced_encoding.clone(), true)
-    } else {
-        (AdvancedEncoding::AUTOMATIC, false)
+    if !entitlements.allows(Feature::AdvancedEncoding) {
+        return (AdvancedEncoding::AUTOMATIC, false);
     }
+    let mut choice = settings.advanced_encoding.clone();
+    if let Some(file) = file.filter(|file| file.is_valid()) {
+        choice.video_codec = file.video_codec;
+        choice.max_resolution = file.max_resolution;
+        choice.target_mb = file.target_mb;
+    }
+    (choice, true)
+}
+
+/// The plan input of `item` under `choice`.
+fn plan_input<'a>(
+    source: &'a Path,
+    item: &Item,
+    limit_bytes: u64,
+    settings: &Settings,
+    choice: &AdvancedEncoding,
+    moov_first: Option<bool>,
+) -> PlanInput<'a> {
+    PlanInput {
+        source,
+        source_size: u64::try_from(item.source_size).unwrap_or(0),
+        send_mode: item.send_mode,
+        limit_bytes,
+        margin: settings.limit.margin_percent / 100.0,
+        audio_kbps: choice.audio_kbps,
+        cap: choice.max_resolution,
+        codec: choice.video_codec,
+        preset: choice.preset,
+        target_bytes: choice.target_mb.map(|mb| mb * MIB),
+        moov_first,
+    }
+}
+
+/// Result of `item_encoding_estimate`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EncodeEstimate {
+    /// `encode` (re-encoded to `bytes`), `as_is` (sent or remuxed: about the source size),
+    /// `photo` (no estimate), `too_small` (the target cannot hold this duration) or `unknown`
+    /// (no duration to size an encode).
+    pub outcome: &'static str,
+    pub bytes: Option<u64>,
+    pub limit_bytes: u64,
+    /// The codec the encode will really use.
+    pub codec: VideoCodec,
+    /// HEVC was asked for and no HEVC encoder works: the encode will be H.264.
+    pub codec_fallback: bool,
+}
+
+/// Result of `codec_support`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CodecSupport {
+    /// A HEVC encoder passed its test encode.
+    pub hevc: bool,
+    pub hevc_encoder: Option<&'static str>,
+    /// Why not: `no_hevc_encoder` (ffmpeg has none that works here) or `ffmpeg_unavailable`.
+    pub reason: Option<&'static str>,
 }
 
 struct Cached {
@@ -66,6 +123,9 @@ pub struct FfmpegStage {
     /// Asked for `AdvancedEncoding` each time a plan is built.
     entitlements: Arc<dyn Entitlements>,
     detection: Mutex<Option<Cached>>,
+    /// The last probe of the estimate (`estimate`): the options panel asks again at each
+    /// change, the file does not change.
+    estimate_probe: std::sync::Mutex<Option<(PathBuf, i64, i64, MediaInfo)>>,
     gpu: GpuSession,
 }
 
@@ -92,7 +152,7 @@ impl GpuSession {
 
     fn record(&self, stop: &EncoderStop) {
         let failure = GpuFailure {
-            encoder: stop.encoder.name().to_owned(),
+            encoder: stop.encoder_name().to_owned(),
             at_seconds: stop.at_seconds(),
         };
         *self
@@ -103,9 +163,17 @@ impl GpuSession {
 }
 
 /// The encoder of a new encode: the user's preference, except that a GPU that stopped
-/// mid-encode this session is skipped while a CPU encoder works.
-fn pick_encoder(detection: &Detection, prefer_cpu: bool, gpu_failed: bool) -> Option<Encoder> {
-    if gpu_failed {
+/// mid-encode this session is skipped while a CPU encoder works. HEVC has no CPU encoder, so
+/// the GPU is tried again whatever happened before.
+fn pick_encoder(
+    detection: &Detection,
+    codec: VideoCodec,
+    prefer_cpu: bool,
+    gpu_failed: bool,
+) -> Option<Encoder> {
+    if codec == VideoCodec::Hevc {
+        detection.hevc_gpu()
+    } else if gpu_failed {
         detection.cpu().or_else(|| detection.gpu())
     } else {
         detection.choose(prefer_cpu)
@@ -115,7 +183,7 @@ fn pick_encoder(detection: &Detection, prefer_cpu: bool, gpu_failed: bool) -> Op
 /// `{ encoder, exitCode, atSeconds }` of a stopped GPU encoder (params of `FFMPEG_FAILED`).
 fn stop_params(stop: &EncoderStop) -> serde_json::Value {
     json!({
-        "encoder": stop.encoder.name(),
+        "encoder": stop.encoder_name(),
         "exitCode": stop.exit_code,
         "atSeconds": stop.at_seconds(),
     })
@@ -185,7 +253,7 @@ pub(crate) async fn encode_with_cpu_fallback(
     tracing::warn!(
         event = "encoder_failed_midway",
         error_code = "FFMPEG_FAILED",
-        encoder = stop.encoder.name(),
+        encoder = stop.encoder_name(),
         exit_code = stop.exit_code,
         dur_ms = stop.elapsed_ms,
         out_time_s = (stop.out_time_s * 100.0).round() / 100.0,
@@ -195,8 +263,14 @@ pub(crate) async fn encode_with_cpu_fallback(
         "GPU encoder stopped mid-encode; GPU skipped until the app restarts"
     );
     let mut params = stop_params(&stop);
-    let Some(cpu) = cpu.filter(|e| !e.is_gpu()) else {
-        params["cause"] = json!("no_cpu_encoder");
+    // A CPU retry would turn a HEVC plan into an H.264 file: HEVC has no CPU encoder to retry on.
+    let hevc = job.plan.video_codec == VideoCodec::Hevc;
+    let Some(cpu) = cpu.filter(|e| !e.is_gpu() && !hevc) else {
+        params["cause"] = json!(if hevc {
+            "hevc_gpu_only"
+        } else {
+            "no_cpu_encoder"
+        });
         return Err(MediaError::Reported {
             code: "FFMPEG_FAILED",
             params,
@@ -224,7 +298,7 @@ pub(crate) async fn encode_with_cpu_fallback(
     job.progress.alert(
         "ENCODER_FALLBACK",
         json!({
-            "from": stop.encoder.name(),
+            "from": stop.encoder_name(),
             "to": cpu.name(),
             "atSeconds": stop.at_seconds(),
             "cause": if stop.stderr_empty { "silent" } else { "encoder_error" },
@@ -296,10 +370,9 @@ fn missing(error: crate::sidecars::SidecarError) -> MediaError {
     MediaError::failed(error.code(), error.to_string())
 }
 
-/// `{ ffmpeg, tested: [{ encoder, outcome, reason? }] }`.
-fn detection_json(ffmpeg: &std::path::Path, detection: &Detection) -> serde_json::Value {
-    let tested: Vec<_> = detection
-        .tested
+/// `[{ encoder, outcome, reason? }]` of the test encodes of `codec`.
+fn tested_json(tested: &[(Encoder, detect::Outcome)], codec: VideoCodec) -> serde_json::Value {
+    tested
         .iter()
         .map(|(encoder, outcome)| {
             let (outcome, reason) = match outcome {
@@ -307,10 +380,22 @@ fn detection_json(ffmpeg: &std::path::Path, detection: &Detection) -> serde_json
                 detect::Outcome::NotInBuild => ("not_in_build", None),
                 detect::Outcome::Failed(reason) => ("failed", Some(reason.as_str())),
             };
-            serde_json::json!({ "encoder": encoder.name(), "outcome": outcome, "reason": reason })
+            let name = encoder.codec_name(codec).unwrap_or_else(|| encoder.name());
+            serde_json::json!({ "encoder": name, "outcome": outcome, "reason": reason })
         })
-        .collect();
-    serde_json::json!({ "ffmpeg": ffmpeg.to_string_lossy(), "tested": tested })
+        .collect()
+}
+
+/// `{ ffmpeg, tested: [...], hevc: [...] }`; `hevc` only once something asked for it.
+fn detection_json(ffmpeg: &std::path::Path, detection: &Detection) -> serde_json::Value {
+    let mut report = serde_json::json!({
+        "ffmpeg": ffmpeg.to_string_lossy(),
+        "tested": tested_json(&detection.tested, VideoCodec::H264),
+    });
+    if let Some(hevc) = &detection.hevc {
+        report["hevc"] = tested_json(hevc, VideoCodec::Hevc);
+    }
+    report
 }
 
 impl FfmpegStage {
@@ -326,6 +411,7 @@ impl FfmpegStage {
             limits,
             entitlements,
             detection: Mutex::new(None),
+            estimate_probe: std::sync::Mutex::new(None),
             gpu: GpuSession::default(),
         }
     }
@@ -346,33 +432,61 @@ impl FfmpegStage {
         self.temp_base().join(item.id.to_string())
     }
 
-    /// Detection result for this ffmpeg, computed once per path (about 1 s).
+    /// H.264 detection result for this ffmpeg, computed once per path (about 1 s).
     async fn detection(
         &self,
         resolved: &Resolved,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<Detection> {
+        self.detection_for(resolved, cancel, VideoCodec::H264).await
+    }
+
+    /// The detection, with the HEVC encoders tested too when `codec` is HEVC (once per path).
+    async fn detection_for(
+        &self,
+        resolved: &Resolved,
+        cancel: &tokio_util::sync::CancellationToken,
+        codec: VideoCodec,
+    ) -> Result<Detection> {
         let mut cache = self.detection.lock().await;
-        if let Some(cached) = cache.as_ref()
-            && cached.ffmpeg == resolved.ffmpeg
-        {
-            return Ok(cached.detection.clone());
-        }
         let tools = Tools {
             ffmpeg: &resolved.ffmpeg,
             ffprobe: &resolved.ffprobe,
         };
-        let started = std::time::Instant::now();
-        let detection = detect::detect(&tools, &self.temp_base().join("detect"), cancel).await?;
-        let report = detection_json(&resolved.ffmpeg, &detection).to_string();
-        tracing::info!(
-            event = "encoder_detection",
-            dur_ms = crate::logging::ms_since(started),
-            gpu = detection.gpu().map(Encoder::name),
-            cpu = detection.cpu().map(Encoder::name),
-            json = report.as_str(),
-            "encoder detection finished"
-        );
+        let mut detection = match cache.as_ref() {
+            Some(cached) if cached.ffmpeg == resolved.ffmpeg => cached.detection.clone(),
+            _ => {
+                let started = std::time::Instant::now();
+                let detection =
+                    detect::detect(&tools, &self.temp_base().join("detect"), cancel).await?;
+                let report = detection_json(&resolved.ffmpeg, &detection).to_string();
+                tracing::info!(
+                    event = "encoder_detection",
+                    dur_ms = crate::logging::ms_since(started),
+                    gpu = detection.gpu().map(Encoder::name),
+                    cpu = detection.cpu().map(Encoder::name),
+                    json = report.as_str(),
+                    "encoder detection finished"
+                );
+                detection
+            }
+        };
+        if codec == VideoCodec::Hevc && detection.hevc.is_none() {
+            let started = std::time::Instant::now();
+            let tested =
+                detect::detect_hevc(&tools, &self.temp_base().join("detect"), cancel).await?;
+            let report = tested_json(&tested, VideoCodec::Hevc).to_string();
+            detection.hevc = Some(tested);
+            tracing::info!(
+                event = "hevc_detection",
+                dur_ms = crate::logging::ms_since(started),
+                encoder = detection
+                    .hevc_gpu()
+                    .and_then(|e| e.codec_name(VideoCodec::Hevc)),
+                json = report.as_str(),
+                "HEVC encoder detection finished"
+            );
+        }
         *cache = Some(Cached {
             ffmpeg: resolved.ffmpeg.clone(),
             detection: detection.clone(),
@@ -390,6 +504,124 @@ impl FfmpegStage {
         cache
             .as_ref()
             .map(|cached| detection_json(&cached.ffmpeg, &cached.detection))
+    }
+
+    /// What the options panel of a queued item shows: the size its output would have under
+    /// `file` (or the settings), from a real ffprobe of the source and the same plan the
+    /// encode will build. Nothing is written and no encode starts.
+    pub async fn estimate(
+        &self,
+        item: &Item,
+        file: Option<&EncodingOverride>,
+    ) -> Result<EncodeEstimate> {
+        let settings = self.settings.get();
+        let limit_bytes = self.limits.current().limit_bytes;
+        let (choice, _) = encoding_choice(&settings, self.entitlements.as_ref(), file);
+        let mut estimate = EncodeEstimate {
+            outcome: "as_is",
+            bytes: u64::try_from(item.source_size).ok(),
+            limit_bytes,
+            codec: choice.video_codec,
+            codec_fallback: false,
+        };
+        if item.send_mode == SendMode::Document {
+            return Ok(estimate);
+        }
+        let source = PathBuf::from(&item.source_path);
+        let resolved = self.sidecars.resolve().map_err(missing)?;
+        let info = self.estimate_probe(&resolved, item, &source).await?;
+        let input = plan_input(&source, item, limit_bytes, &settings, &choice, None);
+        let plan = match plan::build_plan(Some(&info), &input) {
+            Ok(plan) => plan,
+            Err(plan::PlanError::TooLarge) => {
+                estimate.outcome = "too_small";
+                estimate.bytes = None;
+                return Ok(estimate);
+            }
+            Err(plan::PlanError::Unreadable) => {
+                estimate.outcome = "unknown";
+                estimate.bytes = None;
+                return Ok(estimate);
+            }
+        };
+        match plan.kind {
+            Kind::Encode => {
+                estimate.outcome = "encode";
+                estimate.bytes = plan.estimated_bytes();
+                if plan.video_codec == VideoCodec::Hevc {
+                    let detection = self
+                        .detection_for(&resolved, &CancellationToken::new(), VideoCodec::Hevc)
+                        .await?;
+                    if detection.hevc_gpu().is_none() {
+                        estimate.codec = VideoCodec::H264;
+                        estimate.codec_fallback = true;
+                    }
+                }
+            }
+            Kind::Photo => {
+                estimate.outcome = "photo";
+                estimate.bytes = None;
+            }
+            Kind::Remux | Kind::RemuxAudio | Kind::Skip => {}
+        }
+        Ok(estimate)
+    }
+
+    /// ffprobe of `source`, kept for the next estimate of the same file.
+    async fn estimate_probe(
+        &self,
+        resolved: &Resolved,
+        item: &Item,
+        source: &Path,
+    ) -> Result<MediaInfo> {
+        let key = (source.to_path_buf(), item.source_size, item.source_mtime);
+        let cached = {
+            let guard = self
+                .estimate_probe
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard
+                .as_ref()
+                .filter(|(path, size, mtime, _)| (path, size, mtime) == (&key.0, &key.1, &key.2))
+                .map(|(_, _, _, info)| info.clone())
+        };
+        if let Some(info) = cached {
+            return Ok(info);
+        }
+        let info =
+            probe::probe(&resolved.ffprobe, source, false, &CancellationToken::new()).await?;
+        *self
+            .estimate_probe
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((key.0, key.1, key.2, info.clone()));
+        Ok(info)
+    }
+
+    /// Whether HEVC can be encoded here, from the HEVC test encodes (run once per ffmpeg).
+    pub async fn codec_support(&self) -> CodecSupport {
+        let unavailable = |reason| CodecSupport {
+            hevc: false,
+            hevc_encoder: None,
+            reason: Some(reason),
+        };
+        let Ok(resolved) = self.sidecars.resolve() else {
+            return unavailable("ffmpeg_unavailable");
+        };
+        match self
+            .detection_for(&resolved, &CancellationToken::new(), VideoCodec::Hevc)
+            .await
+        {
+            Ok(detection) => match detection.hevc_gpu() {
+                Some(encoder) => CodecSupport {
+                    hevc: true,
+                    hevc_encoder: encoder.codec_name(VideoCodec::Hevc),
+                    reason: None,
+                },
+                None => unavailable("no_hevc_encoder"),
+            },
+            Err(_) => unavailable("ffmpeg_unavailable"),
+        }
     }
 
     async fn probe_inner(&self, item: &Item, ctx: &StageContext) -> Result<ProbeOutcome> {
@@ -462,17 +694,19 @@ impl FfmpegStage {
             None
         };
 
-        let (choice, advanced) = encoding_choice(&settings, self.entitlements.as_ref());
-        let input = PlanInput {
-            source: &source,
-            source_size: u64::try_from(item.source_size).unwrap_or(0),
-            send_mode: item.send_mode,
-            limit_bytes: limit.limit_bytes,
-            margin: settings.limit.margin_percent / 100.0,
-            audio_kbps: choice.audio_kbps,
-            cap: choice.max_resolution,
+        let (choice, advanced) = encoding_choice(
+            &settings,
+            self.entitlements.as_ref(),
+            item.encoding_override.as_ref(),
+        );
+        let input = plan_input(
+            &source,
+            item,
+            limit.limit_bytes,
+            &settings,
+            &choice,
             moov_first,
-        };
+        );
         let summary = probe_summary(item, &content_id, info.as_ref(), moov_first);
         tracing::info!(
             event = "media_probe",
@@ -486,27 +720,55 @@ impl FfmpegStage {
         if plan.kind == Kind::Encode
             && let Some(resolved) = &resolved
         {
-            let detection = self.detection(resolved, &ctx.cancel).await?;
+            let detection = self
+                .detection_for(resolved, &ctx.cancel, plan.video_codec)
+                .await?;
             let prefer_cpu = settings.encoding.prefer == "cpu";
             let gpu_failed = self.gpu.failure().is_some();
-            let encoder = pick_encoder(&detection, prefer_cpu, gpu_failed).ok_or_else(|| {
-                MediaError::failed("FFMPEG_ENCODER_UNAVAILABLE", "no encoder passed its test")
-            })?;
+            if plan.video_codec == VideoCodec::Hevc && detection.hevc_gpu().is_none() {
+                // Chosen while a GPU encoder worked, or in a file written by hand: the item
+                // still goes out, as H.264 (the bitrate formula does not depend on the codec).
+                tracing::warn!(
+                    event = "codec_fallback",
+                    from = "hevc",
+                    to = "h264",
+                    reason = "no_hevc_encoder",
+                    "no HEVC encoder works: encoding as H.264"
+                );
+                ctx.progress.alert(
+                    "CODEC_FALLBACK",
+                    json!({ "from": "hevc", "to": "h264", "cause": "no_hevc_encoder" }),
+                );
+                plan.video_codec = VideoCodec::H264;
+            }
+            let codec = plan.video_codec;
+            let encoder =
+                pick_encoder(&detection, codec, prefer_cpu, gpu_failed).ok_or_else(|| {
+                    MediaError::failed("FFMPEG_ENCODER_UNAVAILABLE", "no encoder passed its test")
+                })?;
+            let name = encoder.codec_name(codec).unwrap_or_else(|| encoder.name());
             tracing::info!(
                 event = "encoder_chosen",
-                encoder = encoder.name(),
+                encoder = name,
                 gpu = encoder.is_gpu(),
+                codec = codec.as_str(),
+                preset = plan.preset.as_str(),
                 prefer = settings.encoding.prefer.as_str(),
-                gpu_skipped = gpu_failed && !prefer_cpu && !encoder.is_gpu(),
+                gpu_skipped =
+                    codec == VideoCodec::H264 && gpu_failed && !prefer_cpu && !encoder.is_gpu(),
                 "encoder chosen"
             );
-            plan.encoder = Some(encoder.name().to_owned());
+            plan.encoder = Some(name.to_owned());
         }
         let plan_json = serde_json::json!({ "plan": plan }).to_string();
         tracing::info!(
             event = "media_plan",
             margin_percent = settings.limit.margin_percent,
             advanced,
+            file_override = advanced && item.encoding_override.is_some(),
+            codec = plan.video_codec.as_str(),
+            preset = plan.preset.as_str(),
+            target_bytes = plan.target_bytes,
             json = plan_json.as_str(),
             "plan built"
         );
@@ -582,6 +844,7 @@ impl FfmpegStage {
             kind = plan.kind.as_str(),
             output_size = produced.size,
             limit_bytes = plan.limit_bytes,
+            codec = plan.video_codec.as_str(),
             source_size = item.source_size,
             output_path = %produced.path.display(),
             "media output ready"
@@ -602,20 +865,23 @@ impl FfmpegStage {
         prefer: &str,
         margin: f64,
     ) -> Result<encode::Produced> {
+        let codec = job.plan.video_codec;
         let planned = job.plan.encoder.as_deref().and_then(Encoder::parse);
         let gpu_failed = self.gpu.failure().is_some();
         let mut encoder = match planned {
             Some(encoder) => encoder,
             None => pick_encoder(
-                &self.detection(resolved, job.cancel).await?,
+                &self.detection_for(resolved, job.cancel, codec).await?,
+                codec,
                 prefer == "cpu",
                 gpu_failed,
             )
             .ok_or_else(|| MediaError::failed("FFMPEG_ENCODER_UNAVAILABLE", "no encoder"))?,
         };
-        // The CPU encoder of a fallback (detection cached since the probe).
+        // The CPU encoder of a fallback (detection cached since the probe). None for HEVC:
+        // there is no CPU encoder of that codec, and an H.264 retry would change the file.
         let mut cpu = None;
-        if encoder.is_gpu() {
+        if encoder.is_gpu() && codec == VideoCodec::H264 {
             cpu = self.detection(resolved, job.cancel).await?.cpu();
             // Planned before the GPU failed: skipped as a new pick would.
             if gpu_failed && let Some(cpu_encoder) = cpu.take() {
@@ -637,18 +903,18 @@ impl FfmpegStage {
                 tracing::warn!(
                     event = "encoder_fallback",
                     error_code = "FFMPEG_ENCODER_UNAVAILABLE",
-                    failed = encoder.name(),
+                    failed = encoder.codec_name(codec).unwrap_or_else(|| encoder.name()),
                     detail = detail.as_str(),
                     "encoder cannot open; detecting again"
                 );
                 self.forget_detection().await;
-                let detection = self.detection(resolved, job.cancel).await?;
-                let other = detection.alternative_to(encoder).ok_or_else(|| {
+                let detection = self.detection_for(resolved, job.cancel, codec).await?;
+                let other = detection.alternative_for(encoder, codec).ok_or_else(|| {
                     MediaError::failed("FFMPEG_ENCODER_UNAVAILABLE", "no other encoder works")
                 })?;
                 tracing::info!(
                     event = "encoder_chosen",
-                    encoder = other.name(),
+                    encoder = other.codec_name(codec).unwrap_or_else(|| other.name()),
                     gpu = other.is_gpu(),
                     fallback = true,
                     "fallback encoder chosen"
@@ -750,6 +1016,7 @@ mod tests {
             "if /i not \"%OUT%\"==\"NUL\" if exist \"%OUT%\" set \"STATE=part_present\"",
             "echo %ENC% %STATE%>>\"%HERE%calls.txt\"",
             "if \"%ENC%\"==\"h264_nvenc\" goto gpu",
+            "if \"%ENC%\"==\"hevc_nvenc\" goto gpu",
             cpu_fail.trim_end(),
             "if /i not \"%OUT%\"==\"NUL\" echo encoded>\"%OUT%\"",
             "echo out_time_us=60000000",
@@ -803,6 +1070,9 @@ mod tests {
             source_dims: None,
             alpha: false,
             note: None,
+            video_codec: VideoCodec::H264,
+            preset: plan::EncodePreset::Balanced,
+            target_bytes: None,
         }
     }
 
@@ -821,6 +1091,16 @@ mod tests {
         cpu: Option<Encoder>,
         cancel_after: Option<Duration>,
     ) -> Run {
+        run_plan(name, fake, sample_plan(), cpu, cancel_after).await
+    }
+
+    async fn run_plan(
+        name: &str,
+        fake: Fake,
+        plan: Plan,
+        cpu: Option<Encoder>,
+        cancel_after: Option<Duration>,
+    ) -> Run {
         let dir = TestDir::new(name);
         let (ffmpeg, ffprobe) = fake_tools(dir.path(), fake);
         let input = dir.path().join("in.mkv");
@@ -830,7 +1110,6 @@ mod tests {
             ffmpeg: &ffmpeg,
             ffprobe: &ffprobe,
         };
-        let plan = sample_plan();
         let cancel = CancellationToken::new();
         let sink = Arc::new(Recorder::default());
         let progress = ProgressReporter::new(1, Phase::Encoding, sink.clone());
@@ -1095,31 +1374,47 @@ mod tests {
     #[test]
     fn a_gpu_that_failed_this_session_is_skipped_while_a_cpu_encoder_works() {
         let detection = Detection {
+            hevc: None,
             tested: vec![
                 (Encoder::Nvenc, detect::Outcome::Works),
                 (Encoder::X264, detect::Outcome::NotInBuild),
                 (Encoder::OpenH264, detect::Outcome::Works),
             ],
         };
-        assert_eq!(pick_encoder(&detection, false, false), Some(Encoder::Nvenc));
         assert_eq!(
-            pick_encoder(&detection, true, false),
+            pick_encoder(&detection, VideoCodec::H264, false, false),
+            Some(Encoder::Nvenc)
+        );
+        assert_eq!(
+            pick_encoder(&detection, VideoCodec::H264, true, false),
             Some(Encoder::OpenH264),
             "CPU first"
         );
         assert_eq!(
-            pick_encoder(&detection, false, true),
+            pick_encoder(&detection, VideoCodec::H264, false, true),
             Some(Encoder::OpenH264)
         );
         let gpu_only = Detection {
+            hevc: None,
             tested: vec![(Encoder::Nvenc, detect::Outcome::Works)],
         };
-        assert_eq!(pick_encoder(&gpu_only, false, true), Some(Encoder::Nvenc));
+        assert_eq!(
+            pick_encoder(&gpu_only, VideoCodec::H264, false, true),
+            Some(Encoder::Nvenc)
+        );
     }
 
     /// A 4K HEVC source with AAC audio, encoded under a 100 MiB limit, planned with what
     /// `encoding_choice` gives for `settings` and `entitlements`.
     fn plan_with(settings: &Settings, entitlements: &dyn Entitlements) -> (Plan, bool) {
+        plan_with_file(settings, entitlements, None)
+    }
+
+    fn plan_with_file(
+        settings: &Settings,
+        entitlements: &dyn Entitlements,
+        file: Option<&EncodingOverride>,
+    ) -> (Plan, bool) {
         let info: MediaInfo = serde_json::from_value(json!({
             "format_name": "matroska,webm", "duration_s": 600.0, "bit_rate": null,
             "video": { "index": 0, "codec": "hevc", "profile": "Main", "width": 3840,
@@ -1129,7 +1424,7 @@ mod tests {
             "audio": { "index": 1, "codec": "aac", "channels": 2, "bit_rate": null }
         }))
         .unwrap();
-        let (choice, advanced) = encoding_choice(settings, entitlements);
+        let (choice, advanced) = encoding_choice(settings, entitlements, file);
         let source = Path::new("D:\\clips\\uhd.mkv");
         let input = PlanInput {
             source,
@@ -1139,6 +1434,9 @@ mod tests {
             margin: 0.03,
             audio_kbps: choice.audio_kbps,
             cap: choice.max_resolution,
+            codec: choice.video_codec,
+            preset: choice.preset,
+            target_bytes: choice.target_mb.map(|mb| mb * plan::MIB),
             moov_first: None,
         };
         (plan::build_plan(Some(&info), &input).unwrap(), advanced)
@@ -1155,6 +1453,7 @@ mod tests {
         settings.advanced_encoding = AdvancedEncoding {
             max_resolution: plan::ResolutionCap::P2160,
             audio_kbps: 192,
+            ..AdvancedEncoding::AUTOMATIC
         };
         // Changed by hand in the file: never read.
         settings.encoding.audio_kbps = 320;
@@ -1195,6 +1494,166 @@ mod tests {
         );
         automatic(plan_with(&settings, &other));
         automatic(plan_with(&settings, &licensed(valid, None)));
+    }
+
+    /// The free plan (`FreeOnly`) or a license that grants everything, without a signed-in
+    /// account to check.
+    struct Grants(bool);
+
+    impl Entitlements for Grants {
+        fn allows(&self, _feature: Feature) -> bool {
+            self.0
+        }
+
+        fn status(&self) -> crate::entitlements::EntitlementStatus {
+            crate::entitlements::FreeOnly.status()
+        }
+    }
+
+    fn chosen_settings() -> Settings {
+        Settings {
+            advanced_encoding: AdvancedEncoding {
+                max_resolution: plan::ResolutionCap::P2160,
+                audio_kbps: 192,
+                video_codec: VideoCodec::Hevc,
+                preset: plan::EncodePreset::Quality,
+                target_mb: Some(40),
+            },
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn codec_preset_and_target_reach_the_plan_only_with_the_feature() {
+        let settings = chosen_settings();
+
+        let (free, advanced) = plan_with(&settings, &Grants(false));
+        assert!(!advanced);
+        assert_eq!(
+            (free.video_codec, free.preset, free.target_bytes),
+            (VideoCodec::H264, plan::EncodePreset::Balanced, None),
+            "free users keep the automatic behavior"
+        );
+        assert_eq!(
+            free.video_bps,
+            plan::plan_bitrate(100 * plan::MIB, 0.03, 600.0, Some(128))
+        );
+
+        let (paid, advanced) = plan_with(&settings, &Grants(true));
+        assert!(advanced);
+        assert_eq!(
+            (paid.video_codec, paid.preset, paid.target_bytes),
+            (
+                VideoCodec::Hevc,
+                plan::EncodePreset::Quality,
+                Some(40 * plan::MIB)
+            )
+        );
+        assert_eq!(
+            paid.video_bps,
+            plan::plan_bitrate(40 * plan::MIB, 0.03, 600.0, Some(192)),
+            "the target sets the budget, the margin still applies"
+        );
+        assert_eq!(
+            paid.limit_bytes,
+            100 * plan::MIB,
+            "the limit stays the ceiling"
+        );
+    }
+
+    #[test]
+    fn a_files_choices_replace_the_settings_and_need_the_feature_too() {
+        let settings = chosen_settings();
+        let file = EncodingOverride {
+            video_codec: VideoCodec::H264,
+            max_resolution: plan::ResolutionCap::P1440,
+            target_mb: None,
+        };
+
+        // Without the feature the item's own choices are ignored too.
+        let (free, _) = plan_with_file(&settings, &Grants(false), Some(&file));
+        assert_eq!(
+            (free.video_codec, free.target_bytes),
+            (VideoCodec::H264, None)
+        );
+        assert!(free.vf.as_deref().unwrap().contains("min(1920,iw)"));
+
+        // With it: the file's codec, cap and target; the global preset and audio stay.
+        let (paid, advanced) = plan_with_file(&settings, &Grants(true), Some(&file));
+        assert!(advanced);
+        assert_eq!(paid.video_codec, VideoCodec::H264);
+        assert_eq!(
+            paid.target_bytes, None,
+            "fill the limit, though the settings have a target"
+        );
+        assert!(paid.vf.as_deref().unwrap().contains("min(2560,iw)"));
+        assert_eq!(
+            (paid.preset, paid.audio_kbps),
+            (plan::EncodePreset::Quality, Some(192))
+        );
+
+        // A row edited by hand to an impossible target is ignored.
+        let broken = EncodingOverride {
+            target_mb: Some(0),
+            ..file.clone()
+        };
+        let (kept, _) = plan_with_file(&settings, &Grants(true), Some(&broken));
+        assert_eq!(kept.video_codec, VideoCodec::Hevc);
+        assert_eq!(kept.target_bytes, Some(40 * plan::MIB));
+
+        // Two files with different choices never share an encode (the plans differ).
+        let first = serde_json::to_value(&paid).unwrap();
+        let second = serde_json::to_value(&kept).unwrap();
+        assert_ne!(first["video_codec"], second["video_codec"]);
+    }
+
+    #[test]
+    fn hevc_is_picked_among_the_gpu_encoders_and_never_skipped_for_a_cpu_one() {
+        let detection = Detection {
+            tested: vec![
+                (Encoder::Nvenc, detect::Outcome::Works),
+                (Encoder::X264, detect::Outcome::Works),
+            ],
+            hevc: Some(vec![(Encoder::Nvenc, detect::Outcome::Works)]),
+        };
+        for (prefer_cpu, gpu_failed) in [(false, false), (true, false), (false, true), (true, true)]
+        {
+            assert_eq!(
+                pick_encoder(&detection, VideoCodec::Hevc, prefer_cpu, gpu_failed),
+                Some(Encoder::Nvenc),
+                "no CPU HEVC encoder exists: cpu {prefer_cpu}, gpu failed {gpu_failed}"
+            );
+        }
+        assert_eq!(
+            pick_encoder(&detection, VideoCodec::H264, false, true),
+            Some(Encoder::X264),
+            "H.264 still skips a GPU that stopped"
+        );
+        let none = Detection {
+            hevc: Some(vec![(Encoder::Nvenc, detect::Outcome::NotInBuild)]),
+            ..detection
+        };
+        assert_eq!(pick_encoder(&none, VideoCodec::Hevc, false, false), None);
+    }
+
+    #[tokio::test]
+    async fn a_hevc_encode_that_stops_midway_is_never_retried_as_h264() {
+        let mut hevc = sample_plan();
+        hevc.video_codec = VideoCodec::Hevc;
+        hevc.encoder = Some("hevc_nvenc".into());
+        // Even given a CPU encoder, the retry would turn the plan's HEVC into H.264.
+        let run = run_plan("fallback-hevc", SILENT, hevc, Some(Encoder::X264), None).await;
+        let Err(MediaError::Reported { code, params, .. }) = run.result else {
+            panic!("expected a reported failure, got {:?}", run.result);
+        };
+        assert_eq!(code, "FFMPEG_FAILED");
+        assert_eq!(params["cause"], "hevc_gpu_only");
+        assert_eq!(params["encoder"], "hevc_nvenc");
+        assert_eq!(run.calls, ["hevc_nvenc fresh"], "one run, no CPU run");
+        assert!(run.sink.alerts.lock().unwrap().is_empty());
+        let failure = run.session.failure().expect("the GPU did stop");
+        assert_eq!(failure.encoder, "hevc_nvenc");
+        no_part_left(&run.out_dir);
     }
 
     #[test]

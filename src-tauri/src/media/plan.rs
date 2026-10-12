@@ -61,7 +61,7 @@ pub fn for_fallback(plan: &Plan, encoder: &str, margin: f64) -> Plan {
     let mut next = plan.clone();
     next.encoder = Some(encoder.to_owned());
     if let Some(duration) = plan.duration_s
-        && let Some(video) = plan_bitrate(plan.limit_bytes, margin, duration, plan.audio_kbps)
+        && let Some(video) = plan_bitrate(plan.aim_bytes(), margin, duration, plan.audio_kbps)
     {
         next.video_bps = Some(video);
     }
@@ -104,6 +104,73 @@ impl ResolutionCap {
             ResolutionCap::P2160 => (3840, 2160),
             ResolutionCap::Original => (4096, 4096),
         }
+    }
+}
+
+/// Video codec of an encode, named as in `settings.advanced_encoding`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum VideoCodec {
+    #[default]
+    #[serde(rename = "h264")]
+    H264,
+    /// GPU encoders only (`hevc_nvenc`, `hevc_qsv`, `hevc_amf`): the pinned LGPL ffmpeg has no
+    /// libx265. Tagged `hvc1` in the MP4.
+    #[serde(rename = "hevc")]
+    Hevc,
+}
+
+impl VideoCodec {
+    /// Serialized name, for the journal.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VideoCodec::H264 => "h264",
+            VideoCodec::Hevc => "hevc",
+        }
+    }
+}
+
+/// Speed/quality trade-off of the encoder, mapped per encoder family (`encode::video_options`).
+/// `Balanced` is what every encode used before the choice existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EncodePreset {
+    Faster,
+    #[default]
+    Balanced,
+    Quality,
+}
+
+impl EncodePreset {
+    /// Serialized name, for the journal.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EncodePreset::Faster => "faster",
+            EncodePreset::Balanced => "balanced",
+            EncodePreset::Quality => "quality",
+        }
+    }
+}
+
+/// Custom target sizes offered, in MiB. The top is the largest limit Telegram has (Premium):
+/// a target at or above the effective limit is the same as filling it.
+pub const TARGET_MB_RANGE: std::ops::RangeInclusive<u64> = 1..=4000;
+
+/// Encoding choices of one queue item (`items.encoding_override`, F14). A complete set, not a
+/// diff: what the page shows when the user saves is what the encode uses, whatever the global
+/// settings become afterwards. Read only while the license grants `advanced_encoding`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EncodingOverride {
+    pub video_codec: VideoCodec,
+    pub max_resolution: ResolutionCap,
+    /// `None`: fill the limit.
+    pub target_mb: Option<u64>,
+}
+
+impl EncodingOverride {
+    pub fn is_valid(&self) -> bool {
+        self.target_mb
+            .is_none_or(|mb| TARGET_MB_RANGE.contains(&mb))
     }
 }
 
@@ -162,6 +229,37 @@ pub struct Plan {
     pub alpha: bool,
     /// Why a photo was left alone, for the log.
     pub note: Option<String>,
+    /// Codec of an encode. Plans stored before the choice existed read as H.264.
+    #[serde(default)]
+    pub video_codec: VideoCodec,
+    #[serde(default)]
+    pub preset: EncodePreset,
+    /// Size the user asked for, below `limit_bytes`; `None`: the encode fills the limit.
+    #[serde(default)]
+    pub target_bytes: Option<u64>,
+}
+
+impl Plan {
+    /// The size an encode aims under: the target, else the limit. The bitrate, the corrective
+    /// pass and the first size check use it; the limit stays the hard ceiling.
+    pub fn aim_bytes(&self) -> u64 {
+        self.target_bytes
+            .map_or(self.limit_bytes, |target| target.min(self.limit_bytes))
+    }
+
+    /// The size an encode of this plan is expected to come out at: the planned bitrates over
+    /// the duration (what `plan_bitrate` solves for the aim, less the margin). `None` for a
+    /// plan that does not encode a video.
+    pub fn estimated_bytes(&self) -> Option<u64> {
+        if self.kind != Kind::Encode {
+            return None;
+        }
+        let audio = self
+            .audio_kbps
+            .map_or(0.0, |k| f64::from(k) * 1000.0 * AUDIO_REAL_FACTOR);
+        let bps = self.video_bps? as f64 + audio + CONTAINER_OVERHEAD_BPS;
+        Some((bps * self.duration_s? / 8.0) as u64)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -193,6 +291,11 @@ pub struct PlanInput<'a> {
     pub margin: f64,
     pub audio_kbps: u32,
     pub cap: ResolutionCap,
+    pub codec: VideoCodec,
+    pub preset: EncodePreset,
+    /// Custom target size in bytes (`None`: fill the limit). At or above the limit it is the
+    /// same as `None`.
+    pub target_bytes: Option<u64>,
     /// Result of `probe::moov_first` for an MP4, if known.
     pub moov_first: Option<bool>,
 }
@@ -214,6 +317,9 @@ fn empty_plan(kind: Kind, input: &PlanInput<'_>, ext: &str) -> Plan {
         source_dims: None,
         alpha: false,
         note: None,
+        video_codec: VideoCodec::default(),
+        preset: EncodePreset::default(),
+        target_bytes: None,
     }
 }
 
@@ -238,7 +344,13 @@ pub fn build_plan(info: Option<&MediaInfo>, input: &PlanInput<'_>) -> Result<Pla
     plan.video_index = Some(video.index);
     plan.audio_index = audio.map(|a| a.index);
 
-    let fits = input.source_size <= input.limit_bytes;
+    // A target below the limit is what the output must fit under: a file already under it is
+    // sent as it is, a larger one is encoded even if Telegram would take it.
+    let target = input
+        .target_bytes
+        .filter(|bytes| *bytes < input.limit_bytes);
+    let aim = target.unwrap_or(input.limit_bytes);
+    let fits = input.source_size <= aim;
     let audio_is_aac = audio.is_none_or(|a| a.codec == "aac");
     // The decision comes from ffprobe, never from ffmpeg succeeding: it also "succeeds" on
     // 4:4:4, 10-bit, HEVC and VP9.
@@ -260,10 +372,11 @@ pub fn build_plan(info: Option<&MediaInfo>, input: &PlanInput<'_>) -> Result<Pla
 
     let duration = info.duration_s.ok_or(PlanError::Unreadable)?;
     let audio_kbps = audio.map(|_| input.audio_kbps);
-    plan.video_bps = Some(
-        plan_bitrate(input.limit_bytes, input.margin, duration, audio_kbps)
-            .ok_or(PlanError::TooLarge)?,
-    );
+    plan.video_bps =
+        Some(plan_bitrate(aim, input.margin, duration, audio_kbps).ok_or(PlanError::TooLarge)?);
+    plan.video_codec = input.codec;
+    plan.preset = input.preset;
+    plan.target_bytes = target;
     plan.audio_kbps = audio_kbps;
     plan.hdr = video.hdr;
     plan.vf = Some(video_filter(video, input.cap));
@@ -399,6 +512,9 @@ mod tests {
             margin: 0.03,
             audio_kbps: 128,
             cap: ResolutionCap::P1080,
+            codec: VideoCodec::H264,
+            preset: EncodePreset::Balanced,
+            target_bytes: None,
             moov_first: Some(true),
         }
     }
@@ -459,6 +575,163 @@ mod tests {
             for_fallback(&plan, "h264_mf", 0.05).video_bps,
             plan.video_bps
         );
+    }
+
+    /// A conforming H.264 file of `size` and 600 s, planned with the given target/codec/preset.
+    fn encode_plan(
+        size: u64,
+        target_mb: Option<u64>,
+        codec: VideoCodec,
+        preset: EncodePreset,
+    ) -> Plan {
+        let source = PathBuf::from("clip.mp4");
+        let info = info(video("h264", "High", "yuv420p"), Some("aac"), Some(600.0));
+        let mut wanted = input(&source, size);
+        wanted.target_bytes = target_mb.map(|mb| mb * MIB);
+        wanted.codec = codec;
+        wanted.preset = preset;
+        build_plan(Some(&info), &wanted).unwrap()
+    }
+
+    #[test]
+    fn a_custom_target_sets_the_bitrate_and_keeps_the_limit_as_the_ceiling() {
+        let plan = encode_plan(
+            300 * MIB,
+            Some(40),
+            VideoCodec::H264,
+            EncodePreset::Balanced,
+        );
+        assert_eq!(plan.kind, Kind::Encode);
+        // The margin applies to the target as it does to the limit.
+        assert_eq!(
+            plan.video_bps,
+            plan_bitrate(40 * MIB, 0.03, 600.0, Some(128))
+        );
+        assert_eq!(
+            plan.limit_bytes,
+            100 * MIB,
+            "the upload check keeps the real limit"
+        );
+        assert_eq!(plan.target_bytes, Some(40 * MIB));
+        assert_eq!(plan.aim_bytes(), 40 * MIB);
+        // The estimate follows the aim less the margin.
+        let estimate = plan.estimated_bytes().unwrap() as f64;
+        let expected = 40.0 * MIB as f64 * 0.97;
+        assert!((estimate - expected).abs() / expected < 0.001, "{estimate}");
+    }
+
+    #[test]
+    fn a_target_at_or_above_the_limit_is_the_same_as_filling_the_limit() {
+        let fill = encode_plan(300 * MIB, None, VideoCodec::H264, EncodePreset::Balanced);
+        for mb in [100, 4000] {
+            let plan = encode_plan(
+                300 * MIB,
+                Some(mb),
+                VideoCodec::H264,
+                EncodePreset::Balanced,
+            );
+            assert_eq!(plan, fill, "target {mb} MiB");
+        }
+        assert_eq!(fill.target_bytes, None);
+        assert_eq!(fill.aim_bytes(), 100 * MIB);
+    }
+
+    #[test]
+    fn a_file_under_the_target_is_sent_as_is_and_one_above_it_is_encoded() {
+        let under = encode_plan(30 * MIB, Some(40), VideoCodec::H264, EncodePreset::Balanced);
+        assert_eq!(under.kind, Kind::Skip);
+        // Telegram would take 60 MiB, but the user asked for 40.
+        let above = encode_plan(60 * MIB, Some(40), VideoCodec::H264, EncodePreset::Balanced);
+        assert_eq!(above.kind, Kind::Encode);
+        // A target the duration cannot hold is refused before encoding.
+        let source = PathBuf::from("clip.mp4");
+        let long = info(
+            video("h264", "High", "yuv420p"),
+            Some("aac"),
+            Some(36_000.0),
+        );
+        let mut tiny = input(&source, 60 * MIB);
+        tiny.target_bytes = Some(5 * MIB);
+        assert_eq!(
+            build_plan(Some(&long), &tiny).unwrap_err(),
+            PlanError::TooLarge
+        );
+    }
+
+    #[test]
+    fn codec_and_preset_reach_an_encode_plan_and_only_that() {
+        let hevc = encode_plan(300 * MIB, None, VideoCodec::Hevc, EncodePreset::Quality);
+        assert_eq!(
+            (hevc.video_codec, hevc.preset),
+            (VideoCodec::Hevc, EncodePreset::Quality)
+        );
+        // The bitrate formula does not depend on the codec.
+        let h264 = encode_plan(300 * MIB, None, VideoCodec::H264, EncodePreset::Balanced);
+        assert_eq!(hevc.video_bps, h264.video_bps);
+        // A copy does not encode: its plan carries no choice, so two copies always match.
+        let copy = encode_plan(10 * MIB, Some(40), VideoCodec::Hevc, EncodePreset::Quality);
+        assert_eq!(copy.kind, Kind::Skip);
+        assert_eq!(
+            (copy.video_codec, copy.preset, copy.target_bytes),
+            (VideoCodec::H264, EncodePreset::Balanced, None)
+        );
+    }
+
+    #[test]
+    fn the_cpu_retry_plan_keeps_the_custom_target() {
+        let mut plan = encode_plan(300 * MIB, Some(40), VideoCodec::H264, EncodePreset::Faster);
+        plan.encoder = Some("h264_nvenc".into());
+        let next = for_fallback(&plan, "libx264", 0.05);
+        assert_eq!(
+            next.video_bps,
+            plan_bitrate(40 * MIB, 0.05, 600.0, Some(128))
+        );
+        assert_eq!(
+            (next.target_bytes, next.preset, next.video_codec),
+            (plan.target_bytes, plan.preset, plan.video_codec)
+        );
+    }
+
+    #[test]
+    fn a_plan_stored_before_these_choices_reads_as_h264_balanced_no_target() {
+        let old = serde_json::json!({
+            "kind": "encode", "limit_bytes": 1, "duration_s": null, "video_bps": 5,
+            "audio_kbps": null, "video_index": 0, "audio_index": null, "vf": null,
+            "hdr": false, "encoder": "h264_nvenc", "output_name": "x_sq.mp4", "photo": null,
+            "source_dims": null, "alpha": false, "note": null
+        });
+        let plan: Plan = serde_json::from_value(old).unwrap();
+        assert_eq!(
+            (plan.video_codec, plan.preset, plan.target_bytes),
+            (VideoCodec::H264, EncodePreset::Balanced, None)
+        );
+    }
+
+    #[test]
+    fn a_files_choices_are_valid_within_the_target_range() {
+        let choices = |target_mb| EncodingOverride {
+            video_codec: VideoCodec::Hevc,
+            max_resolution: ResolutionCap::P1440,
+            target_mb,
+        };
+        for ok in [None, Some(1), Some(4000)] {
+            assert!(choices(ok).is_valid(), "{ok:?}");
+        }
+        for bad in [Some(0), Some(4001)] {
+            assert!(!choices(bad).is_valid(), "{bad:?}");
+        }
+        // The page sends this shape and no other.
+        let json = serde_json::json!({
+            "video_codec": "hevc", "max_resolution": "1440p", "target_mb": null
+        });
+        assert_eq!(
+            serde_json::from_value::<EncodingOverride>(json).unwrap(),
+            choices(None)
+        );
+        let extra = serde_json::json!({
+            "video_codec": "h264", "max_resolution": "1080p", "target_mb": null, "audio": 1
+        });
+        assert!(serde_json::from_value::<EncodingOverride>(extra).is_err());
     }
 
     #[test]

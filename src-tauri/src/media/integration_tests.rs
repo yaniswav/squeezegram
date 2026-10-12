@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use super::MediaError;
@@ -17,6 +18,7 @@ use super::encode::{self, Job};
 use super::plan::{Kind, MIB, Plan};
 use super::probe;
 use super::stage::FfmpegStage;
+use crate::entitlements::{EntitlementStatus, Entitlements, Feature};
 use crate::limit::LimitResolver;
 use crate::queue::events::recorder::Recorder;
 use crate::queue::events::{Phase, ProgressReporter};
@@ -56,8 +58,34 @@ struct Env {
     sink: Arc<Recorder>,
 }
 
+/// A license that grants every feature, for the tests of the Premium choices.
+struct Granted;
+
+impl Entitlements for Granted {
+    fn allows(&self, _feature: Feature) -> bool {
+        true
+    }
+
+    fn status(&self) -> EntitlementStatus {
+        crate::entitlements::FreeOnly.status()
+    }
+}
+
 impl Env {
     fn new(limit_mb: u64) -> Option<Self> {
+        Self::with(
+            limit_mb,
+            Arc::new(crate::entitlements::FreeOnly),
+            &json!({}),
+        )
+    }
+
+    /// `extra` is a settings patch applied on top (`advanced_encoding`…).
+    fn with(
+        limit_mb: u64,
+        entitlements: Arc<dyn Entitlements>,
+        extra: &serde_json::Value,
+    ) -> Option<Self> {
         let ffmpeg = ffmpeg_dir()?;
         let dir = TestDir::new("media-it");
         let settings = Arc::new(SettingsStore::load(dir.path().join("settings.json")).unwrap());
@@ -68,6 +96,7 @@ impl Env {
                 "temp": { "dir": dir.path().join("tmp").to_string_lossy(), "min_free_gb": 0 },
             }))
             .unwrap();
+        settings.set(extra).unwrap();
         let sidecars = Arc::new(SidecarService::new(
             dir.path().join("sidecars"),
             settings.clone(),
@@ -78,7 +107,7 @@ impl Env {
                 sidecars,
                 settings.clone(),
                 Arc::new(LimitResolver::new(settings, None)),
-                Arc::new(crate::entitlements::FreeOnly),
+                entitlements,
             ),
             dir,
             store: memory_store(),
@@ -273,6 +302,61 @@ async fn nvenc_lands_between_95_and_100_percent_of_the_target() {
     // Progress ended at 100 %.
     let progress = env.sink.progress.lock().unwrap();
     assert_eq!(progress.last().unwrap().percent, 100.0);
+}
+
+/// HEVC on a real GPU encoder, with a custom target below the limit (Premium choices). Returns
+/// early when no HEVC encoder passes its test encode. The ratio is printed, not asserted: the
+/// HEVC rate control is not measured; what must hold is that the limit is never exceeded.
+#[tokio::test]
+async fn hevc_nvenc_encodes_hevc_tagged_hvc1_under_the_limit_and_near_the_target() {
+    let Some(mut env) = Env::with(
+        8,
+        Arc::new(Granted),
+        &json!({ "advanced_encoding": {
+            "video_codec": "hevc", "preset": "quality", "target_mb": 3
+        } }),
+    ) else {
+        return;
+    };
+    if !env.stage.codec_support().await.hevc {
+        return;
+    }
+    let clip = noisy_clip(&env, "src.mkv", 20);
+    let (_, probe, result) = env
+        .run(&clip, SendMode::Video, &CancellationToken::new())
+        .await;
+    let plan = plan_of(&probe.unwrap());
+    assert_eq!(plan.kind, Kind::Encode);
+    assert_eq!(plan.target_bytes, Some(3 * MIB));
+    assert!(plan.encoder.as_deref().unwrap().starts_with("hevc_"));
+    let output = result.unwrap().unwrap();
+
+    let ratio = output.output_size as f64 / (3 * MIB) as f64;
+    println!(
+        "{}: {} bytes = {:.2} % of the 3 MiB target",
+        plan.encoder.as_deref().unwrap(),
+        output.output_size,
+        ratio * 100.0
+    );
+    assert!(
+        output.output_size as u64 <= 8 * MIB,
+        "never above the limit"
+    );
+    assert!(ratio <= 1.1, "ratio {ratio}");
+    let info = env.ffprobe(Path::new(&output.output_path)).await;
+    let video = info.video.unwrap();
+    assert_eq!(
+        (video.codec.as_str(), video.pix_fmt.as_deref()),
+        ("hevc", Some("yuv420p"))
+    );
+    assert!((info.duration_s.unwrap() - 20.0).abs() < 0.5);
+    let tag = std::process::Command::new(env.ffmpeg.join("ffprobe.exe"))
+        .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
+        .args(["stream=codec_tag_string", "-of", "csv=p=0"])
+        .arg(&output.output_path)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&tag.stdout).trim(), "hvc1");
 }
 
 #[tokio::test]

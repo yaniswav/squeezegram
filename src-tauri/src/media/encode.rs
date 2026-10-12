@@ -10,7 +10,7 @@ use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::detect::{Encoder, Tools};
-use super::plan::{self, Kind, PHOTO_MAX_BYTES, PhotoSize, Plan};
+use super::plan::{self, EncodePreset, Kind, PHOTO_MAX_BYTES, PhotoSize, Plan, VideoCodec};
 use super::probe;
 use super::procs::{self, Args, Ending, Spec};
 use super::{MediaError, Result};
@@ -128,12 +128,24 @@ impl ProgressParser {
 
 // --- arguments ---
 
-/// Rate-control options of the H.264 encoders for a target video bitrate.
+/// Encoder options for a target video bitrate: the encoder of `codec`, its speed/quality
+/// `preset`, the rate control, the profile and (HEVC) the MP4 tag.
 ///
-/// NVENC and x264 are measured. **QSV, AMF, libopenh264 and h264_mf are NOT
-/// measured**: they use the same prudent CBR-like scheme (`-b:v V -maxrate V -bufsize 2V`); the
-/// corrective pass catches a drift, but the size they reach has not been validated.
-pub fn video_options(encoder: Encoder, video_bps: u64) -> Vec<String> {
+/// NVENC and x264 at the balanced preset are measured. **QSV, AMF, libopenh264 and h264_mf
+/// are NOT measured, nor is any HEVC encoder, nor the faster and quality presets**: they use
+/// the same prudent CBR-like scheme (`-b:v V -maxrate V -bufsize 2V`); the corrective pass
+/// catches a drift, but the size they reach has not been validated.
+///
+/// Presets per family (`faster` / `balanced` / `quality`): NVENC `p3` / `p5` / `p7`, x264 and
+/// QSV `faster` / `medium` / `slower`, AMF `speed` / `balanced` / `quality`. libopenh264 and
+/// h264_mf expose no speed knob in ffmpeg: the preset changes nothing there. HEVC exists on
+/// the GPU families only (`Encoder::codec_name`; `encode_video` refuses the other pairs).
+pub fn video_options(
+    encoder: Encoder,
+    codec: VideoCodec,
+    preset: EncodePreset,
+    video_bps: u64,
+) -> Vec<String> {
     let v = video_bps.to_string();
     let buffer = (video_bps * 2).to_string();
     let rate = |extra: &[&str]| -> Vec<String> {
@@ -145,26 +157,48 @@ pub fn video_options(encoder: Encoder, video_bps: u64) -> Vec<String> {
         );
         options
     };
+    let pick = |faster: &'static str, balanced: &'static str, quality: &'static str| match preset {
+        EncodePreset::Faster => faster,
+        EncodePreset::Balanced => balanced,
+        EncodePreset::Quality => quality,
+    };
+    let name = encoder.codec_name(codec).unwrap_or_else(|| encoder.name());
     let mut options = match encoder {
         Encoder::Nvenc => rate(&[
             "-c:v",
-            "h264_nvenc",
+            name,
             "-preset",
-            "p5",
+            pick("p3", "p5", "p7"),
             "-tune",
             "hq",
             "-rc",
             "cbr",
         ]),
-        Encoder::X264 => rate(&["-c:v", "libx264", "-preset", "medium"]),
+        Encoder::X264 => rate(&["-c:v", name, "-preset", pick("faster", "medium", "slower")]),
         // Not measured:
-        Encoder::Qsv => rate(&["-c:v", "h264_qsv", "-preset", "medium"]),
-        Encoder::Amf => rate(&["-c:v", "h264_amf", "-quality", "balanced", "-rc", "cbr"]),
-        Encoder::OpenH264 => rate(&["-c:v", "libopenh264", "-rc_mode", "bitrate"]),
-        Encoder::MediaFoundation => rate(&["-c:v", "h264_mf", "-rate_control", "cbr"]),
+        Encoder::Qsv => rate(&["-c:v", name, "-preset", pick("faster", "medium", "slower")]),
+        Encoder::Amf => rate(&[
+            "-c:v",
+            name,
+            "-quality",
+            pick("speed", "balanced", "quality"),
+            "-rc",
+            "cbr",
+        ]),
+        Encoder::OpenH264 => rate(&["-c:v", name, "-rc_mode", "bitrate"]),
+        Encoder::MediaFoundation => rate(&["-c:v", name, "-rate_control", "cbr"]),
     };
     if encoder != Encoder::MediaFoundation {
-        options.extend(["-profile:v".to_owned(), "high".to_owned()]);
+        let profile = match codec {
+            VideoCodec::H264 => "high",
+            VideoCodec::Hevc => "main",
+        };
+        options.extend(["-profile:v".to_owned(), profile.to_owned()]);
+    }
+    if codec == VideoCodec::Hevc {
+        // Without `hvc1` an MP4 carries `hev1`, which Apple players and some Telegram clients
+        // refuse.
+        options.extend(["-tag:v".to_owned(), "hvc1".to_owned()]);
     }
     options
 }
@@ -213,7 +247,7 @@ fn encode_args(job: &Job<'_>, encoder: Encoder, video_bps: u64, pass: Pass, part
     if let Some(vf) = &plan.vf {
         args = args.arg("-vf").arg(vf);
     }
-    for option in video_options(encoder, video_bps) {
+    for option in video_options(encoder, plan.video_codec, plan.preset, video_bps) {
         args = args.arg(option);
     }
     match pass {
@@ -337,6 +371,7 @@ fn hardware_encoder_error(stderr: &str) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncoderStop {
     pub encoder: Encoder,
+    pub codec: VideoCodec,
     pub exit_code: Option<i32>,
     /// Time spent in the failed run.
     pub elapsed_ms: u64,
@@ -348,6 +383,13 @@ pub struct EncoderStop {
 }
 
 impl EncoderStop {
+    /// The ffmpeg name of the encoder that stopped (`h264_nvenc`, `hevc_nvenc`…).
+    pub fn encoder_name(&self) -> &'static str {
+        self.encoder
+            .codec_name(self.codec)
+            .unwrap_or_else(|| self.encoder.name())
+    }
+
     /// Whole seconds of the failed run, as shown to the user.
     pub fn at_seconds(&self) -> u64 {
         (self.elapsed_ms as f64 / 1000.0).round() as u64
@@ -359,7 +401,7 @@ impl std::fmt::Display for EncoderStop {
         write!(
             f,
             "{} stopped mid-encode: exit {:?} after {} ms at {:.2} s of output, stderr: {}",
-            self.encoder.name(),
+            self.encoder_name(),
             self.exit_code,
             self.elapsed_ms,
             self.out_time_s,
@@ -495,6 +537,7 @@ async fn run_ffmpeg(
         {
             return Err(MediaError::EncoderStopped(Box::new(EncoderStop {
                 encoder,
+                codec: job.plan.video_codec,
                 exit_code: output.code,
                 elapsed_ms: crate::logging::ms_since(began),
                 out_time_s: reached_s,
@@ -625,7 +668,18 @@ pub async fn encode_video(job: &Job<'_>, encoder: Encoder) -> Result<Produced> {
 
 async fn encode_video_inner(job: &Job<'_>, encoder: Encoder) -> Result<Produced> {
     let plan = job.plan;
-    let limit = plan.limit_bytes;
+    if encoder.codec_name(plan.video_codec).is_none() {
+        return Err(MediaError::failed(
+            "FFMPEG_ENCODER_UNAVAILABLE",
+            format!(
+                "{} has no {} encoder",
+                encoder.name(),
+                plan.video_codec.as_str()
+            ),
+        ));
+    }
+    // The hard ceiling, and what a custom target aims under (the limit when there is none).
+    let (limit, aim) = (plan.limit_bytes, plan.aim_bytes());
     let mut video_bps = plan
         .video_bps
         .ok_or_else(|| MediaError::failed("FFMPEG_FAILED", "plan has no video bitrate"))?;
@@ -634,7 +688,7 @@ async fn encode_video_inner(job: &Job<'_>, encoder: Encoder) -> Result<Produced>
     } else {
         0
     };
-    prepare(job, (limit as f64 * SPACE_FACTOR) as u64 + slack)?;
+    prepare(job, (aim as f64 * SPACE_FACTOR) as u64 + slack)?;
     let part = job.part();
 
     for attempt in 0..2 {
@@ -673,29 +727,35 @@ async fn encode_video_inner(job: &Job<'_>, encoder: Encoder) -> Result<Produced>
             .await?;
         }
         let size = file_size(&part)?;
-        if size <= limit {
+        // Over the aim: one corrective pass. A file still over a custom target but under the
+        // limit (second pass, or a bitrate that cannot go lower) is kept: the target is a wish,
+        // the limit is the rule.
+        let corrected = if size <= aim || attempt > 0 {
+            None
+        } else {
+            plan::corrective_video_bps(video_bps, aim, size)
+        };
+        if let Some(corrected) = corrected {
+            tracing::info!(
+                event = "encode_corrective_pass",
+                size,
+                limit,
+                aim,
+                video_bps,
+                corrected_bps = corrected,
+                codec = plan.video_codec.as_str(),
+                "output over the target: one corrective pass"
+            );
+            video_bps = corrected;
+        } else if size <= limit {
             verify_duration(job, &part).await?;
             cleanup_pass_logs(job);
             return finish(job);
-        }
-        match (attempt, plan::corrective_video_bps(video_bps, limit, size)) {
-            (0, Some(corrected)) => {
-                tracing::info!(
-                    event = "encode_corrective_pass",
-                    size,
-                    limit,
-                    video_bps,
-                    corrected_bps = corrected,
-                    "output over the limit: one corrective pass"
-                );
-                video_bps = corrected;
-            }
-            _ => {
-                return Err(MediaError::failed(
-                    "OUTPUT_TOO_LARGE",
-                    format!("{size} bytes against a limit of {limit}"),
-                ));
-            }
+        } else {
+            return Err(MediaError::failed(
+                "OUTPUT_TOO_LARGE",
+                format!("{size} bytes against a limit of {limit}"),
+            ));
         }
     }
     Err(MediaError::failed("OUTPUT_TOO_LARGE", "unreachable"))
@@ -892,7 +952,8 @@ mod tests {
             Encoder::MediaFoundation,
             Encoder::X264,
         ] {
-            let options = video_options(encoder, 1_000_000);
+            let options =
+                video_options(encoder, VideoCodec::H264, EncodePreset::Balanced, 1_000_000);
             let find = |flag: &str| {
                 options
                     .iter()
@@ -904,8 +965,332 @@ mod tests {
             assert_eq!(find("-maxrate"), Some("1000000"));
             assert_eq!(find("-bufsize"), Some("2000000"));
         }
-        let nvenc = video_options(Encoder::Nvenc, 5);
+        let nvenc = video_options(Encoder::Nvenc, VideoCodec::H264, EncodePreset::Balanced, 5);
         assert!(nvenc.windows(2).any(|w| w == ["-rc", "cbr"]));
+    }
+
+    fn flag<'a>(options: &'a [String], name: &str) -> Option<&'a str> {
+        options
+            .iter()
+            .position(|o| o == name)
+            .map(|i| options[i + 1].as_str())
+    }
+
+    #[test]
+    fn presets_map_to_each_encoder_family_and_balanced_is_the_old_recipe() {
+        use EncodePreset::{Balanced, Faster, Quality};
+        let options = |encoder, preset| video_options(encoder, VideoCodec::H264, preset, 1_000);
+        for (encoder, name, values) in [
+            (Encoder::Nvenc, "-preset", ["p3", "p5", "p7"]),
+            (Encoder::X264, "-preset", ["faster", "medium", "slower"]),
+            (Encoder::Qsv, "-preset", ["faster", "medium", "slower"]),
+            (Encoder::Amf, "-quality", ["speed", "balanced", "quality"]),
+        ] {
+            for (preset, expected) in [Faster, Balanced, Quality].into_iter().zip(values) {
+                let list = options(encoder, preset);
+                assert_eq!(flag(&list, name), Some(expected), "{encoder:?} {preset:?}");
+            }
+        }
+        // No speed knob in ffmpeg for these: the preset changes nothing.
+        for encoder in [Encoder::OpenH264, Encoder::MediaFoundation] {
+            assert_eq!(
+                options(encoder, Faster),
+                options(encoder, Quality),
+                "{encoder:?}"
+            );
+        }
+        // What shipped before the choice existed, byte for byte.
+        assert_eq!(
+            options(Encoder::Nvenc, Balanced).join(" "),
+            "-c:v h264_nvenc -preset p5 -tune hq -rc cbr -b:v 1000 -maxrate 1000 -bufsize 2000 \
+             -profile:v high"
+        );
+        assert_eq!(
+            options(Encoder::X264, Balanced).join(" "),
+            "-c:v libx264 -preset medium -b:v 1000 -maxrate 1000 -bufsize 2000 -profile:v high"
+        );
+    }
+
+    #[test]
+    fn hevc_uses_the_gpu_encoder_main_profile_and_the_hvc1_tag() {
+        for (encoder, name) in [
+            (Encoder::Nvenc, "hevc_nvenc"),
+            (Encoder::Qsv, "hevc_qsv"),
+            (Encoder::Amf, "hevc_amf"),
+        ] {
+            for preset in [
+                EncodePreset::Faster,
+                EncodePreset::Balanced,
+                EncodePreset::Quality,
+            ] {
+                let list = video_options(encoder, VideoCodec::Hevc, preset, 2_000_000);
+                assert_eq!(flag(&list, "-c:v"), Some(name));
+                assert_eq!(flag(&list, "-profile:v"), Some("main"));
+                assert_eq!(
+                    flag(&list, "-tag:v"),
+                    Some("hvc1"),
+                    "{name}: MP4 needs hvc1"
+                );
+                assert_eq!(flag(&list, "-b:v"), Some("2000000"));
+                assert_eq!(flag(&list, "-maxrate"), Some("2000000"));
+                assert_eq!(flag(&list, "-bufsize"), Some("4000000"));
+            }
+        }
+        // HEVC presets use the same knobs as the H.264 ones of the family.
+        let quality = video_options(Encoder::Nvenc, VideoCodec::Hevc, EncodePreset::Quality, 1);
+        assert_eq!(flag(&quality, "-preset"), Some("p7"));
+        assert!(quality.windows(2).any(|w| w == ["-rc", "cbr"]));
+        // H.264 never gets the tag.
+        let h264 = video_options(Encoder::Nvenc, VideoCodec::H264, EncodePreset::Balanced, 1);
+        assert_eq!(flag(&h264, "-tag:v"), None);
+        // The CPU families have no HEVC encoder.
+        for encoder in [Encoder::X264, Encoder::OpenH264, Encoder::MediaFoundation] {
+            assert_eq!(encoder.codec_name(VideoCodec::Hevc), None, "{encoder:?}");
+        }
+    }
+
+    #[test]
+    fn a_hevc_encode_command_names_the_hevc_encoder_and_tags_the_mp4() {
+        let fx = Fixture::new();
+        let mut plan = sample_plan();
+        plan.video_codec = VideoCodec::Hevc;
+        plan.preset = EncodePreset::Quality;
+        let (_, text) = fx.args(&plan, |job, part| {
+            encode_args(job, Encoder::Nvenc, 900_000, Pass::Single, part)
+        });
+        assert!(
+            text.contains("-c:v hevc_nvenc -preset p7 -tune hq -rc cbr -b:v 900000"),
+            "{text}"
+        );
+        assert!(
+            text.contains("-profile:v main -tag:v hvc1 -pix_fmt yuv420p"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("h264_nvenc") && !text.contains("-profile:v high"),
+            "{text}"
+        );
+        assert!(text.contains("-ac 2 -movflags +faststart -f mp4"), "{text}");
+    }
+
+    /// `.cmd` ffmpeg/ffprobe stand-ins for `encode_video`: every run logs its arguments in
+    /// `calls.txt` and copies `first.bin` to the output the first time, `second.bin` after.
+    struct Sizes {
+        dir: crate::queue::test_util::TestDir,
+    }
+
+    impl Sizes {
+        fn new(name: &str, first: usize, second: usize) -> Self {
+            let dir = crate::queue::test_util::TestDir::new(name);
+            std::fs::write(dir.path().join("first.bin"), vec![1u8; first]).unwrap();
+            std::fs::write(dir.path().join("second.bin"), vec![2u8; second]).unwrap();
+            let lines = [
+                "@echo off",
+                "setlocal",
+                "set \"HERE=%~dp0\"",
+                "set \"OUT=\"",
+                ":args",
+                "if \"%~1\"==\"\" goto run",
+                "set \"OUT=%~1\"",
+                "shift",
+                "goto args",
+                ":run",
+                "echo %*>>\"%HERE%calls.txt\"",
+                "if exist \"%HERE%first.done\" goto second",
+                "echo done>\"%HERE%first.done\"",
+                "copy /y \"%HERE%first.bin\" \"%OUT%\" >nul",
+                "goto end",
+                ":second",
+                "copy /y \"%HERE%second.bin\" \"%OUT%\" >nul",
+                ":end",
+                "echo out_time_us=60000000",
+                "echo progress=end",
+                "exit /b 0",
+            ];
+            std::fs::write(dir.path().join("ffmpeg.cmd"), lines.join("\r\n") + "\r\n").unwrap();
+            std::fs::write(
+                dir.path().join("ffprobe.cmd"),
+                "@echo off\r\necho {\"streams\":[],\"format\":{\"format_name\":\"mov,mp4\",\"duration\":\"60.000000\"}}\r\n",
+            )
+            .unwrap();
+            Self { dir }
+        }
+
+        /// Runs `encode_video` with `plan` on `encoder`; returns the result and the codec
+        /// (`-c:v`) and bitrate (`-b:v`) of each ffmpeg run.
+        async fn run(
+            &self,
+            plan: &Plan,
+            encoder: Encoder,
+        ) -> (Result<Produced>, Vec<(String, String)>) {
+            let ffmpeg = self.dir.path().join("ffmpeg.cmd");
+            let ffprobe = self.dir.path().join("ffprobe.cmd");
+            let tools = Tools {
+                ffmpeg: &ffmpeg,
+                ffprobe: &ffprobe,
+            };
+            let input = self.dir.path().join("in.mkv");
+            std::fs::write(&input, b"source").unwrap();
+            let out_dir = self.dir.path().join("out");
+            let fx = Fixture::new();
+            let job = Job {
+                tools: &tools,
+                input: &input,
+                plan,
+                out_dir: &out_dir,
+                min_free_bytes: 0,
+                cancel: &fx.cancel,
+                progress: &fx.progress,
+            };
+            let result = encode_video(&job, encoder).await;
+            let calls = std::fs::read_to_string(self.dir.path().join("calls.txt"))
+                .unwrap_or_default()
+                .lines()
+                .map(|line| {
+                    let words: Vec<&str> = line.split_whitespace().collect();
+                    let after = |flag: &str| {
+                        words
+                            .iter()
+                            .position(|w| *w == flag)
+                            .map(|i| words[i + 1].to_owned())
+                            .unwrap_or_default()
+                    };
+                    (after("-c:v"), after("-b:v"))
+                })
+                .collect();
+            (result, calls)
+        }
+
+        fn out(&self, name: &str) -> PathBuf {
+            self.dir.path().join("out").join(name)
+        }
+    }
+
+    fn sized_plan(limit: u64, target: Option<u64>, codec: VideoCodec) -> Plan {
+        Plan {
+            limit_bytes: limit,
+            target_bytes: target,
+            video_codec: codec,
+            audio_kbps: None,
+            audio_index: None,
+            vf: None,
+            output_name: "clip_sq.mp4".into(),
+            ..sample_plan()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_hevc_file_over_the_limit_gets_one_corrective_pass_with_hevc() {
+        let sizes = Sizes::new("encode-hevc-corrective", 11_000, 9_000);
+        let plan = sized_plan(10_000, None, VideoCodec::Hevc);
+        let (result, calls) = sizes.run(&plan, Encoder::Nvenc).await;
+        let produced = result.expect("the second pass fits");
+        assert_eq!(produced.size, 9_000);
+        let corrected = plan::corrective_video_bps(1_000_000, 10_000, 11_000).unwrap();
+        assert_eq!(
+            calls,
+            [
+                ("hevc_nvenc".into(), "1000000".into()),
+                ("hevc_nvenc".into(), corrected.to_string()),
+            ],
+            "both passes are HEVC, the second at the corrected bitrate"
+        );
+        assert!(!sizes.out("clip_sq.mp4.part").exists());
+    }
+
+    #[tokio::test]
+    async fn a_second_pass_still_over_the_limit_fails_and_leaves_no_file() {
+        let sizes = Sizes::new("encode-hevc-too-large", 12_000, 11_000);
+        let plan = sized_plan(10_000, None, VideoCodec::Hevc);
+        let (result, calls) = sizes.run(&plan, Encoder::Nvenc).await;
+        assert!(
+            matches!(
+                result,
+                Err(MediaError::Failed {
+                    code: "OUTPUT_TOO_LARGE",
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+        assert_eq!(calls.len(), 2, "one correction, never a third run");
+        assert!(!sizes.out("clip_sq.mp4").exists());
+        assert!(!sizes.out("clip_sq.mp4.part").exists());
+    }
+
+    #[tokio::test]
+    async fn a_file_within_the_limit_takes_a_single_pass() {
+        let sizes = Sizes::new("encode-single", 9_990, 1);
+        let plan = sized_plan(10_000, None, VideoCodec::H264);
+        let (result, calls) = sizes.run(&plan, Encoder::Nvenc).await;
+        assert_eq!(result.unwrap().size, 9_990);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "h264_nvenc");
+    }
+
+    #[tokio::test]
+    async fn a_custom_target_is_corrected_against_the_target_but_the_limit_decides() {
+        // Target 10 000 of a 100 000 limit. 11 000 is over the target: corrected. The second
+        // 10 500 is still over the target but far under the limit: kept.
+        let plan = sized_plan(100_000, Some(10_000), VideoCodec::Hevc);
+        let sizes = Sizes::new("encode-target-kept", 11_000, 10_500);
+        let (result, calls) = sizes.run(&plan, Encoder::Nvenc).await;
+        assert_eq!(result.unwrap().size, 10_500);
+        assert_eq!(calls.len(), 2);
+        let corrected = plan::corrective_video_bps(1_000_000, 10_000, 11_000).unwrap();
+        assert_eq!(
+            calls[1].1,
+            corrected.to_string(),
+            "scaled from the target, not from the limit"
+        );
+
+        // Over the target by a little: one correction brings it under.
+        let sizes = Sizes::new("encode-target-met", 10_300, 9_800);
+        let (result, calls) = sizes.run(&plan, Encoder::Nvenc).await;
+        assert_eq!(result.unwrap().size, 9_800);
+        assert_eq!(calls.len(), 2);
+
+        // A file under the target needs no correction.
+        let sizes = Sizes::new("encode-target-under", 9_900, 1);
+        let (result, calls) = sizes.run(&plan, Encoder::Nvenc).await;
+        assert_eq!(result.unwrap().size, 9_900);
+        assert_eq!(calls.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_limit_still_binds_with_a_custom_target() {
+        let sizes = Sizes::new("encode-target-limit", 13_000, 12_500);
+        let plan = sized_plan(12_000, Some(10_000), VideoCodec::H264);
+        let (result, calls) = sizes.run(&plan, Encoder::Nvenc).await;
+        assert!(
+            matches!(
+                result,
+                Err(MediaError::Failed {
+                    code: "OUTPUT_TOO_LARGE",
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+        assert_eq!(calls.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_encoder_without_the_codec_is_refused_before_any_run() {
+        let sizes = Sizes::new("encode-no-codec", 1, 1);
+        let plan = sized_plan(10_000, None, VideoCodec::Hevc);
+        let (result, calls) = sizes.run(&plan, Encoder::X264).await;
+        assert!(
+            matches!(
+                result,
+                Err(MediaError::Failed {
+                    code: "FFMPEG_ENCODER_UNAVAILABLE",
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+        assert!(calls.is_empty(), "ffmpeg never ran");
     }
 
     #[test]
@@ -962,6 +1347,7 @@ mod tests {
         }
         let stop = EncoderStop {
             encoder: Encoder::Nvenc,
+            codec: VideoCodec::H264,
             exit_code: Some(1),
             elapsed_ms: 4_499,
             out_time_s: 3.2,
@@ -1001,6 +1387,9 @@ mod tests {
             source_dims: None,
             alpha: false,
             note: None,
+            video_codec: VideoCodec::H264,
+            preset: EncodePreset::Balanced,
+            target_bytes: None,
         }
     }
 

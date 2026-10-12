@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::media::plan::ResolutionCap;
+use crate::media::plan::{EncodePreset, ResolutionCap, TARGET_MB_RANGE, VideoCodec};
 use crate::queue::orchestrator::PauseRange;
 
 pub const FILE_NAME: &str = "settings.json";
@@ -61,6 +61,15 @@ pub struct AdvancedEncoding {
     pub max_resolution: ResolutionCap,
     /// AAC bitrate of an encode or an audio conversion, one of `AUDIO_KBPS_CHOICES`.
     pub audio_kbps: u32,
+    /// `h264` or `hevc`. HEVC needs a GPU encoder that passed its test encode; without one the
+    /// plan falls back to H.264 (`media::stage`). Replaces `encoding.video_codec`, which was
+    /// never read.
+    pub video_codec: VideoCodec,
+    /// Speed/quality of the encoder (`faster`, `balanced`, `quality`), mapped per encoder.
+    pub preset: EncodePreset,
+    /// Custom output size in MiB, within `TARGET_MB_RANGE`. `null`: fill the upload limit. At
+    /// or above the effective limit it is the same as `null`.
+    pub target_mb: Option<u64>,
 }
 
 impl AdvancedEncoding {
@@ -68,6 +77,9 @@ impl AdvancedEncoding {
     pub const AUTOMATIC: Self = Self {
         max_resolution: ResolutionCap::P1080,
         audio_kbps: 128,
+        video_codec: VideoCodec::H264,
+        preset: EncodePreset::Balanced,
+        target_mb: None,
     };
 }
 
@@ -111,6 +123,8 @@ pub struct Encoding {
     /// Not read: the audio bitrate is `advanced_encoding.audio_kbps` with the feature, 128
     /// without. Kept so that the files that carry it still load.
     pub audio_kbps: u32,
+    /// Not read either: the codec is `advanced_encoding.video_codec` with the feature, H.264
+    /// without. A typed enum there, a free string here that every file already carries.
     pub video_codec: String,
 }
 
@@ -275,6 +289,11 @@ impl Settings {
                 "advanced_encoding.audio_kbps".into(),
             ));
         }
+        if let Some(mb) = self.advanced_encoding.target_mb
+            && !TARGET_MB_RANGE.contains(&mb)
+        {
+            return Err(SettingsError::Invalid("advanced_encoding.target_mb".into()));
+        }
         Ok(())
     }
 
@@ -431,7 +450,10 @@ mod tests {
               "watch": { "stable_seconds": 10 },
               "logging": { "level": null },
               "updates": { "check_automatically": true, "last_check_at": null },
-              "advanced_encoding": { "max_resolution": "1080p", "audio_kbps": 128 }
+              "advanced_encoding": {
+                "max_resolution": "1080p", "audio_kbps": 128, "video_codec": "h264",
+                "preset": "balanced", "target_mb": null
+              }
             })
         );
     }
@@ -471,6 +493,75 @@ mod tests {
             );
         }
         assert_eq!(store.get().advanced_encoding.audio_kbps, 192);
+    }
+
+    #[test]
+    fn codec_preset_and_target_load_from_older_files_and_are_validated() {
+        let dir = TestDir::new("settings-advanced-codec");
+        let path = dir.path().join(FILE_NAME);
+        // What the version with only a cap and an audio bitrate wrote.
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old["advanced_encoding"] = json!({ "max_resolution": "1440p", "audio_kbps": 160 });
+        std::fs::write(&path, old.to_string()).unwrap();
+        let store = SettingsStore::load(path.clone()).unwrap();
+        let loaded = store.get().advanced_encoding;
+        assert_eq!(
+            (loaded.max_resolution, loaded.audio_kbps),
+            (ResolutionCap::P1440, 160),
+            "the old choices are kept"
+        );
+        assert_eq!(
+            (loaded.video_codec, loaded.preset, loaded.target_mb),
+            (VideoCodec::H264, EncodePreset::Balanced, None),
+            "the new ones take today's behavior"
+        );
+        // `encoding.video_codec` of the very first files is still accepted and never read.
+        let mut first = serde_json::to_value(Settings::default()).unwrap();
+        first["encoding"]["video_codec"] = json!("hevc");
+        std::fs::write(&path, first.to_string()).unwrap();
+        let store = SettingsStore::load(path).unwrap();
+        assert_eq!(
+            store.get().advanced_encoding.video_codec,
+            VideoCodec::H264,
+            "the legacy string does not choose the codec"
+        );
+
+        let saved = store
+            .set(&json!({ "advanced_encoding": {
+                "video_codec": "hevc", "preset": "quality", "target_mb": 40
+            } }))
+            .unwrap();
+        assert_eq!(
+            (
+                saved.advanced_encoding.video_codec,
+                saved.advanced_encoding.preset,
+                saved.advanced_encoding.target_mb
+            ),
+            (VideoCodec::Hevc, EncodePreset::Quality, Some(40))
+        );
+        // `null` goes back to filling the limit.
+        let reset = store
+            .set(&json!({ "advanced_encoding": { "target_mb": null } }))
+            .unwrap();
+        assert_eq!(reset.advanced_encoding.target_mb, None);
+        assert_eq!(reset.advanced_encoding.video_codec, VideoCodec::Hevc);
+
+        for bad in [
+            json!({ "advanced_encoding": { "video_codec": "av1" } }),
+            json!({ "advanced_encoding": { "video_codec": "H264" } }),
+            json!({ "advanced_encoding": { "preset": "slow" } }),
+            json!({ "advanced_encoding": { "target_mb": 0 } }),
+            json!({ "advanced_encoding": { "target_mb": 4001 } }),
+            json!({ "advanced_encoding": { "target_mb": -5 } }),
+            json!({ "advanced_encoding": { "target_mb": 1.5 } }),
+        ] {
+            assert_eq!(
+                store.set(&bad).unwrap_err().code(),
+                "SETTINGS_INVALID",
+                "{bad}"
+            );
+        }
+        assert_eq!(store.get(), reset, "a refused patch changes nothing");
     }
 
     #[test]
