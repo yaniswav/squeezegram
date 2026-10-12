@@ -62,6 +62,8 @@ pub struct Background {
     settings: Arc<SettingsStore>,
     entitlements: Arc<dyn Entitlements>,
     autostart: Arc<dyn Autostart>,
+    /// Started with `--background`: the window starts hidden, so it needs the tray.
+    hidden_start: bool,
     wake: Notify,
     tray: Mutex<Option<TrayParts>>,
     /// Since when the license has been waiting for its account, if it is.
@@ -98,6 +100,7 @@ impl Background {
             settings,
             entitlements,
             autostart,
+            hidden_start,
             wake: Notify::new(),
             tray: Mutex::new(None),
             pending_since: Mutex::new(None),
@@ -305,7 +308,7 @@ impl Background {
         let wanted = tray_wanted(
             licensed,
             settings.background.close_action,
-            self.autostart.is_enabled(),
+            self.hidden_start,
         );
         if wanted && tray.is_none() {
             match self.build(&Labels::for_language(&settings.ui.language)) {

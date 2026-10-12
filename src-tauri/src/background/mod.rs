@@ -3,8 +3,8 @@
 //! - **Close to the notification area.** Setting `background.close_action`: `quit` (default,
 //!   and the only behavior without the license) or `tray`. With the license and `tray`,
 //!   closing the window hides it; the queue and the watched folders keep going.
-//! - **Tray icon** (`tray`): exists only while there is a reason to leave the window hidden,
-//!   that is when closing hides it or when the app is started hidden at login. Menu: open,
+//! - **Tray icon** (`tray`): exists only while the window can be hidden, that is when closing
+//!   hides it or when the app was started hidden (`--background`). Menu: open,
 //!   pause or resume the queue, quit. The tooltip tells what the queue is doing.
 //! - **Quit.** From the tray it goes through the normal exit (`RunEvent::ExitRequested`, see
 //!   `close_core` in `lib.rs`: watcher, queue, TDLib), after a confirmation in the window when
@@ -76,10 +76,12 @@ pub fn close_behavior(licensed: bool, action: CloseAction) -> CloseBehavior {
     }
 }
 
-/// Whether the tray icon should exist: the feature is licensed and either closing hides the
-/// window or the app starts hidden at login (a hidden window needs a way back).
-pub fn tray_wanted(licensed: bool, action: CloseAction, autostart: bool) -> bool {
-    licensed && (action == CloseAction::Tray || autostart)
+/// Whether the tray icon should exist: the feature is licensed and the window can be hidden,
+/// because closing hides it or because the app started hidden (a hidden window needs a way
+/// back). Having the startup entry is not a reason: an app started by hand with the window
+/// showing and `quit` chosen has nothing to hide.
+pub fn tray_wanted(licensed: bool, action: CloseAction, started_hidden: bool) -> bool {
+    licensed && (action == CloseAction::Tray || started_hidden)
 }
 
 /// Whether the feature counts as licensed right now. The license applies only while its
@@ -159,10 +161,10 @@ mod tests {
     #[test]
     fn the_tray_exists_for_a_reason_to_hide_and_never_without_the_license() {
         for action in ACTIONS {
-            for autostart in [false, true] {
+            for started_hidden in [false, true] {
                 assert!(
-                    !tray_wanted(false, action, autostart),
-                    "no tray without the license: {action:?}, autostart {autostart}"
+                    !tray_wanted(false, action, started_hidden),
+                    "no tray without the license: {action:?}, started hidden {started_hidden}"
                 );
             }
         }
@@ -170,9 +172,12 @@ mod tests {
         assert!(tray_wanted(true, CloseAction::Tray, true));
         assert!(
             tray_wanted(true, CloseAction::Quit, true),
-            "started hidden at login: the window needs a way back"
+            "started hidden: the window needs a way back"
         );
-        assert!(!tray_wanted(true, CloseAction::Quit, false));
+        assert!(
+            !tray_wanted(true, CloseAction::Quit, false),
+            "window showing and closing quits: nothing to hide"
+        );
     }
 
     #[test]
