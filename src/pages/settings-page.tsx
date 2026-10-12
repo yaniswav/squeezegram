@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { useCodecSupport } from "@/hooks/use-codec-support"
+import { useTelegramIdentity } from "@/hooks/use-telegram-identity"
 import {
   useEntitlementStatus,
   type EntitlementState,
@@ -78,6 +79,7 @@ import {
   type Settings,
   type SettingsPatch,
   type SidecarStatus,
+  type TelegramIdentity,
   type ThemeSetting,
   type VideoCodec,
   type WatchFolder,
@@ -111,6 +113,7 @@ interface Draft {
   pauseMin: string
   pauseMax: string
   captionTemplate: string
+  deviceName: string
   tempDir: string | null
   minFreeGb: string
   ffmpegDir: string | null
@@ -126,10 +129,17 @@ type ErrorKey =
   | "settings.send.errorInteger"
   | "settings.send.errorOrder"
   | "settings.temp.errorInteger"
+  | "settings.telegram.device.error"
 
 type DraftErrors = Partial<
   Record<
-    "customMb" | "margin" | "targetMb" | "pauseMin" | "pauseMax" | "minFreeGb",
+    | "customMb"
+    | "margin"
+    | "targetMb"
+    | "pauseMin"
+    | "pauseMax"
+    | "minFreeGb"
+    | "deviceName",
     ErrorKey
   >
 >
@@ -167,6 +177,7 @@ function toDraft(settings: Settings): Draft {
     pauseMin: settings.send.pause_min_s.toString(),
     pauseMax: settings.send.pause_max_s.toString(),
     captionTemplate: settings.send.caption_template,
+    deviceName: settings.telegram.device_name ?? "",
     tempDir: emptyToNull(settings.temp.dir),
     minFreeGb: settings.temp.min_free_gb.toString(),
     ffmpegDir: emptyToNull(settings.ffmpeg.custom_dir),
@@ -177,6 +188,19 @@ function toDraft(settings: Settings): Draft {
 }
 
 const WHOLE = /^\d+$/
+
+/** `settings::DEVICE_NAME_MAX_CHARS`, counted in characters as Rust does (not UTF-16 units). */
+const DEVICE_NAME_MAX = 64
+
+// A control character (line break, tab…) would reach Telegram's device list as is.
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
+
+function isDeviceName(name: string): boolean {
+  const trimmed = name.trim()
+
+  return [...trimmed].length <= DEVICE_NAME_MAX && !CONTROL.test(trimmed)
+}
 
 /** Same rules as `Settings::validate` (settings.rs) plus the types serde expects. */
 function validate(draft: Draft): DraftErrors {
@@ -215,6 +239,9 @@ function validate(draft: Draft): DraftErrors {
 
   if (!WHOLE.test(draft.minFreeGb.trim()))
     errors.minFreeGb = "settings.temp.errorInteger"
+
+  if (!isDeviceName(draft.deviceName))
+    errors.deviceName = "settings.telegram.device.error"
 
   return errors
 }
@@ -275,6 +302,13 @@ function toPatch(draft: Draft, settings: Settings): SettingsPatch {
 
   if (Object.keys(send).length > 0) patch.send = send
 
+  // Blank goes back to the default name ("squeezegram <machine>"); the core trims it too, so
+  // a stored name with spaces around it is not a change.
+  const deviceName = draft.deviceName.trim() || null
+
+  if (deviceName !== (settings.telegram.device_name?.trim() || null))
+    patch.telegram = { device_name: deviceName }
+
   const temp: NonNullable<SettingsPatch["temp"]> = {}
 
   if (draft.tempDir !== saved.tempDir) temp.dir = draft.tempDir
@@ -305,6 +339,7 @@ export function SettingsPage({ focusTitle }: { focusTitle: boolean }) {
   const { t } = useTranslation()
   const { status, settings, reload } = useSettings()
   const [entitlements, setEntitlements] = useEntitlementStatus()
+  const [identity] = useTelegramIdentity()
 
   return (
     <div className="space-y-6">
@@ -331,7 +366,11 @@ export function SettingsPage({ focusTitle }: { focusTitle: boolean }) {
           <GroupRiskSection
             acknowledged={settings.telegram.group_risk_acknowledged}
           />
-          <SettingsForm settings={settings} entitlements={entitlements} />
+          <SettingsForm
+            settings={settings}
+            entitlements={entitlements}
+            identity={identity}
+          />
         </>
       )}
     </div>
@@ -1008,9 +1047,11 @@ function LimitNow({ settings }: { settings: Settings["limit"] }) {
 function SettingsForm({
   settings,
   entitlements,
+  identity,
 }: {
   settings: Settings
   entitlements: EntitlementState
+  identity: TelegramIdentity | null
 }) {
   const { t } = useTranslation()
   const { save } = useSettings()
@@ -1401,6 +1442,27 @@ function SettingsForm({
             )}
           </Field>
         </div>
+      </Section>
+
+      <Section title={t("settings.telegram.title")}>
+        <Field
+          id={`${ids}-device`}
+          label={t("settings.telegram.device.label")}
+          hint={t("settings.telegram.device.hint")}
+          error={fieldError("deviceName")}
+        >
+          {(props) => (
+            <Input
+              {...props}
+              dir="auto"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={identity?.default_device_name}
+              value={draft.deviceName}
+              onChange={(event) => update("deviceName", event.target.value)}
+            />
+          )}
+        </Field>
       </Section>
 
       <Section

@@ -50,6 +50,7 @@ use queue::store::Store;
 use settings::SettingsStore;
 use sidecars::SidecarService;
 use transport::TelegramTransport;
+use transport::identity_settings::IdentityRuntime;
 use transport::select::TransportKind;
 use transport::stage::TransportStage;
 use update::UpdateService;
@@ -118,11 +119,14 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
     queue::sweep::sweep_default_root(&settings.get().temp, &store);
     // `SQUEEZEGRAM_TRANSPORT`, identity and `tdjson.dll`; logs `transport_selected`. Nothing
     // touches the network here.
+    let inputs = transport::select::Inputs::from_process(&settings.get());
     let transport::select::Selection {
         transport,
         kind: transport_kind,
         ..
-    } = transport::select::select(&transport::select::Inputs::from_process(&settings.get()));
+    } = transport::select::select(&inputs);
+    // What Settings > Telegram shows of that identity (default device name, stored api_hash).
+    let identity = IdentityRuntime::new(&inputs);
     // The plan and the upload share one limit: settings, else the signed-in account.
     let limits = Arc::new(LimitResolver::new(
         settings.clone(),
@@ -176,6 +180,7 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         sidecars,
         transport,
         transport_kind,
+        identity,
         media,
         limits,
         entitlements,
@@ -386,6 +391,7 @@ pub fn run() {
             commands::auth_state,
             commands::auth_submit,
             commands::auth_logout,
+            commands::telegram_identity,
             commands::settings_get,
             commands::settings_set,
             commands::history_query,

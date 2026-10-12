@@ -36,6 +36,7 @@ use crate::queue::{QueueError, State as ItemState};
 use crate::settings::{Settings, SettingsError, SettingsStore, patch_keys};
 use crate::sidecars::discover::{self, Discovery};
 use crate::sidecars::{SidecarError, SidecarService, SidecarStatus};
+use crate::transport::identity_settings::{IdentityRuntime, TelegramIdentity};
 use crate::transport::select::TransportKind;
 use crate::transport::service::{self, AuthPayload, DestinationCheck, ServiceError};
 use crate::transport::{AuthInput, SentCandidate, TelegramTransport, TransportError};
@@ -56,6 +57,8 @@ pub struct AppState {
     pub transport: Arc<dyn TelegramTransport>,
     /// Which transport runs (`auth_state`/`auth://state` carry it: the UI flags the mock).
     pub transport_kind: TransportKind,
+    /// Startup facts of the Telegram identity (`telegram_identity`).
+    pub identity: IdentityRuntime,
     /// Kept for the encoder detection of `debug_export`.
     pub media: Arc<FfmpegStage>,
     /// Effective upload limit (`limit_status`); the media stage holds the same resolver.
@@ -888,6 +891,13 @@ pub async fn auth_logout(state: State<'_, AppState>) -> CommandResult<()> {
     let call = Call::new("auth_logout");
     let result = state.transport.log_out().await;
     call.finish(result.map_err(Into::into))
+}
+
+/// The default device name and the personal API identity as Settings shows them: never the
+/// `api_hash`, only whether one is stored.
+#[tauri::command]
+pub fn telegram_identity(state: State<'_, AppState>) -> TelegramIdentity {
+    Call::quiet("telegram_identity").done(state.identity.status(&state.settings.get()))
 }
 
 // --- settings, history, sidecars ---

@@ -560,6 +560,21 @@ export interface AuthState {
   otherStep?: string
 }
 
+/**
+ * `identity_settings::TelegramIdentity`: what Settings shows of the identity the app presents
+ * to Telegram. Never the personal `api_hash`, only whether one is stored.
+ */
+export interface TelegramIdentity {
+  /** "squeezegram <machine>": the device name when `telegram.device_name` is empty. */
+  default_device_name: string
+  /** `telegram.api_override.api_id`; null: the product's identity. */
+  api_id: number | null
+  /** A personal `api_hash` is stored for this Windows user. */
+  api_hash_saved: boolean
+  /** The personal identity changed in this session: it applies after a restart. */
+  restart_required: boolean
+}
+
 /** `AuthInput`: `{ kind, value }`, `value` absent for `request_qr` and `resend_code`. */
 export type AuthInput =
   | {
@@ -1227,6 +1242,13 @@ const destinationCheckDecoder = d.object<DestinationCheck>({
   checked_at: d.string,
 })
 
+const telegramIdentityDecoder = d.object<TelegramIdentity>({
+  default_device_name: d.string,
+  api_id: d.nullable(d.number),
+  api_hash_saved: d.boolean,
+  restart_required: d.boolean,
+})
+
 const sentCandidateDecoder = d.object<SentCandidate>({
   message_id: d.number,
   date_unix: d.number,
@@ -1451,6 +1473,11 @@ export function authSubmit(input: AuthInput): Promise<void> {
 
 export function authLogout(): Promise<void> {
   return call("auth_logout", d.nothing)
+}
+
+/** Default device name and personal API identity (never the stored `api_hash`). */
+export function telegramIdentity(): Promise<TelegramIdentity> {
+  return call("telegram_identity", telegramIdentityDecoder)
 }
 
 export function settingsGet(): Promise<Settings> {

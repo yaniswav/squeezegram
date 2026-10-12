@@ -169,10 +169,24 @@ pub struct ApiOverride {
 #[serde(default, deny_unknown_fields)]
 pub struct Telegram {
     pub api_override: Option<ApiOverride>,
+    /// `device_model` of `setTdlibParameters`, shown in Telegram > Devices. `null` or blank:
+    /// "squeezegram <machine>". Read once, when the transport is built at startup.
     pub device_name: Option<String>,
     /// The user read the warning about sending to groups and channels (F33) and accepted it
     /// once. Only the interface reads it: the core never blocks a send on it.
     pub group_risk_acknowledged: bool,
+}
+
+/// Longest `telegram.device_name`, in characters. TDLib documents no limit for `device_model`
+/// (only "non-empty"); Telegram's device list shows a short line, so a long name would only be
+/// cut there. Same bound in the page (`DEVICE_NAME_MAX`).
+pub const DEVICE_NAME_MAX_CHARS: usize = 64;
+
+/// A device name the page may save: at most `DEVICE_NAME_MAX_CHARS` once trimmed, no control
+/// character (a line break would reach Telegram as is).
+fn is_device_name(name: &str) -> bool {
+    let name = name.trim();
+    name.chars().count() <= DEVICE_NAME_MAX_CHARS && !name.chars().any(char::is_control)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -318,6 +332,11 @@ impl Settings {
             && !TARGET_MB_RANGE.contains(&mb)
         {
             return Err(SettingsError::Invalid("advanced_encoding.target_mb".into()));
+        }
+        if let Some(name) = &self.telegram.device_name
+            && !is_device_name(name)
+        {
+            return Err(SettingsError::Invalid("telegram.device_name".into()));
         }
         Ok(())
     }
@@ -693,6 +712,36 @@ mod tests {
                 "telegram.device_name"
             ]
         );
+    }
+
+    #[test]
+    fn the_device_name_is_bounded_and_single_line() {
+        let dir = TestDir::new("settings-device");
+        let store = SettingsStore::load(dir.path().join(FILE_NAME)).unwrap();
+        // 64 characters, counted as characters (an emoji is one), surrounding spaces ignored.
+        let longest = format!("  {}🎬  ", "é".repeat(DEVICE_NAME_MAX_CHARS - 1));
+        let saved = store
+            .set(&json!({ "telegram": { "device_name": longest } }))
+            .unwrap();
+        assert_eq!(
+            saved.telegram.device_name.as_deref(),
+            Some(longest.as_str())
+        );
+        let reset = store
+            .set(&json!({ "telegram": { "device_name": null } }))
+            .unwrap();
+        assert_eq!(reset.telegram.device_name, None);
+        for bad in [
+            "x".repeat(DEVICE_NAME_MAX_CHARS + 1),
+            "Office\nPC".to_owned(),
+            "tab\there".to_owned(),
+        ] {
+            let error = store
+                .set(&json!({ "telegram": { "device_name": bad } }))
+                .unwrap_err();
+            assert_eq!(error.code(), "SETTINGS_INVALID", "{bad:?}");
+        }
+        assert_eq!(store.get(), reset, "a refused patch changes nothing");
     }
 
     #[test]

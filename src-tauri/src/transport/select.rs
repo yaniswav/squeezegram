@@ -94,21 +94,26 @@ impl Inputs {
         }
     }
 
-    /// `%LOCALAPPDATA%\squeezegram\tdlib`.
-    fn tdlib_dir(&self) -> Option<PathBuf> {
+    /// `%LOCALAPPDATA%\squeezegram\tdlib`: the TDLib database and the personal `api_hash.bin`.
+    pub(crate) fn tdlib_dir(&self) -> Option<PathBuf> {
         self.search
             .local_app_data
             .as_ref()
             .map(|base| base.join("squeezegram").join("tdlib"))
     }
 
-    /// `telegram.device_name`, else "squeezegram <machine>".
+    /// `telegram.device_name`, else `default_device_model`.
     pub(crate) fn device_model(&self) -> String {
-        let blank = |text: &&String| text.trim().is_empty();
-        if let Some(name) = self.device_name.as_ref().filter(|n| !blank(n)) {
-            return name.trim().to_owned();
+        match self.device_name.as_ref().filter(|n| !n.trim().is_empty()) {
+            Some(name) => name.trim().to_owned(),
+            None => self.default_device_model(),
         }
-        match self.machine_name.as_ref().filter(|n| !blank(n)) {
+    }
+
+    /// "squeezegram <machine>": the name without a setting, shown as the placeholder in
+    /// Settings.
+    pub(crate) fn default_device_model(&self) -> String {
+        match self.machine_name.as_ref().filter(|n| !n.trim().is_empty()) {
             Some(machine) => format!("{DEVICE_PREFIX} {}", machine.trim()),
             None => DEVICE_PREFIX.to_owned(),
         }
@@ -655,6 +660,7 @@ mod tests {
         assert_eq!(inputs.device_model(), "squeezegram TEST-PC");
         inputs.device_name = Some("  My laptop ".into());
         assert_eq!(inputs.device_model(), "My laptop");
+        assert_eq!(inputs.default_device_model(), "squeezegram TEST-PC");
         inputs.device_name = Some("   ".into());
         inputs.machine_name = None;
         assert_eq!(inputs.device_model(), "squeezegram");

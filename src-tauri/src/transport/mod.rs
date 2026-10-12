@@ -5,6 +5,7 @@
 //! - `mock`: deterministic `MockTransport`, compiled in tests and debug builds only.
 //! - `tdlib`: `TdlibJson`, the TDLib transport over `tdjson` (login, chats, upload, shutdown).
 //! - `select`: which transport the app uses (`SQUEEZEGRAM_TRANSPORT`, identity, DLL).
+//! - `identity_settings`: the device name and personal API identity Settings shows and edits.
 //! - `NoTransport`: no Telegram at all; refuses everything, with the reason when there is one.
 
 use std::fmt;
@@ -17,6 +18,7 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
+pub mod identity_settings;
 #[cfg(any(test, debug_assertions))]
 pub mod mock;
 pub mod select;

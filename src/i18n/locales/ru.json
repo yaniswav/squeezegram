@@ -607,6 +607,14 @@
       "errorInteger": "Введите целое число секунд, 0 или больше.",
       "errorOrder": "Минимум не может быть больше максимума."
     },
+    "telegram": {
+      "title": "Telegram",
+      "device": {
+        "label": "Device name",
+        "hint": "Shown in Telegram under Settings > Devices. Leave it empty to use the name shown here. squeezegram gives it to Telegram when it starts: a new name applies after a restart, and Telegram may keep showing the previous one for a session already signed in until you sign in again.",
+        "error": "Use at most 64 characters, on a single line."
+      }
+    },
     "caption": {
       "title": "Default caption",
       "hint": "Prefills the caption when you add files. Leave it empty for no caption.",
