@@ -53,6 +53,8 @@ import {
 import { grants, hasStoredLicense, licenseView } from "@/lib/entitlements"
 import { formatDateTime, formatList, formatNumber } from "@/lib/format"
 import {
+  apiIdentityClear,
+  apiIdentitySet,
   autostartSet,
   autostartStatus,
   debugExport,
@@ -339,7 +341,7 @@ export function SettingsPage({ focusTitle }: { focusTitle: boolean }) {
   const { t } = useTranslation()
   const { status, settings, reload } = useSettings()
   const [entitlements, setEntitlements] = useEntitlementStatus()
-  const [identity] = useTelegramIdentity()
+  const [identity, setIdentity] = useTelegramIdentity()
 
   return (
     <div className="space-y-6">
@@ -371,6 +373,9 @@ export function SettingsPage({ focusTitle }: { focusTitle: boolean }) {
             entitlements={entitlements}
             identity={identity}
           />
+          {identity && (
+            <ApiIdentitySection identity={identity} onChange={setIdentity} />
+          )}
         </>
       )}
     </div>
@@ -665,6 +670,228 @@ function LicenseSection({
         title={t("settings.license.remove.title")}
         description={t("settings.license.remove.body")}
         confirmLabel={t("settings.license.remove.confirm")}
+        cancelLabel={t("common.cancel")}
+        destructive
+        onConfirm={() => void remove()}
+      />
+    </Section>
+  )
+}
+
+/** Telegram's `api_id`: a positive int32 (`identity::parse_api_id`). */
+function isApiId(text: string): boolean {
+  return WHOLE.test(text) && Number(text) > 0 && Number(text) <= 2 ** 31 - 1
+}
+
+const API_HASH = /^[0-9a-fA-F]{32}$/
+
+/**
+ * Advanced (F32): the user's own `api_id`/`api_hash` instead of the product's. The hash is
+ * sent once to the core, which keeps it encrypted; it is never read back, only "saved".
+ * Changes need the account signed out (a session belongs to its `api_id`) and apply at the
+ * next start.
+ */
+function ApiIdentitySection({
+  identity,
+  onChange,
+}: {
+  identity: TelegramIdentity
+  onChange: (identity: TelegramIdentity) => void
+}) {
+  const { t } = useTranslation()
+  const { pushError } = useAlerts()
+  const session = useAuth().auth?.state
+  const ids = useId()
+  const [editing, setEditing] = useState(false)
+  const [apiId, setApiId] = useState("")
+  const [apiHash, setApiHash] = useState("")
+  const [touched, setTouched] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<ErrorReport | null>(null)
+  const [confirming, setConfirming] = useState(false)
+
+  const signedIn = session === "ready" || session === "logging_out"
+  const own = identity.api_id !== null
+  const idError = touched && !isApiId(apiId.trim())
+  const hashError = touched && !API_HASH.test(apiHash.trim())
+
+  function open() {
+    setApiId(identity.api_id?.toString() ?? "")
+    setApiHash("")
+    setTouched(false)
+    setError(null)
+    setEditing(true)
+  }
+
+  function close() {
+    // The typed hash does not outlive the form.
+    setApiHash("")
+    setEditing(false)
+  }
+
+  async function save() {
+    setTouched(true)
+
+    if (!isApiId(apiId.trim()) || !API_HASH.test(apiHash.trim())) return
+    setBusy(true)
+    setError(null)
+
+    try {
+      onChange(await apiIdentitySet(apiId.trim(), apiHash.trim()))
+      close()
+    } catch (cause) {
+      setError(errorOf(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove() {
+    try {
+      onChange(await apiIdentityClear())
+      close()
+    } catch (cause) {
+      pushError(cause)
+    }
+  }
+
+  return (
+    <Section
+      title={t("settings.apiIdentity.title")}
+      hint={t("settings.apiIdentity.hint")}
+    >
+      <p className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm">
+        {t("settings.apiIdentity.warning")}
+      </p>
+      <p role="status" className="text-sm">
+        {!own
+          ? t("settings.apiIdentity.product")
+          : identity.api_hash_saved
+            ? t("settings.apiIdentity.saved", { apiId: identity.api_id })
+            : t("settings.apiIdentity.hashMissing", {
+                apiId: identity.api_id,
+              })}
+      </p>
+      {identity.restart_required && (
+        <p role="status" className="text-sm font-medium">
+          {t("settings.apiIdentity.restart")}
+        </p>
+      )}
+      {signedIn && (
+        <p className="text-sm text-muted-foreground">
+          {t("settings.apiIdentity.signOutFirst")}
+        </p>
+      )}
+
+      {!editing && (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!isDesktop() || signedIn}
+            onClick={open}
+          >
+            <KeyRound data-icon="inline-start" />
+            {own
+              ? t("settings.apiIdentity.replace")
+              : t("settings.apiIdentity.use")}
+          </Button>
+          {own && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!isDesktop() || signedIn}
+              onClick={() => setConfirming(true)}
+            >
+              <Trash2 data-icon="inline-start" />
+              {t("settings.apiIdentity.remove.button")}
+            </Button>
+          )}
+        </div>
+      )}
+
+      {editing && (
+        <form
+          noValidate
+          className="space-y-4 rounded-lg border border-dashed p-3"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void save()
+          }}
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field
+              id={`${ids}-api-id`}
+              label={t("settings.apiIdentity.apiId.label")}
+              error={
+                idError ? t("settings.apiIdentity.apiId.error") : undefined
+              }
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  inputMode="numeric"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="font-mono"
+                  value={apiId}
+                  onChange={(event) => setApiId(event.target.value)}
+                />
+              )}
+            </Field>
+            <Field
+              id={`${ids}-api-hash`}
+              label={t("settings.apiIdentity.apiHash.label")}
+              hint={t("settings.apiIdentity.apiHash.hint")}
+              error={
+                hashError ? t("settings.apiIdentity.apiHash.error") : undefined
+              }
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  // Masked and never prefilled: the core does not give it back.
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  className="font-mono"
+                  value={apiHash}
+                  onChange={(event) => setApiHash(event.target.value)}
+                />
+              )}
+            </Field>
+          </div>
+          {error && (
+            <p role="alert" className="text-xs text-destructive">
+              {errorMessage(t, error.code, error.params)}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={close}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={!isDesktop() || busy || signedIn}
+            >
+              <Save data-icon="inline-start" />
+              {busy
+                ? t("settings.apiIdentity.saving")
+                : t("settings.apiIdentity.save")}
+            </Button>
+          </div>
+        </form>
+      )}
+
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={t("settings.apiIdentity.remove.title")}
+        description={t("settings.apiIdentity.remove.body")}
+        confirmLabel={t("settings.apiIdentity.remove.confirm")}
         cancelLabel={t("common.cancel")}
         destructive
         onConfirm={() => void remove()}

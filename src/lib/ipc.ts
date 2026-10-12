@@ -1480,6 +1480,23 @@ export function telegramIdentity(): Promise<TelegramIdentity> {
   return call("telegram_identity", telegramIdentityDecoder)
 }
 
+/**
+ * Stores a personal API identity, used from the next start: the `api_hash` is kept encrypted
+ * by the core and never returned. Rejects with `TG_SIGN_OUT_FIRST` while an account is signed
+ * in, `SETTINGS_INVALID { field }` for a malformed value.
+ */
+export function apiIdentitySet(
+  apiId: string,
+  apiHash: string,
+): Promise<TelegramIdentity> {
+  return call("api_identity_set", telegramIdentityDecoder, { apiId, apiHash })
+}
+
+/** Back to the product's identity from the next start; same sign-out rule. */
+export function apiIdentityClear(): Promise<TelegramIdentity> {
+  return call("api_identity_clear", telegramIdentityDecoder)
+}
+
 export function settingsGet(): Promise<Settings> {
   return call("settings_get", settingsDecoder)
 }

@@ -81,6 +81,7 @@
     "TG_UPLOAD_FAILED": "O Telegram informou que o envio falhou.",
     "TG_LIB_MISSING": "A biblioteca do Telegram (tdjson.dll) está ausente ou danificada.",
     "TG_NOT_CONFIGURED": "Esta versão não tem uma identidade de API válida do Telegram (api_id e api_hash), por isso não pode se conectar ao Telegram.",
+    "TG_SIGN_OUT_FIRST": "Sign out of Telegram first: a signed-in session belongs to the API identity it was created with.",
     "TG_NOT_IMPLEMENTED": "Este recurso do Telegram ainda não está disponível nesta versão.",
     "CANCELLED": "Cancelado.",
     "FILES_SKIPPED_one": "{{count}} arquivo que não é vídeo nem foto foi ignorado nesta pasta.",
@@ -603,6 +604,35 @@
         "label": "Device name",
         "hint": "Shown in Telegram under Settings > Devices. Leave it empty to use the name shown here. squeezegram gives it to Telegram when it starts: a new name applies after a restart, and Telegram may keep showing the previous one for a session already signed in until you sign in again.",
         "error": "Use at most 64 characters, on a single line."
+      }
+    },
+    "apiIdentity": {
+      "title": "Advanced: your own API identity",
+      "hint": "squeezegram connects to Telegram with its own api_id. If you created one at my.telegram.org, you can use it instead.",
+      "warning": "Changing the identity means signing in again: a Telegram session belongs to the api_id it was created with. Sign out first; the change applies after squeezegram restarts.",
+      "signOutFirst": "You are signed in. Sign out on the Connection page before changing the identity.",
+      "product": "squeezegram's own identity is in use.",
+      "saved": "Your api_id {{apiId}} is saved, with its api_hash (stored encrypted for your Windows account, never shown again).",
+      "hashMissing": "Your api_id {{apiId}} is saved, but its api_hash can't be read on this Windows account. Enter both again, or remove them.",
+      "restart": "Restart squeezegram to use this change.",
+      "use": "Use my own api_id",
+      "replace": "Replace",
+      "save": "Save",
+      "saving": "Saving…",
+      "apiId": {
+        "label": "api_id",
+        "error": "Enter the api_id as a whole number, as shown on my.telegram.org."
+      },
+      "apiHash": {
+        "label": "api_hash",
+        "hint": "32 characters, digits and letters a to f. Stored encrypted for your Windows account and never shown again.",
+        "error": "The api_hash has 32 characters, digits and letters a to f."
+      },
+      "remove": {
+        "button": "Remove",
+        "title": "Go back to squeezegram's identity?",
+        "body": "Your api_id and api_hash are deleted from this computer. After the restart, sign in again.",
+        "confirm": "Remove"
       }
     },
     "caption": {
