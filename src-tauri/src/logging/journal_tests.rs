@@ -339,3 +339,25 @@ async fn progress_is_sampled_every_5_seconds() {
     assert_eq!(progress[1]["fields"]["bytes_per_sec"], 1000.0);
     assert_eq!(progress.last().unwrap()["fields"]["percent"], 100.0);
 }
+
+/// TDLib's proxy errors name the server: the page gets the message, the journal never does
+/// (command error line, startup alert).
+#[tokio::test]
+async fn a_proxy_error_never_writes_the_proxy_address() {
+    let dir = TestDir::new("journal-proxy");
+    let journal = TestJournal::new(dir.path(), "trace");
+    let message = "Failed to connect to 10.9.9.9:1080";
+    let error = crate::commands::CommandError::from(crate::transport::TransportError::Proxy(
+        message.to_owned(),
+    ));
+    assert_eq!(error.code, "TG_PROXY_FAILED");
+    assert_eq!(
+        error.params,
+        json!({ "message": message }),
+        "the page gets it"
+    );
+    crate::queue::events::log_alert(None, error.code, &error.params);
+    let text = journal.text();
+    assert!(text.contains("TG_PROXY_FAILED"), "{text}");
+    assert!(!text.contains("10.9.9.9"), "{text}");
+}

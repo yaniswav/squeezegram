@@ -107,7 +107,7 @@ pub struct SidecarProgress {
 
 /// `queue_alert` journal line: the code and params sent to the UI.
 pub fn log_alert(item_id: Option<i64>, code: &str, params: &Value) {
-    let params = serde_json::json!({ "params": params }).to_string();
+    let params = serde_json::json!({ "params": journal_params(code, params) }).to_string();
     tracing::warn!(
         event = "queue_alert",
         item_id,
@@ -115,6 +115,18 @@ pub fn log_alert(item_id: Option<i64>, code: &str, params: &Value) {
         json = params.as_str(),
         "alert {code}"
     );
+}
+
+/// The params of an alert as the journal gets them: TDLib's message about a proxy names the
+/// proxy server, so it reaches the page only.
+fn journal_params(code: &str, params: &Value) -> Value {
+    let mut params = params.clone();
+    if code == "TG_PROXY_FAILED"
+        && let Some(message) = params.get_mut("message")
+    {
+        *message = Value::from("<redacted>");
+    }
+    params
 }
 
 /// Where queue events go: the Tauri window in the app, a recorder in tests.

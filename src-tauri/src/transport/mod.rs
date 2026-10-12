@@ -532,9 +532,10 @@ pub enum TransportError {
     /// A transport method this transport does not implement; nothing was sent.
     #[error("not implemented yet: {0}")]
     NotImplemented(&'static str),
-    /// The proxy was refused or could not reach Telegram; TDLib's message (it names the
-    /// problem, never the secret).
-    #[error("proxy: {0}")]
+    /// The proxy was refused or could not reach Telegram. TDLib's message goes to the page
+    /// (`TG_PROXY_FAILED{message}`) only: it names the proxy server ("Failed to connect to
+    /// 10.9.9.9:1080"), so the text every log line prints (`Display`) leaves it out.
+    #[error("proxy refused or unreachable")]
     Proxy(String),
     /// A proxy is set but its DPAPI-protected secret cannot be read (other Windows account or
     /// machine, corrupt file). Nothing connects until the user enters it again.
