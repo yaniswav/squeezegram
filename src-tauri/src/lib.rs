@@ -15,6 +15,7 @@
 //! - `entitlements`: paid features, granted by a license verified offline (`LicenseEntitlements`)
 //! - `update`: update checks (installer: download and install; portable: tell the user)
 
+pub mod caption;
 mod commands;
 pub mod entitlements;
 pub mod limit;
@@ -355,6 +356,7 @@ pub fn run() {
             commands::history_clear,
             commands::sidecars_status,
             commands::encoder_status,
+            commands::caption_preview,
             commands::limit_status,
             commands::entitlements_status,
             commands::license_set,

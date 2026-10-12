@@ -334,6 +334,15 @@ impl MockTransport {
             .collect()
     }
 
+    /// Captions of the messages that went out, in order.
+    pub fn captions(&self) -> Vec<String> {
+        self.lock()
+            .messages
+            .iter()
+            .map(|m| m.caption.clone())
+            .collect()
+    }
+
     fn set(&self, state: AuthState) {
         self.auth.send_replace(state);
     }

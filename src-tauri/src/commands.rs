@@ -855,6 +855,29 @@ pub fn encoder_status(state: State<'_, AppState>) -> EncoderStatus {
     })
 }
 
+/// The caption template rendered for the first file of the add panel (`path`, if any) in a
+/// batch of `count` files. Rendering stays in Rust so the preview and the send share one
+/// implementation; only the values known before encoding are real (`caption::preview`).
+/// The template is never logged.
+#[tauri::command]
+pub fn caption_preview(template: String, path: Option<String>, count: u32) -> String {
+    let file = path.as_deref().and_then(|path| {
+        let path = Path::new(path);
+        let metadata = std::fs::metadata(path).ok().filter(|m| m.is_file())?;
+        Some((
+            path.file_name()?.to_string_lossy().into_owned(),
+            metadata.len(),
+        ))
+    });
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    Call::quiet("caption_preview").done(crate::caption::preview(
+        &template,
+        file.as_ref().map(|(name, size)| (name.as_str(), *size)),
+        count,
+        &today,
+    ))
+}
+
 /// The upload limit that applies now (`{ limit_bytes, source,
 /// premium }`, source `custom` | `forced` | `account` | `default`). Settings shows it.
 #[tauri::command]

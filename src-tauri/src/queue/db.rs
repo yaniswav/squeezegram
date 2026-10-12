@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::{QueueError, Result};
 
 /// Migrations in order: entry `i` brings the schema to version `i + 1`.
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
@@ -141,6 +141,17 @@ const SCHEMA_V4: &str = "
 ALTER TABLE watch_folders ADD COLUMN send_mode TEXT;
 ";
 
+/// v5: position of an item in the batch one `queue_add` created, for the `{index}` and
+/// `{count}` caption variables (rendered at send time, long after the call).
+/// - `batch_index`: 1-based, among the items of the same destination in that call.
+/// - `batch_count`: number of those items.
+///
+/// Items that exist already, and files found by a watched folder, are a batch of one.
+const SCHEMA_V5: &str = "
+ALTER TABLE items ADD COLUMN batch_index INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE items ADD COLUMN batch_count INTEGER NOT NULL DEFAULT 1;
+";
+
 /// `%APPDATA%\squeezegram\squeezegram.db`.
 pub fn default_path() -> Result<PathBuf> {
     let app_data = std::env::var_os("APPDATA").ok_or(QueueError::NoAppData)?;
@@ -234,7 +245,7 @@ mod tests {
     #[test]
     fn fresh_database_gets_the_latest_schema() {
         let conn = open_in_memory().unwrap();
-        assert_eq!(schema_version(&conn).unwrap(), 4);
+        assert_eq!(schema_version(&conn).unwrap(), 5);
         assert_eq!(
             tables(&conn),
             [
@@ -507,7 +518,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let conn = open(&path).unwrap();
-        assert_eq!(schema_version(&conn).unwrap(), 4);
+        assert_eq!(schema_version(&conn).unwrap(), 5);
         let row: (String, Option<i64>, bool, Option<String>) = conn
             .query_row(
                 "SELECT path, destination_id, enabled, send_mode FROM watch_folders WHERE id = 1",
@@ -517,7 +528,49 @@ mod tests {
             .unwrap();
         assert_eq!(row, (r"C:\Videos\OBS".to_owned(), Some(1), false, None));
         drop(conn);
-        assert_eq!(schema_version(&open(&path).unwrap()).unwrap(), 4);
+        assert_eq!(
+            schema_version(&open(&path).unwrap()).unwrap(),
+            SCHEMA_VERSION
+        );
+    }
+
+    /// A v4 database moves to v5 in place: queued items keep their rows and become a batch
+    /// of one.
+    #[test]
+    fn v4_database_migrates_to_v5() {
+        let dir = TestDir::new("db-v4-v5");
+        let path = dir.path().join("squeezegram.db");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for sql in [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4] {
+                tx.execute_batch(sql).unwrap();
+            }
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '4')",
+                [],
+            )
+            .unwrap();
+            tx.execute_batch(
+                "INSERT INTO destinations (id, peer_kind, peer_id, title)
+                 VALUES (1, 'user', 7, 'Saved Messages');
+                 INSERT INTO items (id, position, source_path, source_size, source_mtime,
+                     destination_id, send_mode, caption, state, origin, created_at, updated_at)
+                 VALUES (3, 1, 'a.mp4', 1, 1, 1, 'video', '{name}', 'ready', 'manual', 'x', 'x');",
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let conn = open(&path).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        let row: (String, i64, i64) = conn
+            .query_row(
+                "SELECT caption, batch_index, batch_count FROM items WHERE id = 3",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("{name}".to_owned(), 1, 1));
     }
 
     #[test]

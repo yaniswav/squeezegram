@@ -3,7 +3,7 @@
 //! stable error codes. Watchdog: no progress for `send.watchdog_s` raises a
 //! `TG_NO_PROGRESS` alert and never cancels by itself.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,6 +17,7 @@ use super::{
     Caption, MediaKind, Payload, Phase, Progress, Sent, TelegramTransport, TransportError,
     UploadRequest,
 };
+use crate::caption;
 use crate::limit;
 use crate::media::plan::{Kind, Plan};
 use crate::media::probe::MediaInfo;
@@ -131,6 +132,61 @@ pub fn upload_request(item: &Item, destination: &Destination) -> Result<UploadRe
     })
 }
 
+/// Telegram's lowest caption limit (accounts without Premium): used while no account is
+/// known, so a caption is never accepted here and refused later.
+const STANDARD_CAPTION_CHARS: u32 = 1024;
+
+/// The caption to send: the template of the item rendered with what is known of the final
+/// file, or `CAPTION_TOO_LONG` when the result does not fit. Never truncated: a cut caption
+/// would send something the user did not write, and no caption would drop what they did.
+pub fn rendered_caption(
+    item: &Item,
+    request: &UploadRequest,
+    today: &str,
+    max_chars: u32,
+) -> Result<String, SendError> {
+    let source_name = Path::new(&item.source_path)
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let (duration_s, resolution) = match &request.payload {
+        Payload::Video {
+            duration_s,
+            width,
+            height,
+            ..
+        } => (
+            (*duration_s > 0).then_some(*duration_s),
+            (*width > 0 && *height > 0).then_some((*width, *height)),
+        ),
+        Payload::Photo { width, height } => (
+            None,
+            (*width > 0 && *height > 0).then_some((*width, *height)),
+        ),
+        Payload::Document { .. } => (None, None),
+    };
+    let text = caption::render(
+        &item.caption,
+        &caption::Fields {
+            file_name: &source_name,
+            duration_s,
+            original_size: u64::try_from(item.source_size).unwrap_or(0),
+            final_size: request.size,
+            resolution,
+            date: today,
+            index: u32::try_from(item.batch_index).unwrap_or(1),
+            count: u32::try_from(item.batch_count).unwrap_or(1),
+        },
+    );
+    let length = text.chars().count();
+    if length > max_chars as usize {
+        return Err(SendError::Failed {
+            code: "CAPTION_TOO_LONG".to_owned(),
+            params: json!({ "max": max_chars, "length": length }),
+        });
+    }
+    Ok(text)
+}
+
 /// Transport result → orchestrator outcome. A 429 (FLOOD_WAIT or SLOWMODE_WAIT, which an
 /// upload cannot tell apart) means nothing went out: `waiting_server`. A timeout or an
 /// unexpected answer leaves the message in doubt: `unknown`, never retried automatically.
@@ -242,6 +298,13 @@ impl SendStage for TransportStage {
         let mut request = upload_request(item, destination).inspect_err(|error| {
             tracing::warn!(event = "upload_error", outcome = "failed", error = %error, "upload request cannot be built")
         })?;
+        let max_chars = limit::account(&self.transport.auth_state().borrow())
+            .map_or(STANDARD_CAPTION_CHARS, |me| me.caption_max_chars);
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        request.caption.text =
+            rendered_caption(item, &request, &today, max_chars).inspect_err(|error| {
+                tracing::warn!(event = "upload_error", outcome = "failed", error = %error, "caption does not fit");
+            })?;
         // No plan (an item prepared outside the media stage): the limit that applies now.
         if request.limit_bytes.is_none() {
             let auth = self.transport.auth_state();
@@ -418,6 +481,10 @@ mod tests {
         }
 
         fn add(&self, name: &str, peer: Peer) -> i64 {
+            self.add_captioned(name, peer, "caption")
+        }
+
+        fn add_captioned(&self, name: &str, peer: Peer, caption: &str) -> i64 {
             static SIZE: AtomicI64 = AtomicI64::new(100);
             let size = SIZE.fetch_add(1, Ordering::SeqCst);
             let path = self.dir.file(name, &vec![1u8; size as usize]);
@@ -428,7 +495,7 @@ mod tests {
                     source_mtime: 1,
                     destination_id: self.destination(peer),
                     send_mode: SendMode::Video,
-                    caption: "caption".into(),
+                    caption: caption.into(),
                 }])
                 .unwrap()[0]
         }
@@ -616,6 +683,70 @@ mod tests {
         assert!(h.mock.sent().is_empty());
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn the_caption_template_is_rendered_when_the_file_is_known() {
+        let h = harness("stage-caption", MockTransport::authorized()).await;
+        let id = h.add_captioned(
+            "été.mp4",
+            MOCK_SAVED,
+            "{name} ({index}/{count}) {ext} {{kept}} {nope} [{resolution}]",
+        );
+        h.queue.start();
+        h.wait_state(id, State::Sent).await;
+        assert_eq!(h.mock.captions(), ["été (1/1) mp4 {kept} {nope} []"]);
+    }
+
+    /// Free accounts get 1024 characters, Premium 4096 (the mock mirrors `Me`): counted after
+    /// rendering, so a variable can push a caption over.
+    #[tokio::test(start_paused = true)]
+    async fn a_caption_over_the_limit_fails_the_item_and_sends_nothing() {
+        let h = harness("stage-caption-long", MockTransport::authorized()).await;
+        let fits = h.add_captioned("a.mp4", MOCK_SAVED, &"x".repeat(1024));
+        let too_long = h.add_captioned("b.mp4", MOCK_SAVED, &"é".repeat(1025));
+        let by_variable = h.add_captioned(
+            "c.mp4",
+            MOCK_SAVED,
+            &format!("{}{{file}}", "x".repeat(1020)),
+        );
+        h.queue.start();
+        h.wait_state(fits, State::Sent).await;
+        h.wait_state(too_long, State::Failed).await;
+        h.wait_state(by_variable, State::Failed).await;
+        assert_eq!(
+            h.item(too_long).last_error.as_deref(),
+            Some("CAPTION_TOO_LONG")
+        );
+        let alerts = h.sink.alerts.lock().unwrap();
+        let alert = alerts.iter().find(|a| a.item_id == Some(too_long)).unwrap();
+        assert_eq!(alert.code, "CAPTION_TOO_LONG");
+        assert_eq!(alert.params, json!({ "max": 1024, "length": 1025 }));
+        let alert = alerts
+            .iter()
+            .find(|a| a.item_id == Some(by_variable))
+            .unwrap();
+        assert_eq!(alert.params, json!({ "max": 1024, "length": 1025 }));
+        // Only the caption that fits went out; the others were not sent without a caption.
+        assert_eq!(h.mock.captions(), ["x".repeat(1024)]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn premium_accounts_may_send_longer_captions() {
+        let h = harness(
+            "stage-caption-premium",
+            MockTransport::authorized().with_premium(),
+        )
+        .await;
+        let ok = h.add_captioned("a.mp4", MOCK_SAVED, &"x".repeat(4096));
+        let over = h.add_captioned("b.mp4", MOCK_SAVED, &"x".repeat(4097));
+        h.queue.start();
+        h.wait_state(ok, State::Sent).await;
+        h.wait_state(over, State::Failed).await;
+        assert_eq!(h.item(over).last_error.as_deref(), Some("CAPTION_TOO_LONG"));
+        let alerts = h.sink.alerts.lock().unwrap();
+        let alert = alerts.iter().find(|a| a.item_id == Some(over)).unwrap();
+        assert_eq!(alert.params, json!({ "max": 4096, "length": 4097 }));
+    }
+
     #[test]
     fn the_request_carries_the_limit_of_the_plan() {
         let item = |plan_json: Option<String>| Item {
@@ -629,6 +760,8 @@ mod tests {
             destination_id: 1,
             send_mode: SendMode::Video,
             caption: String::new(),
+            batch_index: 1,
+            batch_count: 1,
             state: State::Encoded,
             hold_reason: None,
             origin: "manual".into(),

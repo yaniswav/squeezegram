@@ -798,6 +798,8 @@ mod tests {
             destination_id: 1,
             send_mode: SendMode::Video,
             caption: String::new(),
+            batch_index: 1,
+            batch_count: 1,
             state: State::Encoded,
             hold_reason: None,
             origin: "manual".into(),

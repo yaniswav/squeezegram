@@ -1,6 +1,6 @@
 //! Synchronous queue API over the SQLite database.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::types::Value;
@@ -56,6 +56,9 @@ pub struct Item {
     pub destination_id: i64,
     pub send_mode: SendMode,
     pub caption: String,
+    /// Position in the batch of one `queue_add` and its size (`{index}` and `{count}`).
+    pub batch_index: i64,
+    pub batch_count: i64,
     pub state: State,
     pub hold_reason: Option<String>,
     pub origin: String,
@@ -78,7 +81,8 @@ pub struct Item {
 const ITEM_COLUMNS: &str = "id, position, source_path, source_size, source_mtime, content_id,
     identity_weak, destination_id, send_mode, caption, state, hold_reason, origin, media_json,
     plan_json, temp_path, output_path, output_size, progress_phase, progress_pct, attempts,
-    last_error, next_run_at, tg_message_id, tg_sent_at, created_at, updated_at";
+    last_error, next_run_at, tg_message_id, tg_sent_at, created_at, updated_at, batch_index,
+    batch_count";
 
 fn invalid(column: usize, error: QueueError) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, Box::new(error))
@@ -115,6 +119,8 @@ fn item_from_row(row: &Row<'_>) -> rusqlite::Result<Item> {
         tg_sent_at: row.get(24)?,
         created_at: row.get(25)?,
         updated_at: row.get(26)?,
+        batch_index: row.get(27)?,
+        batch_count: row.get(28)?,
     })
 }
 
@@ -715,6 +721,12 @@ impl Store {
             })?;
         let now = now_iso();
         let mut ids = Vec::with_capacity(items.len());
+        // A destination receives the files in order: `{index}` and `{count}` count within it.
+        let mut batch_sizes: HashMap<i64, i64> = HashMap::new();
+        for item in items {
+            *batch_sizes.entry(item.destination_id).or_default() += 1;
+        }
+        let mut batch_seen: HashMap<i64, i64> = HashMap::new();
         for item in items {
             let exists: bool = tx.query_row(
                 "SELECT EXISTS (SELECT 1 FROM destinations WHERE id = ?1)",
@@ -725,11 +737,13 @@ impl Store {
                 return Err(QueueError::DestinationNotFound(item.destination_id));
             }
             position += 1;
+            let seen = batch_seen.entry(item.destination_id).or_default();
+            *seen += 1;
             tx.execute(
                 "INSERT INTO items (position, source_path, source_size, source_mtime,
                                     destination_id, send_mode, caption, state, origin,
-                                    created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'manual', ?9, ?9)",
+                                    created_at, updated_at, batch_index, batch_count)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'manual', ?9, ?9, ?10, ?11)",
                 params![
                     position,
                     item.source_path,
@@ -739,7 +753,9 @@ impl Store {
                     item.send_mode.as_str(),
                     item.caption,
                     State::Ready.as_str(),
-                    now
+                    now,
+                    *seen,
+                    batch_sizes[&item.destination_id]
                 ],
             )?;
             ids.push(tx.last_insert_rowid());
@@ -1407,6 +1423,49 @@ mod tests {
                 .all(|i| i.state == State::Ready && i.origin == "manual")
         );
         assert_eq!(items[0].position + 1, items[1].position);
+    }
+
+    /// Each destination of a call numbers its own files: the caption of a file sent to two
+    /// chats says "1 of 3" in both.
+    #[test]
+    fn add_items_numbers_the_batch_per_destination() {
+        let mut store = memory_store();
+        store.upsert_destination(&destination(2, 0)).unwrap();
+        let ids: Vec<i64> = store
+            .list_destinations()
+            .unwrap()
+            .iter()
+            .map(|d| d.id)
+            .collect();
+        let new = |path: &str, destination_id: i64| NewItem {
+            source_path: path.into(),
+            source_size: 1,
+            source_mtime: 1,
+            destination_id,
+            send_mode: SendMode::Video,
+            caption: String::new(),
+        };
+        let added = store
+            .add_items(&[
+                new("a.mp4", ids[0]),
+                new("a.mp4", ids[1]),
+                new("b.mp4", ids[0]),
+                new("b.mp4", ids[1]),
+                new("c.mp4", ids[0]),
+            ])
+            .unwrap();
+        let numbers: Vec<(i64, i64)> = added
+            .iter()
+            .map(|&id| {
+                let item = store.get_item(id).unwrap();
+                (item.batch_index, item.batch_count)
+            })
+            .collect();
+        assert_eq!(numbers, [(1, 3), (1, 2), (2, 3), (2, 2), (3, 3)]);
+        // A later call starts again at 1.
+        let later = store.add_items(&[new("d.mp4", ids[0])]).unwrap();
+        let item = store.get_item(later[0]).unwrap();
+        assert_eq!((item.batch_index, item.batch_count), (1, 1));
     }
 
     #[test]

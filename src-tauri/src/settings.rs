@@ -120,6 +120,8 @@ pub struct SendSettings {
     pub pause_min_s: u64,
     pub pause_max_s: u64,
     pub watchdog_s: u64,
+    /// Prefills the caption of the add panel (variables: `caption::VARIABLES`). Empty: no caption.
+    pub caption_template: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -216,6 +218,7 @@ impl Default for SendSettings {
             pause_min_s: 5,
             pause_max_s: 12,
             watchdog_s: 120,
+            caption_template: String::new(),
         }
     }
 }
@@ -420,7 +423,7 @@ mod tests {
               "version": 1,
               "limit": { "premium": null, "custom_mb": null, "margin_percent": 3.0 },
               "encoding": { "mode": "auto", "prefer": "gpu", "audio_kbps": 128, "video_codec": "h264" },
-              "send": { "pause_min_s": 5, "pause_max_s": 12, "watchdog_s": 120 },
+              "send": { "pause_min_s": 5, "pause_max_s": 12, "watchdog_s": 120, "caption_template": "" },
               "telegram": { "api_override": null, "device_name": null },
               "temp": { "dir": null, "min_free_gb": 5 },
               "ffmpeg": { "custom_dir": null },
@@ -544,6 +547,23 @@ mod tests {
                 "telegram.device_name"
             ]
         );
+    }
+
+    #[test]
+    fn the_caption_template_is_empty_by_default_and_persisted() {
+        let dir = TestDir::new("settings-caption");
+        let path = dir.path().join(FILE_NAME);
+        let store = SettingsStore::load(path.clone()).unwrap();
+        assert_eq!(store.get().send.caption_template, "");
+        store
+            .set(&json!({ "send": { "caption_template": "{name} - {resolution}" } }))
+            .unwrap();
+        let reloaded = SettingsStore::load(path).unwrap();
+        assert_eq!(
+            reloaded.get().send.caption_template,
+            "{name} - {resolution}"
+        );
+        assert_eq!(reloaded.get().send.watchdog_s, 120, "untouched fields kept");
     }
 
     #[test]
