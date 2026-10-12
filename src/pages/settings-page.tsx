@@ -1,4 +1,4 @@
-import { Download, FolderOpen, RotateCcw, Save } from "lucide-react"
+import { Download, FolderOpen, RefreshCw, RotateCcw, Save } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { useEffect, useId, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
@@ -14,8 +14,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { availableLanguages } from "@/i18n"
-import { formatNumber } from "@/lib/format"
+import { formatDateTime, formatNumber } from "@/lib/format"
 import {
   debugExport,
   encoderStatus,
@@ -36,6 +37,7 @@ import { isThemePreference } from "@/lib/theme"
 import { useAlerts } from "@/state/alerts"
 import { useAuth } from "@/state/auth"
 import { useSettings } from "@/state/settings"
+import { useUpdate } from "@/state/update"
 
 type Premium = "auto" | "yes" | "no"
 
@@ -54,6 +56,7 @@ interface Draft {
   ffmpegDir: string | null
   theme: ThemeSetting
   language: string
+  checkAutomatically: boolean
 }
 
 type ErrorKey =
@@ -99,6 +102,7 @@ function toDraft(settings: Settings): Draft {
     ffmpegDir: emptyToNull(settings.ffmpeg.custom_dir),
     theme: themeOf(settings.ui.theme),
     language: settings.ui.language,
+    checkAutomatically: settings.updates.check_automatically,
   }
 }
 
@@ -188,6 +192,9 @@ function toPatch(draft: Draft, settings: Settings): SettingsPatch {
   if (draft.language !== saved.language) ui.language = draft.language
 
   if (Object.keys(ui).length > 0) patch.ui = ui
+
+  if (draft.checkAutomatically !== saved.checkAutomatically)
+    patch.updates = { check_automatically: draft.checkAutomatically }
 
   return patch
 }
@@ -666,6 +673,32 @@ function SettingsForm({ settings }: { settings: Settings }) {
         </div>
       </Section>
 
+      <Section title={t("settings.updates.title")}>
+        <UpdateStatus lastCheckAt={settings.updates.last_check_at} />
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0 space-y-1">
+            <label
+              htmlFor={`${ids}-auto-update`}
+              className="block text-sm font-medium"
+            >
+              {t("settings.updates.automatic.label")}
+            </label>
+            <p
+              id={`${ids}-auto-update-hint`}
+              className="text-xs text-muted-foreground"
+            >
+              {t("settings.updates.automatic.hint")}
+            </p>
+          </div>
+          <Switch
+            id={`${ids}-auto-update`}
+            aria-describedby={`${ids}-auto-update-hint`}
+            checked={draft.checkAutomatically}
+            onCheckedChange={(checked) => update("checkAutomatically", checked)}
+          />
+        </div>
+      </Section>
+
       <Diagnostics />
 
       <div className="sticky bottom-0 -mx-1 flex flex-wrap items-center justify-end gap-3 border-t bg-background/95 px-1 py-3 backdrop-blur">
@@ -699,6 +732,59 @@ function SettingsForm({ settings }: { settings: Settings }) {
         </Button>
       </div>
     </form>
+  )
+}
+
+/** Version in use, result of the last check, and "Check now" (which ignores the switch). */
+function UpdateStatus({ lastCheckAt }: { lastCheckAt: string | null }) {
+  const { t, i18n } = useTranslation()
+  const { info, notice, checking, check } = useUpdate()
+
+  const result = notice
+    ? notice.available
+      ? t("settings.updates.available", { version: notice.version })
+      : t("settings.updates.upToDate")
+    : null
+
+  return (
+    <div className="space-y-2">
+      {info && (
+        <>
+          <p className="text-sm">
+            {t("settings.updates.current", { version: info.current_version })}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {t(`settings.updates.kind.${info.kind}`)}
+          </p>
+        </>
+      )}
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!isDesktop() || checking}
+          onClick={() => void check()}
+        >
+          <RefreshCw data-icon="inline-start" />
+          {checking
+            ? t("settings.updates.checking")
+            : t("settings.updates.checkNow")}
+        </Button>
+        {result && (
+          <p role="status" className="text-sm">
+            {result}
+          </p>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {lastCheckAt
+          ? t("settings.updates.lastChecked", {
+              date: formatDateTime(new Date(lastCheckAt), i18n.language),
+            })
+          : t("settings.updates.neverChecked")}
+      </p>
+    </div>
   )
 }
 

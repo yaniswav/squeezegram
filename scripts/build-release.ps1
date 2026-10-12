@@ -22,6 +22,15 @@
     resource is missing, which would break `cargo check`, `tauri dev` and the CI dry-run
     (none of them stage the DLL).
 
+    Update artefacts: when the environment variable TAURI_SIGNING_PRIVATE_KEY is set (the
+    private updater key, as a path or as its content; TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+    carries its password if it has one), the same overlay turns on bundle.createUpdaterArtifacts
+    so Tauri signs the installer and writes its .sig, copied next to the installer in dist-release.
+    Without the variable the build is the same as before and has no update signature. The key
+    is read by Tauri from the environment only: this script never reads, prints or stores it,
+    and it must never be placed in a file of the repository. latest.json (the update manifest)
+    is not written here.
+
     A release build is long and heavy on the CPU. To keep the PC usable:
       cmd /c "start /low /wait /b pwsh -NoProfile -File scripts\build-release.ps1"
 
@@ -52,7 +61,12 @@ Write-Host '== 3/5 pnpm tauri build'
 $overlay = Join-Path (Split-Path -Parent $staged) 'tauri.release.conf.json'
 $stagedRelative = ($staged.Substring((Join-Path $root 'src-tauri').Length + 1)) -replace '\\', '/'
 $bundle = @{ resources = @{ $stagedRelative = 'tdjson.dll' } }
+# Only the presence of the variable is tested, never its value.
+$signUpdates = -not [string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY)
+if ($signUpdates) { $bundle.createUpdaterArtifacts = $true }
 $config = @{ bundle = $bundle } | ConvertTo-Json -Depth 5
+if ($signUpdates) { Write-Host 'TAURI_SIGNING_PRIVATE_KEY is set: the installer will be signed for updates.' }
+else { Write-Host 'TAURI_SIGNING_PRIVATE_KEY is not set: no update signature (local test build).' }
 [IO.File]::WriteAllText($overlay, $config, (New-Object System.Text.UTF8Encoding($false)))
 
 $nsisDir = Join-Path $root 'src-tauri\target\release\bundle\nsis'
@@ -74,6 +88,11 @@ Get-ChildItem -LiteralPath $dist -File -ErrorAction SilentlyContinue |
     Remove-Item -Force
 $installerOut = Join-Path $dist "squeezegram-$version-setup-x64.exe"
 Copy-Item -LiteralPath $installer -Destination $installerOut -Force
+if ($signUpdates) {
+    # The signature covers the file content, so the renamed copy keeps it valid.
+    if (-not (Test-Path -LiteralPath "$installer.sig" -PathType Leaf)) { throw "Update signature not found: $installer.sig" }
+    Copy-Item -LiteralPath "$installer.sig" -Destination "$installerOut.sig" -Force
+}
 
 Write-Host '== 4/5 portable zip'
 $zip = & (Join-Path $PSScriptRoot 'make-portable.ps1') -Version $version -DllPath $staged | Select-Object -Last 1
@@ -84,6 +103,7 @@ Write-Host '== 5/5 checksums'
 Write-Host ''
 Write-Host "== Artefacts (version $version, LOCAL builds: do not publish)"
 $artefacts = @($installerOut, $zip, (Join-Path $dist 'SHA256SUMS.txt'))
+if ($signUpdates) { $artefacts += "$installerOut.sig" }
 foreach ($path in $artefacts) {
     $file = Get-Item -LiteralPath $path
     $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -47,6 +47,17 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZEN0ZBMjA3ODgxMjJCQjcKUldTM0t4S0lCNkovYlFtOFJ6TGwwakZOVzg2Y09TN1ArRlRKVU9OUjErSFJYQVdMMC8zVVlKZjAK",
+      "endpoints": [
+        "https://github.com/yaniswav/squeezegram/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis"],

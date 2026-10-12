@@ -5,7 +5,9 @@
 .DESCRIPTION
     The zip holds one folder, squeezegram-<version>-portable-x64\, with squeezegram.exe (release
     build), tdjson.dll (staged by scripts\stage-tdjson.ps1, hash checked again here), LICENSE,
-    THIRD-PARTY-NOTICES.md and a short README-portable.txt. Run `pnpm tauri build` (or
+    THIRD-PARTY-NOTICES.md, a short README-portable.txt and portable.flag. The empty
+    portable.flag next to the executable is how the app knows it is the portable build: it
+    then only tells about a new version and never installs one. Run `pnpm tauri build` (or
     --no-bundle) and scripts\stage-tdjson.ps1 first; scripts\build-release.ps1 does it all.
 
     Like every local build, the executable has the Telegram api_id/api_hash from .env compiled
@@ -73,6 +75,13 @@ WHERE YOUR DATA GOES (EVEN IN THE PORTABLE VERSION)
   Nothing is written to the registry by the app itself. To remove every trace, delete the
   program folder and those two folders.
 
+UPDATES
+  This build never updates itself. Once a day at startup (Settings > Updates > Check
+  automatically turns this off) and when you press "Check now", it asks GitHub whether a newer
+  version exists and, if so, shows a link to the release page. You download the new zip and
+  replace this folder yourself. The empty file portable.flag next to squeezegram.exe is what
+  makes it behave like this: keep it, or the app will believe it was installed.
+
 UNSIGNED BUILD
   This build is not code-signed. Windows SmartScreen may show "Windows protected your PC"
   (More info, then Run anyway), and some antivirus programs may flag or quarantine it.
@@ -103,6 +112,8 @@ try {
             $zip, (Resolve-Path -LiteralPath $entry.Value).ProviderPath, "$name/$($entry.Key)",
             [System.IO.Compression.CompressionLevel]::Optimal)
     }
+    # Empty marker read by the app (update::PORTABLE_FLAG).
+    [void]$zip.CreateEntry("$name/portable.flag", [System.IO.Compression.CompressionLevel]::NoCompression)
     $readmeEntry = $zip.CreateEntry("$name/README-portable.txt", [System.IO.Compression.CompressionLevel]::Optimal)
     $stream = $readmeEntry.Open()
     try {

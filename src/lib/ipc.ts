@@ -22,12 +22,28 @@ import {
   type EntitlementStatus,
 } from "./entitlements"
 import type { ClearScope } from "./queue-clear"
+import {
+  updateInfoDecoder,
+  updateNoticeDecoder,
+  updateProgressDecoder,
+  type UpdateInfo,
+  type UpdateNotice,
+  type UpdateProgress,
+} from "./update"
 
 export type {
   EntitlementPlan,
   EntitlementSource,
   EntitlementStatus,
 } from "./entitlements"
+
+export type {
+  UpdateInfo,
+  UpdateKind,
+  UpdateNotice,
+  UpdatePhase,
+  UpdateProgress,
+} from "./update"
 
 // --- queue (src-tauri/src/queue/state.rs, store.rs) ---
 
@@ -285,6 +301,12 @@ export interface Settings {
   watch: { stable_seconds: number }
   /** Journal level: null = info in a release, debug in a dev build. */
   logging: { level: "error" | "warn" | "info" | "debug" | "trace" | null }
+  updates: {
+    /** Check at startup, at most once per 24 hours. */
+    check_automatically: boolean
+    /** ISO 8601 UTC time of the last check, successful or not; null if never. */
+    last_check_at: string | null
+  }
 }
 
 /** JSON merge patch (RFC 7396): objects merge, `null` resets a field to its default. */
@@ -914,6 +936,10 @@ const settingsDecoder = d.object<Settings>({
       }),
     ),
   }),
+  updates: d.object<Settings["updates"]>({
+    check_automatically: d.boolean,
+    last_check_at: d.nullable(d.string),
+  }),
 })
 
 const sidecarStatusDecoder = d.object<SidecarStatus>({
@@ -1319,6 +1345,30 @@ export function debugExport(): Promise<string | null> {
   return call("debug_export", d.nullable(d.string))
 }
 
+/** How this copy was installed, its version, and any update found earlier. No network. */
+export function updateInfo(): Promise<UpdateInfo> {
+  return call("update_info", updateInfoDecoder)
+}
+
+/** Asks GitHub for the latest release, whatever the automatic-check setting says. */
+export function updateCheck(): Promise<UpdateNotice> {
+  return call("update_check", updateNoticeDecoder)
+}
+
+/**
+ * Installer build: downloads the update (progress on `app://update-progress`), checks its
+ * signature, closes the app and runs the installer, which restarts it. It resolves only when
+ * nothing newer exists any more; on success the app ends before that.
+ */
+export function updateInstall(): Promise<void> {
+  return call("update_install", d.nothing)
+}
+
+/** Opens the page of the latest release in the browser (the core knows the address). */
+export function updateOpenPage(): Promise<void> {
+  return call("update_open_page", d.nothing)
+}
+
 // --- events ---
 
 /**
@@ -1385,6 +1435,14 @@ export function onAuthState(handler: (event: AuthState) => void) {
 
 export function onSidecarProgress(handler: (event: SidecarProgress) => void) {
   return subscribe("sidecars://progress", sidecarProgressDecoder, handler)
+}
+
+export function onUpdate(handler: (event: UpdateNotice) => void) {
+  return subscribe("app://update", updateNoticeDecoder, handler)
+}
+
+export function onUpdateProgress(handler: (event: UpdateProgress) => void) {
+  return subscribe("app://update-progress", updateProgressDecoder, handler)
 }
 
 export function onSidecarStatus(handler: (event: SidecarStatus) => void) {

@@ -13,6 +13,7 @@
 //! - `limit`: the effective upload limit (settings, else the signed-in account)
 //! - `logging`: the JSON Lines journal
 //! - `entitlements`: paid features (none in the public build: `FreeOnly`), license keys
+//! - `update`: update checks (installer: download and install; portable: tell the user)
 
 mod commands;
 pub mod entitlements;
@@ -23,6 +24,7 @@ pub mod queue;
 pub mod settings;
 pub mod sidecars;
 pub mod transport;
+pub mod update;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -42,6 +44,7 @@ use sidecars::SidecarService;
 use transport::TelegramTransport;
 use transport::select::TransportKind;
 use transport::stage::TransportStage;
+use update::UpdateService;
 
 /// Label of the main window, see `app.windows` in `tauri.conf.json`.
 const MAIN_WINDOW: &str = "main";
@@ -121,6 +124,11 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         Arc::new(TauriEvents(app.clone())),
         settings.get().pause_range(),
     );
+    let updates = Arc::new(UpdateService::new(
+        settings.clone(),
+        update::current_kind(),
+        app.package_info().version.to_string(),
+    ));
     Ok(AppState {
         queue,
         settings,
@@ -131,6 +139,7 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         limits,
         // The public build has no paid feature; nothing reads a license here.
         entitlements: Arc::new(FreeOnly),
+        updates,
         recovered: Mutex::new(recovered),
     })
 }
@@ -165,6 +174,16 @@ fn spawn_transport(
     });
 }
 
+/// Once the page can listen: the update check, which waits for the network off the UI thread.
+fn start_update_check(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Some(state) = app.try_state::<AppState>() {
+            state.updates.check_at_startup(&app).await;
+        }
+    });
+}
+
 /// Announces the items changed by the startup recovery once the page can listen.
 fn announce_recovery(app: &AppHandle) {
     if let Some(state) = app.try_state::<AppState>() {
@@ -194,6 +213,28 @@ fn start_journal(boot: &Result<Boot, Box<dyn std::error::Error>>) {
     logging::app_start(&versions);
 }
 
+/// Clean shutdown, shared by the exit and by the update install (which ends the process
+/// without `RunEvent::Exit`): an item still uploading becomes `unknown`, then the transport
+/// closes (`close`, wait for `authorizationStateClosed`, bounded). Blocks: call it from a
+/// thread that is not a runtime worker.
+pub(crate) fn close_core(queue: &Orchestrator, transport: Arc<dyn TelegramTransport>) {
+    if let Err(error) = queue.shutdown() {
+        tracing::error!(event = "shutdown_error", error_code = error.code(), error = %error, "queue shutdown failed");
+    }
+    let started = Instant::now();
+    let timed_out = tauri::async_runtime::block_on(async move {
+        tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.shutdown())
+            .await
+            .is_err()
+    });
+    tracing::info!(
+        event = "transport_shutdown",
+        dur_ms = logging::ms_since(started),
+        timed_out,
+        "Telegram transport closed"
+    );
+}
+
 pub fn run() {
     let boot = boot();
     start_journal(&boot);
@@ -211,6 +252,8 @@ pub fn run() {
             focus_main_window(app);
         }))
         .plugin(tauri_plugin_dialog::init())
+        // Driven from `commands::update_*` only: the page gets no permission on the plugin.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let boot = boot.ok_or("startup failed (see the init_error line)")?;
             let state = open_state(app.handle(), boot).inspect_err(|error| {
@@ -266,6 +309,10 @@ pub fn run() {
             commands::log_path,
             commands::log_open_dir,
             commands::debug_export,
+            commands::update_info,
+            commands::update_check,
+            commands::update_install,
+            commands::update_open_page,
         ])
         // The window is created hidden (tauri.conf.json) and shown once the page has loaded,
         // so a dark theme never flashes white while the WebView starts.
@@ -276,6 +323,7 @@ pub fn run() {
                     tracing::warn!(event = "window_error", error = %error, "could not show the main window");
                 }
                 announce_recovery(webview.app_handle());
+                start_update_check(webview.app_handle());
             }
         })
         .build(tauri::generate_context!());
@@ -294,22 +342,7 @@ pub fn run() {
             let Some(state) = app.try_state::<AppState>() else {
                 return;
             };
-            if let Err(error) = state.queue.shutdown() {
-                tracing::error!(event = "shutdown_error", error_code = error.code(), error = %error, "queue shutdown failed");
-            }
-            let transport = state.transport.clone();
-            let started = Instant::now();
-            let timed_out = tauri::async_runtime::block_on(async move {
-                tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.shutdown())
-                    .await
-                    .is_err()
-            });
-            tracing::info!(
-                event = "transport_shutdown",
-                dur_ms = logging::ms_since(started),
-                timed_out,
-                "Telegram transport closed"
-            );
+            close_core(&state.queue, state.transport.clone());
         }
         RunEvent::Exit => logging::app_exit("exit"),
         _ => {}

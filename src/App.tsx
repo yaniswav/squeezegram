@@ -8,6 +8,7 @@ import { DropOverlay } from "@/components/drop-overlay"
 import { AppProviders } from "@/components/providers"
 import { SidecarBanner } from "@/components/sidecar-banner"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { UpdateBanner } from "@/components/update-banner"
 import { useFileDrop } from "@/hooks/use-file-drop"
 import { directionOf } from "@/i18n/languages"
 import { logScreen } from "@/lib/ipc"
@@ -78,6 +79,7 @@ function Shell() {
       >
         <div className="mx-auto w-full max-w-3xl space-y-4 px-6 py-6">
           <SidecarBanner onOpenSettings={() => navigate("settings")} />
+          <UpdateBanner />
           <AlertStack />
           <AnimatePresence mode="wait" initial={false}>
             <motion.div

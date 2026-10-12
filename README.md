@@ -19,7 +19,8 @@ In progress or missing:
 
 - The TDLib transport is being integrated. The sign-in flow is tested against recorded TDLib responses only. Real sign-in, destination listing, uploads, FLOOD_WAIT handling and reconciliation are not verified end to end yet.
 - In a debug build the app uses a mock transport by default, so nothing reaches Telegram.
-- Not written yet: watched folder, thumbnails, auto-update, installer and release pipeline.
+- Update check and self-update are written but have never run against a real release (none is published yet).
+- Not written yet: watched folder, thumbnails, the release pipeline.
 - Windows 10/11 x64 only.
 
 ## Requirements
@@ -76,10 +77,11 @@ cd src-tauri; cargo fmt --check; cargo clippy --locked -- -D warnings; cargo tes
 
 ## Privacy
 
-squeezegram collects no analytics or telemetry and has no server of its own. It makes two kinds of outgoing connections:
+squeezegram collects no analytics or telemetry and has no server of its own. It makes three kinds of outgoing connections:
 
 - to Telegram's servers, through TDLib, when the Telegram transport is enabled;
-- to GitHub, to download FFmpeg from the pinned BtbN release on first setup.
+- to GitHub, to download FFmpeg from the pinned BtbN release on first setup;
+- to GitHub, to look for a newer version: at startup at most once every 24 hours (Settings > Updates > Check automatically turns this off) and when you press "Check now". The request is a plain HTTPS GET of `releases/latest/download/latest.json` carrying only the updater plugin's default headers (`Accept` and `User-Agent: tauri-plugin-updater/<plugin version>`; the endpoint has no version placeholder, so the app version is not sent), so GitHub sees your IP address as it would for any download. No identifier, Windows version or usage data is sent. The installed app downloads and installs an update only when you press "Download and install", after checking its signature against the public key in `src-tauri/tauri.conf.json`; the portable zip only shows a link to the release page.
 
 The Telegram session is stored locally in an encrypted TDLib database whose key is protected with Windows DPAPI. Logs stay on your machine; the debug export is a file you create and share yourself.
 

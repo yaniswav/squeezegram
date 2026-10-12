@@ -48,6 +48,7 @@ import {
 } from "@/state/destinations"
 import { QueueContext, type QueueApi } from "@/state/queue"
 import { SettingsContext, type SettingsApi } from "@/state/settings"
+import { UpdateProvider } from "./update-provider"
 
 const MAX_ALERTS = 5
 
@@ -427,7 +428,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
       <SettingsProvider>
         <AuthProvider>
           <DestinationsProvider>
-            <QueueProvider>{children}</QueueProvider>
+            <QueueProvider>
+              <UpdateProvider>{children}</UpdateProvider>
+            </QueueProvider>
           </DestinationsProvider>
         </AuthProvider>
       </SettingsProvider>

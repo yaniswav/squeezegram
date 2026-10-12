@@ -35,6 +35,7 @@ use crate::sidecars::{SidecarError, SidecarService, SidecarStatus};
 use crate::transport::select::TransportKind;
 use crate::transport::service::{self, AuthPayload, DestinationCheck, ServiceError};
 use crate::transport::{AuthInput, SentCandidate, TelegramTransport, TransportError};
+use crate::update::{self, Trigger, UpdateError, UpdateInfo, UpdateNotice, UpdateService};
 
 /// Event of the login state machine.
 pub const AUTH_STATE: &str = "auth://state";
@@ -54,6 +55,8 @@ pub struct AppState {
     pub limits: Arc<LimitResolver>,
     /// Paid features (`entitlements_status`); `FreeOnly` in the public build.
     pub entitlements: Arc<dyn Entitlements>,
+    /// Update checks and installs (`update_*`).
+    pub updates: Arc<UpdateService>,
     /// Items changed by the startup recovery, announced once the page has loaded.
     pub recovered: Mutex<Vec<i64>>,
 }
@@ -125,6 +128,16 @@ impl From<SidecarError> for CommandError {
         tracing::warn!(event = "command_error_detail", error_code = error.code(), error = %error, "sidecar error");
         Self {
             code: error.code(),
+            params: json!({}),
+        }
+    }
+}
+
+impl From<UpdateError> for CommandError {
+    /// The service has already journaled the failure (`update_failed`).
+    fn from(error: UpdateError) -> Self {
+        Self {
+            code: error.code,
             params: json!({}),
         }
     }
@@ -710,6 +723,53 @@ pub async fn sidecars_use(
         tracing::warn!(event = "emit_failed", name = SIDECARS_STATUS, error = %error, "could not emit an event to the window");
     }
     call.finish(result.map_err(Into::into))
+}
+
+// --- updates ---
+
+/// How this copy was installed (`installer` | `portable`), its version, and the update found
+/// earlier in this session (`notice`, `null` if none). No network.
+#[tauri::command]
+pub fn update_info(state: State<'_, AppState>) -> UpdateInfo {
+    Call::quiet("update_info").done(state.updates.info())
+}
+
+/// Asks GitHub for the latest release, whatever the automatic-check setting says. The result
+/// is also emitted on `app://update`.
+#[tauri::command]
+pub async fn update_check(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<UpdateNotice> {
+    let call = Call::new("update_check");
+    let result = state.updates.check(&app, Trigger::Manual).await;
+    call.finish(result.map_err(Into::into))
+}
+
+/// Installer build only: downloads the update (progress on `app://update-progress`), checks
+/// its signature, closes the app and runs the installer, which restarts it. Returns only on
+/// failure (or when nothing newer exists any more).
+#[tauri::command]
+pub async fn update_install(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    let call = Call::new("update_install");
+    let result = state.updates.install(&app).await;
+    call.finish(result.map_err(Into::into))
+}
+
+/// Opens the page of the latest release in the browser. The address is fixed in the core: the
+/// page cannot choose what gets opened.
+#[tauri::command]
+pub fn update_open_page() -> CommandResult<()> {
+    let call = Call::new("update_open_page");
+    let result = std::process::Command::new("explorer.exe")
+        .arg(update::RELEASES_PAGE)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| {
+            tracing::warn!(event = "command_error_detail", error = %error, "explorer did not start");
+            CommandError::io()
+        });
+    call.finish(result)
 }
 
 // --- journal ---

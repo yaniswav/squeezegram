@@ -42,6 +42,19 @@ pub struct Settings {
     pub watch: Watch,
     /// Journal settings.
     pub logging: Logging,
+    /// Update checks. Absent from files written before they existed: the defaults apply.
+    pub updates: Updates,
+}
+
+/// Update checks (`update` module). The check asks GitHub for the latest release manifest and
+/// sends nothing else than the plugin's default request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Updates {
+    /// Check at startup, at most once per 24 hours. "Check now" ignores it.
+    pub check_automatically: bool,
+    /// ISO 8601 UTC time of the last check (automatic or not, successful or not).
+    pub last_check_at: Option<String>,
 }
 
 /// Journal level: `null` = `info` in a release, `debug` in a debug build. `RUST_LOG` wins.
@@ -128,6 +141,16 @@ impl Default for Settings {
             ui: Ui::default(),
             watch: Watch::default(),
             logging: Logging::default(),
+            updates: Updates::default(),
+        }
+    }
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Self {
+            check_automatically: true,
+            last_check_at: None,
         }
     }
 }
@@ -204,6 +227,11 @@ impl Settings {
             && !crate::logging::is_level(level)
         {
             return Err(SettingsError::Invalid("logging.level".into()));
+        }
+        if let Some(at) = &self.updates.last_check_at
+            && crate::queue::parse_iso(at).is_none()
+        {
+            return Err(SettingsError::Invalid("updates.last_check_at".into()));
         }
         Ok(())
     }
@@ -359,9 +387,53 @@ mod tests {
               "ffmpeg": { "custom_dir": null },
               "ui": { "theme": "system", "language": "en" },
               "watch": { "stable_seconds": 10 },
-              "logging": { "level": null }
+              "logging": { "level": null },
+              "updates": { "check_automatically": true, "last_check_at": null }
             })
         );
+    }
+
+    #[test]
+    fn a_file_written_before_updates_existed_loads_with_the_defaults() {
+        let dir = TestDir::new("settings-migration");
+        let path = dir.path().join(FILE_NAME);
+        // What this version wrote before the `updates` section: every other section present.
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("updates");
+        old["ui"]["theme"] = json!("dark");
+        std::fs::write(&path, old.to_string()).unwrap();
+
+        let store = SettingsStore::load(path.clone()).unwrap();
+        let loaded = store.get();
+        assert_eq!(loaded.updates, Updates::default());
+        assert!(loaded.updates.check_automatically);
+        assert_eq!(loaded.ui.theme, "dark", "the rest of the file is kept");
+
+        // The first save writes the new section next to the old ones.
+        store
+            .set(&json!({ "updates": { "check_automatically": false } }))
+            .unwrap();
+        let rewritten: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(rewritten["updates"]["check_automatically"], json!(false));
+        assert_eq!(rewritten["ui"]["theme"], json!("dark"));
+    }
+
+    #[test]
+    fn the_last_check_time_must_be_a_timestamp() {
+        let dir = TestDir::new("settings-updates");
+        let store = SettingsStore::load(dir.path().join(FILE_NAME)).unwrap();
+        let stamp = "2026-10-12T08:30:00.000Z";
+        let saved = store
+            .set(&json!({ "updates": { "last_check_at": stamp } }))
+            .unwrap();
+        assert_eq!(saved.updates.last_check_at.as_deref(), Some(stamp));
+        assert!(saved.updates.check_automatically, "untouched field kept");
+        let error = store
+            .set(&json!({ "updates": { "last_check_at": "yesterday" } }))
+            .unwrap_err();
+        assert_eq!(error.code(), "SETTINGS_INVALID");
+        assert_eq!(store.get(), saved, "a refused patch changes nothing");
     }
 
     #[test]
