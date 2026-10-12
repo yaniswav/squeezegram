@@ -16,11 +16,13 @@
 //! - `logging`: the JSON Lines journal
 //! - `entitlements`: paid features, granted by a license verified offline (`LicenseEntitlements`)
 //! - `update`: update checks (installer: download and install; portable: tell the user)
+//! - `init_failure`: the message box shown when the app cannot start (no window yet)
 
 pub mod background;
 pub mod caption;
 mod commands;
 pub mod entitlements;
+mod init_failure;
 pub mod limit;
 pub mod logging;
 pub mod media;
@@ -96,7 +98,8 @@ struct Boot {
 fn boot() -> Result<Boot, Box<dyn std::error::Error>> {
     let db_path = queue::db::default_path()?;
     let settings = Arc::new(SettingsStore::load(SettingsStore::path_next_to(&db_path))?);
-    let sidecar_base = SidecarService::default_base().ok_or("LOCALAPPDATA is not set")?;
+    let sidecar_base =
+        SidecarService::default_base().ok_or(init_failure::MissingFolder("LOCALAPPDATA"))?;
     let sidecars = Arc::new(SidecarService::new(sidecar_base, settings.clone()));
     Ok(Boot {
         db_path,
@@ -314,10 +317,22 @@ pub(crate) fn close_core(state: &AppState) {
 pub fn run() {
     let boot = boot();
     start_journal(&boot);
+    // Why the setup failed, for the message box: Tauri's own error only says "setup".
+    let failure: Arc<Mutex<Option<init_failure::Cause>>> = Arc::new(Mutex::new(None));
+    let record = {
+        let failure = failure.clone();
+        move |error: &(dyn std::error::Error + 'static)| {
+            *failure
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some(init_failure::cause_of(error));
+        }
+    };
     let boot = match boot {
         Ok(boot) => Some(boot),
         Err(error) => {
             tracing::error!(event = "init_error", step = "boot", error = %error, "startup failed before the window");
+            record(error.as_ref());
             None
         }
     };
@@ -334,6 +349,7 @@ pub fn run() {
             let boot = boot.ok_or("startup failed (see the init_error line)")?;
             let state = open_state(app.handle(), boot).inspect_err(|error| {
                 tracing::error!(event = "init_error", step = "open_state", error = %error, "the queue could not be opened");
+                record(error.as_ref());
             })?;
             let queue = state.queue.clone();
             spawn_transport(
@@ -465,7 +481,13 @@ pub fn run() {
         Ok(app) => app,
         Err(error) => {
             tracing::error!(event = "init_error", step = "tauri_build", error = %error, "the application could not be built");
-            panic!("error while building the Tauri application: {error}");
+            // No console in a release: without this box the app would simply not appear.
+            let cause = failure
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+                .unwrap_or_else(|| init_failure::Cause::Other(error.to_string()));
+            init_failure::report_and_exit(cause);
         }
     };
     app.run(|app, event| match event {
