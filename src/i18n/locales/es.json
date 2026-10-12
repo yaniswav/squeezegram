@@ -81,6 +81,7 @@
     "TG_UPLOAD_FAILED": "Telegram informó de que la subida falló.",
     "TG_LIB_MISSING": "Falta la biblioteca de Telegram (tdjson.dll) o está dañada.",
     "TG_NOT_CONFIGURED": "Esta versión no tiene una identidad válida de la API de Telegram (api_id y api_hash), así que no puede conectarse a Telegram.",
+    "TG_NOT_CONFIGURED_override_api_hash_unavailable": "Your own api_hash can't be read on this Windows account (saved by another user or computer, or damaged), so squeezegram can't connect to Telegram. Enter it again in Settings, or remove your own api_id to use squeezegram's.",
     "TG_TRANSPORT_BUSY": "Telegram is starting or signing out. Try again in a moment.",
     "TG_NOT_IMPLEMENTED": "Esta función de Telegram todavía no está disponible en esta versión.",
     "CANCELLED": "Cancelado.",

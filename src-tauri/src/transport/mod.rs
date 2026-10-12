@@ -560,7 +560,11 @@ impl TransportError {
                 ("TG_REJECTED", json!({ "tgCode": code, "message": message }))
             }
             TransportError::LibMissing(_) => ("TG_LIB_MISSING", json!({})),
-            TransportError::NotConfigured(_) => ("TG_NOT_CONFIGURED", json!({})),
+            // The problem names a field or a state (`api_id_missing`,
+            // `override_api_hash_unavailable`), never a value: the page picks its sentence.
+            TransportError::NotConfigured(problem) => {
+                ("TG_NOT_CONFIGURED", json!({ "problem": problem }))
+            }
             TransportError::NotImplemented(what) => ("TG_NOT_IMPLEMENTED", json!({ "what": what })),
         }
     }
@@ -858,7 +862,7 @@ mod tests {
             (
                 TransportError::NotConfigured("api_id_missing"),
                 "TG_NOT_CONFIGURED",
-                json!({}),
+                json!({ "problem": "api_id_missing" }),
             ),
             (
                 TransportError::NotImplemented("upload (M4)"),

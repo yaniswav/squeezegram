@@ -8,6 +8,7 @@ const VARIANT_PARAM: Readonly<Record<string, string>> = {
   TG_WRITE_FORBIDDEN: "reason",
   FFMPEG_FAILED: "cause",
   ENCODER_FALLBACK: "cause",
+  TG_NOT_CONFIGURED: "problem",
 }
 
 /** Codes that inform (the work went on) rather than report an error. */

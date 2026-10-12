@@ -64,6 +64,22 @@ test("a cause picks the precise sentence of the GPU fallback codes", () => {
   assert.equal(messageKey("DISK_SPACE", { cause: "silent" }, has), "DISK_SPACE")
 })
 
+test("an unreadable personal api_hash is not told as a build without identity", () => {
+  assert.equal(
+    messageKey(
+      "TG_NOT_CONFIGURED",
+      { problem: "override_api_hash_unavailable" },
+      has,
+    ),
+    "TG_NOT_CONFIGURED_override_api_hash_unavailable",
+  )
+  // Every other problem keeps the general sentence.
+  assert.equal(
+    messageKey("TG_NOT_CONFIGURED", { problem: "api_id_missing" }, has),
+    "TG_NOT_CONFIGURED",
+  )
+})
+
 test("the GPU sentences only use params the core sends", () => {
   // `duration` is formatted from `atSeconds` by errors.ts.
   const sent: Record<string, string[]> = {

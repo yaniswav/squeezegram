@@ -81,6 +81,7 @@
     "TG_UPLOAD_FAILED": "Telegram reported that the upload failed.",
     "TG_LIB_MISSING": "The Telegram library (tdjson.dll) is missing or damaged.",
     "TG_NOT_CONFIGURED": "This build has no valid Telegram API identity (api_id and api_hash), so it can't connect to Telegram.",
+    "TG_NOT_CONFIGURED_override_api_hash_unavailable": "Your own api_hash can't be read on this Windows account (saved by another user or computer, or damaged), so squeezegram can't connect to Telegram. Enter it again in Settings, or remove your own api_id to use squeezegram's.",
     "TG_TRANSPORT_BUSY": "Telegram is starting or signing out. Try again in a moment.",
     "TG_NOT_IMPLEMENTED": "This Telegram feature is not available yet in this version.",
     "CANCELLED": "Cancelled.",
