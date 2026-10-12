@@ -4,12 +4,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 
+use chrono::{DateTime, Utc};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 use super::state::{self, Changes, Column};
-use super::{QueueError, Result, State, db, now_iso};
+use super::{QueueError, Result, State, db, iso, now_iso, parse_iso};
 use crate::media::plan::EncodingOverride;
 use crate::transport::ChatFolder;
 
@@ -18,6 +19,9 @@ pub const HOLD_DUPLICATE: &str = "duplicate";
 pub const HOLD_WATCH: &str = "watch_pending";
 /// `origin` of an item found in a watched folder (`manual` for `queue_add`).
 pub const ORIGIN_WATCH: &str = "watch";
+/// Longest minimum interval between two sends to a destination (F2): one week. Beyond it the
+/// setting is clamped, so the end of an interval is always a representable time.
+pub const MAX_MIN_INTERVAL_S: i64 = 7 * 24 * 3600;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -305,6 +309,11 @@ where
     T: Deserialize<'de>,
 {
     Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// `next_run_at` of an item; an unreadable one counts as none (the item runs).
+fn scheduled_at(item: &Item) -> Option<DateTime<Utc>> {
+    item.next_run_at.as_deref().and_then(parse_iso)
 }
 
 /// Columns of `destinations d`.
@@ -742,7 +751,7 @@ impl Store {
         if let Some(seconds) = patch.min_interval_s {
             tx.execute(
                 "UPDATE destinations SET min_interval_s = ?1 WHERE id = ?2",
-                params![seconds.max(0), id],
+                params![seconds.clamp(0, MAX_MIN_INTERVAL_S), id],
             )?;
         }
         if let Some(mode) = patch.default_mode {
@@ -850,13 +859,64 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Next item the orchestrator may run: `ready`, or `encoded` (retry, or waiting_server
-    /// recovered at startup), by position.
-    pub fn next_runnable(&self) -> Result<Option<Item>> {
+    /// Next item the orchestrator may run at `now`, by position: `ready`, or `encoded` (retry,
+    /// waiting_server recovered at startup, or held by its destination's minimum interval)
+    /// once its `next_run_at` has come. An item still waiting lets the ones behind it run.
+    pub fn next_runnable(&self, now: DateTime<Utc>) -> Result<Option<Item>> {
         Ok(self
             .items_in_states(&[State::Ready, State::Encoded])?
             .into_iter()
-            .next())
+            .find(|item| scheduled_at(item).is_none_or(|at| at <= now)))
+    }
+
+    /// The earliest `next_run_at` after `now` among the items `next_runnable` skips: when the
+    /// loop must look again although nothing woke it.
+    pub fn next_scheduled(&self, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
+        Ok(self
+            .items_in_states(&[State::Ready, State::Encoded])?
+            .iter()
+            .filter_map(scheduled_at)
+            .filter(|at| *at > now)
+            .min())
+    }
+
+    /// Holds an `encoded` item until `at` (the end of its destination's minimum interval): it
+    /// keeps its file and its state, and `next_runnable` skips it until then.
+    pub fn defer(&mut self, id: i64, at: DateTime<Utc>) -> Result<()> {
+        let updated = self.conn.execute(
+            "UPDATE items SET next_run_at = ?1, updated_at = ?2 WHERE id = ?3 AND state = ?4",
+            params![iso(at), now_iso(), id, State::Encoded.as_str()],
+        )?;
+        if updated == 0 {
+            return Err(QueueError::IllegalTransition {
+                item_id: id,
+                from: self.get_item(id)?.state,
+                to: State::Encoded,
+            });
+        }
+        Ok(())
+    }
+
+    /// When the last send to `destination_id` went out: the newest `sent` history row, or a
+    /// `sent` item still in the queue (the history may have been cleared since). `None` when
+    /// nothing was sent there, or the time is unreadable.
+    pub fn last_sent_at(&self, destination_id: i64) -> Result<Option<DateTime<Utc>>> {
+        // Fixed-width ISO 8601 UTC (`now_iso`): the text order is the time order.
+        let latest: Option<String> = self.conn.query_row(
+            "SELECT MAX(at) FROM (
+               SELECT sent_at AS at FROM history WHERE destination_id = ?1 AND status = ?2
+               UNION ALL
+               SELECT tg_sent_at FROM items
+               WHERE destination_id = ?1 AND state = ?3 AND tg_sent_at IS NOT NULL
+             )",
+            params![
+                destination_id,
+                HistoryStatus::Sent.as_str(),
+                State::Sent.as_str()
+            ],
+            |row| row.get(0),
+        )?;
+        Ok(latest.as_deref().and_then(parse_iso))
     }
 
     /// What the queue has to do now, for the tray: items being worked on (`State::is_running`)
@@ -2851,5 +2911,89 @@ mod tests {
         );
         store.set_encoding_override(waiting, None).unwrap();
         assert_eq!(store.get_item(waiting).unwrap().plan_json, None);
+    }
+
+    #[test]
+    fn a_scheduled_item_lets_the_next_one_run_until_it_is_due() {
+        let mut store = memory_store();
+        let held = add_item(&mut store, "a.mp4");
+        let behind = add_item(&mut store, "b.mp4");
+        let now = parse_iso("2026-10-12T10:00:00.000Z").unwrap();
+        let due = now + chrono::Duration::seconds(60);
+        force_state(&store, held, State::Encoded);
+        store.defer(held, due).unwrap();
+        assert_eq!(
+            store.get_item(held).unwrap().next_run_at.as_deref(),
+            Some("2026-10-12T10:01:00.000Z")
+        );
+        assert_eq!(store.get_item(held).unwrap().state, State::Encoded);
+
+        assert_eq!(
+            store.next_runnable(now).unwrap().map(|i| i.id),
+            Some(behind)
+        );
+        assert_eq!(store.next_scheduled(now).unwrap(), Some(due));
+        assert_eq!(store.next_runnable(due).unwrap().map(|i| i.id), Some(held));
+        assert_eq!(store.next_scheduled(due).unwrap(), None, "nothing after it");
+
+        // Only an encoded item is held this way.
+        let error = store.defer(behind, due).unwrap_err();
+        assert_eq!(error.code(), "ILLEGAL_TRANSITION");
+    }
+
+    #[test]
+    fn the_last_send_comes_from_the_history_or_the_queue() {
+        let mut store = memory_store();
+        let chat = first_destination(&store);
+        assert_eq!(store.last_sent_at(chat).unwrap(), None);
+
+        let id = add_item(&mut store, "a.mp4");
+        let mut item = store.get_item(id).unwrap();
+        item.content_id = Some("1:a".into());
+        item.tg_sent_at = Some("2026-10-12T09:00:00.000Z".into());
+        store.record_history(&item, HistoryStatus::Sent).unwrap();
+        // A failure is no send.
+        item.tg_sent_at = Some("2026-10-12T11:00:00.000Z".into());
+        store.record_history(&item, HistoryStatus::Failed).unwrap();
+        let at = |text| parse_iso(text).unwrap();
+        assert_eq!(
+            store.last_sent_at(chat).unwrap(),
+            Some(at("2026-10-12T09:00:00.000Z"))
+        );
+
+        // A sent item still queued counts, even once the history is cleared.
+        force_state(&store, id, State::Sent);
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET tg_sent_at = '2026-10-12T10:00:00.000Z' WHERE id = ?1",
+                [id],
+            )
+            .unwrap();
+        assert_eq!(
+            store.last_sent_at(chat).unwrap(),
+            Some(at("2026-10-12T10:00:00.000Z"))
+        );
+        store.clear_history().unwrap();
+        assert_eq!(
+            store.last_sent_at(chat).unwrap(),
+            Some(at("2026-10-12T10:00:00.000Z"))
+        );
+        let other = store.upsert_destination(&destination(2, 0)).unwrap();
+        assert_eq!(store.last_sent_at(other).unwrap(), None);
+    }
+
+    #[test]
+    fn the_minimum_interval_is_clamped_to_a_week() {
+        let mut store = memory_store();
+        let chat = first_destination(&store);
+        for (asked, kept) in [(90, 90), (-5, 0), (i64::MAX, MAX_MIN_INTERVAL_S)] {
+            let patch = DestinationPatch {
+                min_interval_s: Some(asked),
+                ..Default::default()
+            };
+            store.update_destination(chat, &patch).unwrap();
+            assert_eq!(store.get_destination(chat).unwrap().min_interval_s, kept);
+        }
     }
 }

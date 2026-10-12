@@ -313,7 +313,9 @@ fn found_files_wait_in_pending_review_and_never_run_by_themselves() {
     assert_eq!(items[0].send_mode, SendMode::Photo);
     assert_eq!(items[1].send_mode, SendMode::Document);
     assert_eq!(items[1].source_size, 5);
-    let runnable = queue.with_store(|store| store.next_runnable()).unwrap();
+    let runnable = queue
+        .with_store(|store| store.next_runnable(chrono::Utc::now()))
+        .unwrap();
     assert_eq!(runnable, None, "nothing runs without approval");
     // The destination was not chosen by the user: "recently used" is unchanged.
     let used = queue

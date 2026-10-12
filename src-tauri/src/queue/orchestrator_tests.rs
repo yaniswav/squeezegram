@@ -1,5 +1,6 @@
-//! Orchestrator tests on deterministic doubles, with tokio's paused clock: pauses and
-//! FLOOD_WAIT delays elapse instantly.
+//! Orchestrator tests on deterministic doubles, with tokio's paused clock: pauses, FLOOD_WAIT
+//! delays and minimum intervals elapse instantly. The schedule's wall time (`Clock`) follows
+//! the same paused clock, so `next_run_at` comes due when the test lets time pass.
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -242,8 +243,30 @@ impl SendStage for FakeSend {
     }
 }
 
+/// Wall time that advances with tokio's (paused) clock, from the real time at creation.
+struct PausedClock {
+    origin: DateTime<Utc>,
+    started: Instant,
+}
+
+impl PausedClock {
+    fn new() -> Self {
+        Self {
+            origin: Utc::now(),
+            started: Instant::now(),
+        }
+    }
+}
+
+impl Clock for PausedClock {
+    fn now(&self) -> DateTime<Utc> {
+        self.origin + self.started.elapsed()
+    }
+}
+
 struct Harness {
     orch: Orchestrator,
+    clock: Arc<PausedClock>,
     media: Arc<FakeMedia>,
     send: Arc<FakeSend>,
     sink: Arc<Recorder>,
@@ -275,7 +298,8 @@ impl Harness {
             concurrency: concurrency.clone(),
         });
         let sink = Arc::new(Recorder::default());
-        let orch = Orchestrator::new(
+        let clock = Arc::new(PausedClock::new());
+        let orch = Orchestrator::with_clock(
             memory_store(),
             media.clone(),
             send.clone(),
@@ -284,11 +308,13 @@ impl Harness {
                 min: Duration::ZERO,
                 max: Duration::ZERO,
             },
+            clock.clone(),
         );
         let runner = orch.clone();
         let task = tokio::spawn(async move { runner.run().await });
         Self {
             orch,
+            clock,
             media,
             send,
             sink,
@@ -358,6 +384,26 @@ impl Harness {
                 Ok(ids)
             })
             .unwrap()
+    }
+
+    fn set_interval(&self, destination_id: i64, seconds: i64) {
+        let patch = crate::queue::store::DestinationPatch {
+            min_interval_s: Some(seconds),
+            ..Default::default()
+        };
+        self.orch
+            .with_store(|s| s.update_destination(destination_id, &patch))
+            .unwrap();
+    }
+
+    /// When the fake send was called for `id`, as offsets from the first call of the test.
+    fn sent_after_start(&self, id: i64) -> Vec<Duration> {
+        let first = self.send.calls.lock().unwrap()[0].1;
+        self.send
+            .calls_for(id)
+            .into_iter()
+            .map(|at| at - first)
+            .collect()
     }
 
     fn item(&self, id: i64) -> Item {
@@ -1230,4 +1276,124 @@ async fn waiting_items_are_analyzed_again_when_the_settings_change() {
     assert_eq!(h.media.analyses.lock().unwrap().len(), 2);
     assert!(h.item(id).plan_json.is_some());
     analysis.abort();
+}
+
+// --- minimum interval per destination (F2) ---
+
+#[tokio::test(start_paused = true)]
+async fn the_interval_reschedules_and_other_destinations_go_meanwhile() {
+    let h = Harness::new("orch-interval", Treatment::Encode);
+    let chats = h.chats(2);
+    let (a, b) = (chats[0], chats[1]);
+    h.set_interval(a, 60);
+    let a1 = h.add_to("a1.mp4", &[(a, SendMode::Video)])[0];
+    let a2 = h.add_to("a2.mp4", &[(a, SendMode::Video)])[0];
+    let b1 = h.add_to("b1.mp4", &[(b, SendMode::Video)])[0];
+    h.orch.start();
+
+    h.wait_state(b1, Sent).await;
+    // a2 was encoded, found the interval running and went back to the schedule: b1, behind
+    // it in the queue, went first.
+    assert_eq!(h.send.order(), [a1, b1]);
+    let waiting = h.item(a2);
+    assert_eq!(waiting.state, Encoded);
+    assert!(Path::new(waiting.output_path.as_deref().unwrap()).exists());
+    let due = parse_iso(waiting.next_run_at.as_deref().unwrap()).unwrap();
+    let a1_sent = parse_iso(h.item(a1).tg_sent_at.as_deref().unwrap()).unwrap();
+    assert_eq!(due - a1_sent, chrono::Duration::seconds(60));
+
+    h.wait_state(a2, Sent).await;
+    assert_eq!(h.send.order(), [a1, b1, a2]);
+    let gap = h.sent_after_start(a2)[0] - h.sent_after_start(a1)[0];
+    assert!(
+        (Duration::from_secs(60)..Duration::from_secs(62)).contains(&gap),
+        "{gap:?}"
+    );
+    assert_eq!(h.item(a2).next_run_at, None, "cleared by the upload");
+    // Never uploaded twice, never two stages at once.
+    assert_eq!(h.send.calls_for(a2).len(), 1);
+    assert_eq!(h.concurrency.max.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_interval_counts_from_a_send_of_an_earlier_session() {
+    let h = Harness::new("orch-interval-history", Treatment::Skip);
+    let chat = h.chats(1)[0];
+    h.set_interval(chat, 120);
+    // Sent 30 s ago, before this session: only the history knows.
+    let earlier = h.add("earlier.mp4");
+    let mut sent = h.item(earlier);
+    sent.content_id = Some("6:earlier".into());
+    sent.tg_sent_at = Some(iso(h.clock.now() - chrono::Duration::seconds(30)));
+    h.orch
+        .with_store(|s| s.record_history(&sent, HistoryStatus::Sent))
+        .unwrap();
+    h.orch.cancel(earlier).unwrap();
+
+    let started = Instant::now();
+    let id = h.add("a.mp4");
+    h.orch.start();
+    h.wait_state(id, Sent).await;
+    let waited = h.send.calls_for(id)[0] - started;
+    assert!(
+        (Duration::from_secs(90)..Duration::from_secs(92)).contains(&waited),
+        "{waited:?}"
+    );
+    assert_eq!(
+        h.sink.states_of(id),
+        [Ready, Probing, Encoded, Uploading, Sent],
+        "the wait is a schedule, not a state"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_pause_and_a_flood_wait_still_hold_the_queue_with_an_interval() {
+    let h = Harness::new("orch-interval-flood", Treatment::Skip);
+    h.orch.set_pauses(PauseRange {
+        min: Duration::from_secs(10),
+        max: Duration::from_secs(10),
+    });
+    let chats = h.chats(2);
+    let (a, b) = (chats[0], chats[1]);
+    h.set_interval(a, 30);
+    // a1 meets a FLOOD_WAIT of 45 s: the account waits, the other destination with it.
+    h.send_steps(&[SendStep::FloodWait(45), SendStep::Sent]);
+    let a1 = h.add_to("a1.mp4", &[(a, SendMode::Video)])[0];
+    let b1 = h.add_to("b1.mp4", &[(b, SendMode::Video)])[0];
+    let a2 = h.add_to("a2.mp4", &[(a, SendMode::Video)])[0];
+    h.orch.start();
+    h.wait_state(a2, Sent).await;
+
+    assert_eq!(h.send.order(), [a1, a1, b1, a2]);
+    let a1_sent = h.sent_after_start(a1)[1];
+    let b1_sent = h.sent_after_start(b1)[0];
+    let a2_sent = h.sent_after_start(a2)[0];
+    assert!(a1_sent >= Duration::from_secs(45), "{a1_sent:?}");
+    // The pause follows a1's send; the interval counts from that send, not from its first try.
+    assert!(b1_sent - a1_sent >= Duration::from_secs(10), "{b1_sent:?}");
+    let gap = a2_sent - a1_sent;
+    assert!(
+        (Duration::from_secs(30)..Duration::from_secs(32)).contains(&gap),
+        "{gap:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rescheduled_item_can_be_cancelled_and_holds_nothing_back() {
+    let h = Harness::new("orch-interval-cancel", Treatment::Skip);
+    let chats = h.chats(2);
+    h.set_interval(chats[0], 3600);
+    let first = h.add("a.mp4");
+    let second = h.add("b.mp4");
+    h.orch.start();
+    h.wait_state(first, Sent).await;
+    h.idle(5).await;
+    assert_eq!(h.item(second).state, Encoded);
+    assert!(h.item(second).next_run_at.is_some());
+
+    h.orch.cancel(second).unwrap();
+    assert_eq!(h.item(second).state, Cancelled);
+    let next = h.add_to("c.mp4", &[(chats[1], SendMode::Video)])[0];
+    h.wait_state(next, Sent).await;
+    assert_eq!(h.send.order(), [first, next]);
 }

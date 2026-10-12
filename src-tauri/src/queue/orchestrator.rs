@@ -1,7 +1,14 @@
 //! Sequential orchestrator: one item at a time, by position.
 //!
 //! Media work (probe, encode, remux) and sending are injected through `MediaStage` and
-//! `SendStage`, so the loop is tested on deterministic doubles.
+//! `SendStage`, so the loop is tested on deterministic doubles; the wall time of the schedule
+//! through `Clock`, so tests run it on tokio's paused time.
+//!
+//! Three waits come before an upload, each where it belongs:
+//! - the destination's minimum interval (F2) is a schedule: the item stays `encoded` with
+//!   `next_run_at`, and the loop runs the other items meanwhile;
+//! - the random pause between two sends (F20) and a FLOOD_WAIT (F21) hold the loop: they are
+//!   about the account, so no other upload may go in between.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{BuildHasher, RandomState};
@@ -9,6 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, watch};
@@ -25,7 +33,7 @@ use super::store::{
     ClearOutcome, ClearScope, Destination, HistoryEntry, HistoryFilter, HistoryStatus, Item,
     ItemPatch, NewItem, Store, remove_quietly,
 };
-use super::{QueueError, Result, State, iso, now_iso, parse_iso, recovery};
+use super::{QueueError, Result, State, iso, parse_iso, recovery};
 
 /// What probing decided for the item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +242,20 @@ impl SendStage for Unavailable {
     }
 }
 
+/// Wall time of the schedule (`next_run_at`, `tg_sent_at`).
+pub trait Clock: Send + Sync {
+    fn now(&self) -> DateTime<Utc>;
+}
+
+/// The system clock: the app's.
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
+    }
+}
+
 /// Random pause between two sends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PauseRange {
@@ -283,6 +305,7 @@ struct Inner {
     shutdown: CancellationToken,
     analyses: Mutex<Analyses>,
     analysis_wake: Notify,
+    clock: Arc<dyn Clock>,
 }
 
 #[derive(Clone)]
@@ -305,6 +328,17 @@ impl Orchestrator {
         sink: Arc<dyn EventSink>,
         pauses: PauseRange,
     ) -> Self {
+        Self::with_clock(store, media, send, sink, pauses, Arc::new(SystemClock))
+    }
+
+    pub fn with_clock(
+        store: Store,
+        media: Arc<dyn MediaStage>,
+        send: Arc<dyn SendStage>,
+        sink: Arc<dyn EventSink>,
+        pauses: PauseRange,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 store: Mutex::new(store),
@@ -318,8 +352,13 @@ impl Orchestrator {
                 shutdown: CancellationToken::new(),
                 analyses: Mutex::new(Analyses::default()),
                 analysis_wake: Notify::new(),
+                clock,
             }),
         }
+    }
+
+    fn now(&self) -> DateTime<Utc> {
+        self.inner.clock.now()
     }
 
     pub fn with_store<T>(&self, f: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
@@ -644,9 +683,12 @@ impl Orchestrator {
                     self.release_current(id, &cancel);
                 }
                 Ok(None) => {
+                    // An item held by its destination's interval wakes the loop when it is due.
+                    let scheduled = self.until_next_scheduled();
                     tokio::select! {
                         _ = self.inner.wake.notified() => {}
                         _ = running.changed() => {}
+                        _ = sleep_for(scheduled) => {}
                         _ = shutdown.cancelled() => return,
                     }
                 }
@@ -824,11 +866,30 @@ impl Orchestrator {
         }
     }
 
-    /// Takes the next `ready` (→ `probing`) or `encoded` item and makes it current.
+    /// How long until the next item waiting for its `next_run_at`; `None` if there is none.
+    fn until_next_scheduled(&self) -> Option<Duration> {
+        let now = self.now();
+        match self.with_store(|store| store.next_scheduled(now)) {
+            Ok(at) => at.map(|at| (at - now).to_std().unwrap_or(Duration::ZERO)),
+            Err(error) => {
+                tracing::error!(
+                    event = "queue_error",
+                    error_code = error.code(),
+                    error = %error,
+                    "cannot read the schedule"
+                );
+                // Looked at again on the next wake.
+                None
+            }
+        }
+    }
+
+    /// Takes the next due `ready` (→ `probing`) or `encoded` item and makes it current.
     fn pick_next(&self) -> Result<Option<(Item, CancellationToken)>> {
         let mut current = lock(&self.inner.current);
+        let now = self.now();
         let picked = self.with_store(|store| {
-            let Some(item) = store.next_runnable()? else {
+            let Some(item) = store.next_runnable(now)? else {
                 return Ok(None);
             };
             if item.state == State::Ready {
@@ -1101,13 +1162,17 @@ impl Orchestrator {
         })
     }
 
-    /// Upload, with `waiting_server` rounds on FLOOD_WAIT, until a final state.
+    /// Upload, with `waiting_server` rounds on FLOOD_WAIT, until a final state; or, when the
+    /// destination's minimum interval has not elapsed, back to the schedule.
     async fn run_upload(
         &self,
         id: i64,
         cancel: &CancellationToken,
         last_sent: &mut Option<Instant>,
     ) -> Result<()> {
+        if !cancel.is_cancelled() && self.defer_for_interval(id)? {
+            return Ok(());
+        }
         loop {
             let item = self.get(id)?;
             if !self.wait_before_upload(&item, *last_sent, cancel).await {
@@ -1133,7 +1198,7 @@ impl Orchestrator {
                         State::Sent,
                         Changes::new()
                             .set(Column::TgMessageId, message_id)
-                            .set(Column::TgSentAt, now_iso())
+                            .set(Column::TgSentAt, iso(self.now()))
                             .clear(Column::LastError)
                             .clear(Column::ProgressPhase)
                             .reason("sent"),
@@ -1149,7 +1214,8 @@ impl Orchestrator {
                 Ok(SendOutcome::FloodWait { retry_after }) => {
                     let delay =
                         chrono::Duration::from_std(retry_after).unwrap_or(chrono::Duration::MAX);
-                    let at = chrono::Utc::now()
+                    let at = self
+                        .now()
                         .checked_add_signed(delay)
                         .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
                     let next_run_at = iso(at);
@@ -1202,6 +1268,42 @@ impl Orchestrator {
         }
     }
 
+    /// The destination's minimum interval (F2), counted from its last successful send: if it
+    /// has not elapsed, the item stays `encoded` with `next_run_at` at its end and the loop
+    /// moves on. Checked again when the item comes back, since another item for the same
+    /// destination may have been sent first. True when the item was deferred.
+    fn defer_for_interval(&self, id: i64) -> Result<bool> {
+        let item = self.get(id)?;
+        let destination = self.with_store(|store| store.get_destination(item.destination_id))?;
+        if destination.min_interval_s <= 0 {
+            return Ok(false);
+        }
+        let Some(last) = self.with_store(|store| store.last_sent_at(destination.id))? else {
+            return Ok(false);
+        };
+        let interval = chrono::Duration::try_seconds(destination.min_interval_s)
+            .unwrap_or(chrono::Duration::MAX);
+        let due = last
+            .checked_add_signed(interval)
+            .unwrap_or(DateTime::<Utc>::MAX_UTC);
+        let now = self.now();
+        if due <= now {
+            return Ok(false);
+        }
+        let wait_s = crate::transport::seconds_up((due - now).to_std().unwrap_or_default());
+        let next_run_at = iso(due);
+        tracing::info!(
+            event = "upload_deferred",
+            min_interval_s = destination.min_interval_s,
+            wait_s,
+            next_run_at = next_run_at.as_str(),
+            "minimum interval of the destination not elapsed; item rescheduled"
+        );
+        self.with_store(|store| store.defer(id, due))?;
+        self.emit_changed(&[id]);
+        Ok(true)
+    }
+
     /// Waits for `next_run_at` and for the pause between sends. False if cancelled.
     async fn wait_before_upload(
         &self,
@@ -1213,7 +1315,7 @@ impl Orchestrator {
             .next_run_at
             .as_deref()
             .and_then(parse_iso)
-            .and_then(|at| (at - chrono::Utc::now()).to_std().ok())
+            .and_then(|at| (at - self.now()).to_std().ok())
             .unwrap_or(Duration::ZERO);
         let pause = last_sent
             .map(|at| lock(&self.inner.pauses).pick().saturating_sub(at.elapsed()))
@@ -1249,6 +1351,14 @@ impl Orchestrator {
             _ = tokio::time::sleep(wait) => !cancel.is_cancelled(),
             _ = cancel.cancelled() => false,
         }
+    }
+}
+
+/// Sleeps for `duration`, or forever without one (a `select!` branch that never fires).
+async fn sleep_for(duration: Option<Duration>) {
+    match duration {
+        Some(duration) => tokio::time::sleep(duration).await,
+        None => std::future::pending().await,
     }
 }
 
