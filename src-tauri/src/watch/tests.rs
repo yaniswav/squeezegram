@@ -392,15 +392,26 @@ fn the_license_gate_turns_watching_off_and_on() {
     engine.poll(t0 + secs(45), STABLE);
     assert_eq!(watched_items(&queue), ["while_on.mp4"]);
 
-    // The license goes (another account signs in): a file on its way is dropped.
-    std::fs::write(watched.join("cut.mp4"), b"3").unwrap();
+    // The gate closes for a while (TDLib reconnects, or the user signs out and in): a file
+    // on its way and one that lands meanwhile are taken once it opens again.
+    std::fs::write(watched.join("on_its_way.mp4"), b"3").unwrap();
     engine.poll(t0 + secs(46), STABLE);
     switch.set(false);
+    std::fs::write(watched.join("in_the_gap.mp4"), b"4").unwrap();
     engine.poll(t0 + secs(60), STABLE);
+    engine.poll(t0 + secs(90), STABLE);
+    assert_eq!(
+        watched_items(&queue),
+        ["while_on.mp4"],
+        "nothing while closed"
+    );
     switch.set(true);
-    engine.poll(t0 + secs(61), STABLE);
-    engine.poll(t0 + secs(80), STABLE);
-    assert_eq!(watched_items(&queue), ["while_on.mp4"]);
+    engine.poll(t0 + secs(91), STABLE);
+    engine.poll(t0 + secs(102), STABLE);
+    assert_eq!(
+        watched_items(&queue),
+        ["while_on.mp4", "on_its_way.mp4", "in_the_gap.mp4"]
+    );
     // The folder itself stays configured.
     let folders = queue
         .with_store(|store| store.list_watch_folders())

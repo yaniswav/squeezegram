@@ -20,19 +20,21 @@
 //! media (`queue::intake::is_media`) are never taken. Subfolders are not listed.
 //!
 //! **Which files.** Those present when watching starts are never taken: the first listing is a
-//! baseline. Watching starts with the app, when a folder is added or enabled again, and when
-//! the license starts to grant the feature. A restart therefore never adds again a file that
-//! was there before it (queued, sent, removed from the queue or ignored), with nothing stored
-//! besides the folder. The price: a file that arrives while the app is closed, the folder
-//! disabled or the feature off is not taken; the user adds it by hand. A name that leaves the
-//! folder and comes back is a new file. A path still waiting or running in the queue is not
-//! queued twice (`Store::add_watched_item`), and content already sent to the destination is
-//! held as a duplicate when probed, as for a manual add.
+//! baseline, listed at the first poll the license allows after the app starts, a folder is
+//! added or enabled again. A restart therefore never adds again a file that was there before
+//! it (queued, sent, removed from the queue or ignored), with nothing stored besides the
+//! folder. The price: a file that arrives while the app is closed, the folder disabled, or
+//! before the license first applies, is not taken; the user adds it by hand. A name that
+//! leaves the folder and comes back is a new file. A path still waiting or running in the
+//! queue is not queued twice (`Store::add_watched_item`), and content already sent to the
+//! destination is held as a duplicate when probed, as for a manual add.
 //!
 //! **Gate.** Nothing is listed unless `Entitlements::allows(WatchedFolder)`, asked at every
 //! poll: the verdict follows the license and the signed-in account. The license commands and
-//! the login watcher wake the thread so a change applies at once. When the feature goes off,
-//! the folders stay configured and what was being watched is forgotten.
+//! the login watcher wake the thread so a change applies at once. The gate also closes for a
+//! while on every reconnection or sign-out (no account, so the license waits): what each folder
+//! was watching is kept meanwhile, and files that came in the gap are taken when it opens
+//! again. Only a folder removed or disabled is forgotten, and starts a new baseline.
 //!
 //! **Thread.** A thread of its own: listing a network share can block for seconds. The queue's
 //! lock is taken only to read the folders and to insert an item.
@@ -331,18 +333,6 @@ impl Engine {
     }
 
     pub fn poll(&mut self, now: Instant, stable: Duration) {
-        if !self.entitlements.allows(Feature::WatchedFolder) {
-            if self.active != Some(false) {
-                tracing::info!(
-                    event = "watch_inactive",
-                    reason = "not_licensed",
-                    "watched folders inactive: the license does not grant them"
-                );
-                self.active = Some(false);
-                self.trackers.clear();
-            }
-            return;
-        }
         let folders = match self.queue.with_store(|store| store.list_watch_folders()) {
             Ok(folders) => folders,
             Err(error) => {
@@ -354,6 +344,33 @@ impl Engine {
             .into_iter()
             .filter(|folder| folder.enabled && folder.destination_id.is_some())
             .collect();
+        // A folder removed or disabled is forgotten, gate open or not: enabled again, it
+        // starts a new baseline. Only the database is read here, never a folder.
+        self.trackers.retain(|&folder_id, tracker| {
+            let keep = watched.iter().any(|folder| folder.id == folder_id);
+            if !keep && !tracker.waiting.is_empty() {
+                tracing::info!(
+                    event = "watch_folder_released",
+                    folder_id,
+                    waiting = tracker.waiting.len(),
+                    "watched folder removed or disabled; files not complete yet are dropped"
+                );
+            }
+            keep
+        });
+        // Closed for a while at each reconnection or sign-out: the trackers stay as they are.
+        if !self.entitlements.allows(Feature::WatchedFolder) {
+            if self.active != Some(false) {
+                tracing::info!(
+                    event = "watch_inactive",
+                    reason = "not_licensed",
+                    folders = watched.len(),
+                    "watched folders inactive: the license does not grant them now"
+                );
+                self.active = Some(false);
+            }
+            return;
+        }
         if self.active != Some(true) {
             tracing::info!(
                 event = "watch_active",
@@ -362,9 +379,6 @@ impl Engine {
             );
             self.active = Some(true);
         }
-        // A folder removed or disabled is forgotten: enabled again, it starts a new baseline.
-        self.trackers
-            .retain(|id, _| watched.iter().any(|folder| folder.id == *id));
         for folder in &watched {
             let tracker = self.trackers.entry(folder.id).or_default();
             match tracker.scan(folder.id, Path::new(&folder.path), now, stable) {
