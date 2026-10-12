@@ -20,9 +20,12 @@ export function captionLimit(accountMax: number | undefined): number {
   return accountMax ?? STANDARD_CAPTION_CHARS
 }
 
-/** Characters the way the core counts them (code points, not UTF-16 units). */
+/**
+ * Length the way the core counts it: UTF-16 units, which Telegram uses for text offsets. An
+ * emoji outside the BMP counts 2, so the count is never below what the server may count.
+ */
 export function captionLength(text: string): number {
-  return [...text].length
+  return text.length
 }
 
 export type CounterState = "ok" | "near" | "over"

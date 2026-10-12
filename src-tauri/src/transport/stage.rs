@@ -177,7 +177,9 @@ pub fn rendered_caption(
             count: u32::try_from(item.batch_count).unwrap_or(1),
         },
     );
-    let length = text.chars().count();
+    // UTF-16 units, as Telegram counts text offsets: never below the server's count, so a
+    // caption over the limit fails here with a clear code instead of at Telegram.
+    let length = text.encode_utf16().count();
     if length > max_chars as usize {
         return Err(SendError::Failed {
             code: "CAPTION_TOO_LONG".to_owned(),
@@ -708,10 +710,13 @@ mod tests {
             MOCK_SAVED,
             &format!("{}{{file}}", "x".repeat(1020)),
         );
+        // 1023 + one emoji outside the BMP = 1025 UTF-16 units, as Telegram counts them.
+        let emoji = h.add_captioned("d.mp4", MOCK_SAVED, &format!("{}😀", "x".repeat(1023)));
         h.queue.start();
         h.wait_state(fits, State::Sent).await;
         h.wait_state(too_long, State::Failed).await;
         h.wait_state(by_variable, State::Failed).await;
+        h.wait_state(emoji, State::Failed).await;
         assert_eq!(
             h.item(too_long).last_error.as_deref(),
             Some("CAPTION_TOO_LONG")
@@ -724,6 +729,8 @@ mod tests {
             .iter()
             .find(|a| a.item_id == Some(by_variable))
             .unwrap();
+        assert_eq!(alert.params, json!({ "max": 1024, "length": 1025 }));
+        let alert = alerts.iter().find(|a| a.item_id == Some(emoji)).unwrap();
         assert_eq!(alert.params, json!({ "max": 1024, "length": 1025 }));
         // Only the caption that fits went out; the others were not sent without a caption.
         assert_eq!(h.mock.captions(), ["x".repeat(1024)]);

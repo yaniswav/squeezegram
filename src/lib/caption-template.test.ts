@@ -17,8 +17,8 @@ test("the limit is the account's, else the standard one", () => {
 test("characters are counted as the core does", () => {
   assert.equal(captionLength(""), 0)
   assert.equal(captionLength("été"), 3)
-  // One code point outside the BMP is two UTF-16 units but one character.
-  assert.equal(captionLength("a😀b"), 3)
+  // One code point outside the BMP counts as two UTF-16 units, as Telegram counts it.
+  assert.equal(captionLength("a😀b"), 4)
 })
 
 test("the counter warns before the limit and fails above it", () => {
