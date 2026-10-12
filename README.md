@@ -113,7 +113,7 @@ Builds are not code-signed. Windows SmartScreen and some antivirus products may 
 
 squeezegram is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, modify and share it for noncommercial purposes as defined in that license.
 
-Third-party components keep their own licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Third-party components keep their own licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Releases include the full notices as `THIRD-PARTY-NOTICES.txt`, next to the executable.
 
 ### Commercial use
 
