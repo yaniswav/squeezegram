@@ -41,6 +41,7 @@
     "ITEM_STARTED": "Item ini sudah mulai diproses dan tidak dapat diubah lagi.",
     "ILLEGAL_TRANSITION": "Tindakan ini tidak mungkin dilakukan pada status item saat ini.",
     "DESTINATION_NOT_FOUND": "Tujuan ini sudah tidak ada.",
+    "WATCH_FOLDER_NOT_FOUND": "This watched folder no longer exists.",
     "FILE_UNREADABLE": "Berkas tidak dapat dibaca atau bukan berkas biasa.",
     "FFMPEG_MISSING": "ffmpeg belum terpasang, atau folder ffmpeg kustom tidak berisi ffmpeg.exe dan ffprobe.exe.",
     "FFMPEG_ENCODER_UNAVAILABLE": "Tidak ada encoder video yang lolos uji di komputer ini.",
@@ -465,6 +466,25 @@
         "hint": "Bitrate yang lebih tinggi terdengar lebih baik dan mengambil ruang dari gambar di bawah batas unggah.",
         "value": "{{kbps}} kbit/s",
         "automatic": "{{kbps}} kbit/s (otomatis)"
+      }
+    },
+    "watch": {
+      "title": "Watched folders",
+      "hint": "New photos and videos that appear in these folders are added to the queue as pending. Nothing is sent until you approve each one. Files already in a folder when you add it are left alone, and so are files that arrive while squeezegram is closed.",
+      "locked": "Included with squeezegram Premium. Folders listed here stay saved, but none is watched until then.",
+      "empty": "No folder is watched yet.",
+      "folder": "Folder to watch",
+      "noFolder": "No folder chosen",
+      "choose": "Choose a folder",
+      "add": "Watch this folder",
+      "summary": "To {{destination}}, as {{mode}}",
+      "noDestination": "no destination",
+      "toggle": "Watch {{path}}",
+      "remove": "Stop watching {{path}}",
+      "status": {
+        "active": "Watching: new files wait in the queue for your approval.",
+        "paused": "Paused: new files are not added.",
+        "locked": "Not watched without Premium."
       }
     },
     "send": {

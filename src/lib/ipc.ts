@@ -170,6 +170,24 @@ export interface Destination {
   use_count: number
 }
 
+/** `WatchFolder` (store.rs): its new files are queued in `pending_review`, never sent alone. */
+export interface WatchFolder {
+  id: number
+  path: string
+  /** Set by `watch_add`; null only in a row written by hand. */
+  destination_id: number | null
+  enabled: boolean
+  /** null = the destination's default mode when a file is found. */
+  send_mode: SendMode | null
+}
+
+/** `WatchFolderPatch`: absent = unchanged; `send_mode: null` = the destination's default. */
+export interface WatchFolderPatch {
+  enabled?: boolean
+  destination_id?: number
+  send_mode?: SendMode | null
+}
+
 export type HistoryStatus = "sent" | "failed" | "unknown"
 
 /** `HistoryEntry`. */
@@ -884,6 +902,14 @@ const destinationDecoder = d.object<Destination>({
   use_count: d.number,
 })
 
+const watchFolderDecoder = d.object<WatchFolder>({
+  id: d.number,
+  path: d.string,
+  destination_id: d.nullable(d.number),
+  enabled: d.boolean,
+  send_mode: d.nullable(sendModeDecoder),
+})
+
 const historyEntryDecoder = d.object<HistoryEntry>({
   id: d.number,
   content_id: d.string,
@@ -1272,6 +1298,36 @@ export function destinationCheck(
     destinationId,
     sendMode,
   })
+}
+
+/** Watched folders, kept whatever the plan (the core watches them only with the license). */
+export function watchList(): Promise<WatchFolder[]> {
+  return call("watch_list", d.array(watchFolderDecoder))
+}
+
+/** Watches an existing folder; the files already in it are left alone. */
+export function watchAdd(
+  path: string,
+  destinationId: number,
+  sendMode?: SendMode,
+): Promise<WatchFolder> {
+  return call("watch_add", watchFolderDecoder, {
+    path,
+    destinationId,
+    sendMode,
+  })
+}
+
+export function watchUpdate(
+  folderId: number,
+  patch: WatchFolderPatch,
+): Promise<WatchFolder> {
+  return call("watch_update", watchFolderDecoder, { folderId, patch })
+}
+
+/** Stops watching; the items already found stay in the queue. */
+export function watchRemove(folderId: number): Promise<void> {
+  return call("watch_remove", d.nothing, { folderId })
 }
 
 export function authState(): Promise<AuthState> {

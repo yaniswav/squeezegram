@@ -11,6 +11,7 @@ import { AnimatePresence, motion } from "motion/react"
 import { useEffect, useId, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { ConfirmDialog } from "@/components/confirm-dialog"
+import { DestinationField } from "@/components/destination-field"
 import { FfmpegFinder } from "@/components/ffmpeg-finder"
 import { PageHeader } from "@/components/page-header"
 import { PurchaseButton } from "@/components/purchase-button"
@@ -51,18 +52,25 @@ import {
   logPath,
   pickFolder,
   sidecarsStatus,
+  watchAdd,
+  watchList,
+  watchRemove,
+  watchUpdate,
   type EncoderStatus,
   type EntitlementStatus,
   type LimitStatus,
   type MaxResolution,
+  type SendMode,
   type Settings,
   type SettingsPatch,
   type SidecarStatus,
   type ThemeSetting,
+  type WatchFolder,
 } from "@/lib/ipc"
 import { isThemePreference } from "@/lib/theme"
 import { useAlerts } from "@/state/alerts"
 import { useAuth } from "@/state/auth"
+import { destinationName, useDestinations } from "@/state/destinations"
 import { useSettings } from "@/state/settings"
 import { useUpdate } from "@/state/update"
 
@@ -266,6 +274,7 @@ export function SettingsPage({ focusTitle }: { focusTitle: boolean }) {
       {settings && (
         <>
           <LicenseSection status={entitlements} onChange={setEntitlements} />
+          <WatchedFolders entitlements={entitlements} />
           <SettingsForm settings={settings} entitlements={entitlements} />
         </>
       )}
@@ -486,6 +495,226 @@ function LicenseSection({
         destructive
         onConfirm={() => void remove()}
       />
+    </Section>
+  )
+}
+
+const SEND_MODES: readonly SendMode[] = ["video", "document", "photo"]
+
+/**
+ * Watched folders, saved at once through `watch_*` (outside the settings form). Without the
+ * feature they stay listed and can be removed, but none is watched and none can be added.
+ */
+function WatchedFolders({ entitlements }: { entitlements: EntitlementState }) {
+  const { t } = useTranslation()
+  const { pushError } = useAlerts()
+  const destinations = useDestinations()
+  const ids = useId()
+  const [folders, setFolders] = useState<WatchFolder[] | null>(null)
+  const [path, setPath] = useState<string | null>(null)
+  const [destinationId, setDestinationId] = useState("")
+  const [mode, setMode] = useState<SendMode | "default">("default")
+  const [busy, setBusy] = useState(false)
+
+  const granted =
+    entitlements !== "failed" && grants(entitlements, "watched_folder")
+
+  useEffect(() => {
+    let stale = false
+
+    watchList().then(
+      (list) => {
+        if (!stale) setFolders(list)
+      },
+      (cause: unknown) => {
+        if (stale) return
+        setFolders([])
+        pushError(cause)
+      },
+    )
+
+    return () => {
+      stale = true
+    }
+  }, [pushError])
+
+  function replace(folder: WatchFolder) {
+    setFolders((current) => {
+      const list = current ?? []
+
+      return list.some((f) => f.id === folder.id)
+        ? list.map((f) => (f.id === folder.id ? folder : f))
+        : [...list, folder]
+    })
+  }
+
+  async function run(action: () => Promise<void>) {
+    setBusy(true)
+
+    try {
+      await action()
+    } catch (cause) {
+      pushError(cause)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function choose() {
+    const picked = await pickFolder()
+
+    if (picked) setPath(picked)
+  }
+
+  function add() {
+    if (path === null || destinationId === "") return
+    void run(async () => {
+      replace(
+        await watchAdd(
+          path,
+          Number(destinationId),
+          mode === "default" ? undefined : mode,
+        ),
+      )
+      setPath(null)
+    })
+  }
+
+  function describe(folder: WatchFolder) {
+    const destination =
+      folder.destination_id === null
+        ? undefined
+        : destinations.byId.get(folder.destination_id)
+
+    return t("settings.watch.summary", {
+      destination: destination
+        ? destinationName(destination) || t("destinations.unnamed")
+        : t("settings.watch.noDestination"),
+      mode: folder.send_mode
+        ? t(`mode.${folder.send_mode}`)
+        : t("add.mode.default"),
+    })
+  }
+
+  return (
+    <Section title={t("settings.watch.title")} hint={t("settings.watch.hint")}>
+      {!granted && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <Badge variant="secondary">{t("settings.advanced.premium")}</Badge>
+          <p className="min-w-0 flex-1 basis-64 text-sm text-muted-foreground">
+            {t("settings.watch.locked")}
+          </p>
+          <PurchaseButton />
+        </div>
+      )}
+
+      {folders !== null && folders.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          {t("settings.watch.empty")}
+        </p>
+      )}
+      {folders !== null && folders.length > 0 && (
+        <ul className="space-y-2">
+          {folders.map((folder) => (
+            <li
+              key={folder.id}
+              className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+            >
+              <div className="min-w-0 flex-1 basis-56 space-y-1">
+                <p className="truncate font-mono text-xs" title={folder.path}>
+                  <bdi>{folder.path}</bdi>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {describe(folder)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {!granted
+                    ? t("settings.watch.status.locked")
+                    : folder.enabled
+                      ? t("settings.watch.status.active")
+                      : t("settings.watch.status.paused")}
+                </p>
+              </div>
+              <Switch
+                aria-label={t("settings.watch.toggle", { path: folder.path })}
+                checked={folder.enabled}
+                disabled={!granted || busy}
+                onCheckedChange={(enabled) =>
+                  void run(async () => {
+                    replace(await watchUpdate(folder.id, { enabled }))
+                  })
+                }
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t("settings.watch.remove", { path: folder.path })}
+                title={t("settings.watch.remove", { path: folder.path })}
+                disabled={busy}
+                onClick={() =>
+                  void run(async () => {
+                    await watchRemove(folder.id)
+                    setFolders(
+                      (current) =>
+                        current?.filter((f) => f.id !== folder.id) ?? null,
+                    )
+                  })
+                }
+              >
+                <Trash2 />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {granted && (
+        <div className="space-y-4 rounded-lg border border-dashed p-3">
+          <FolderField
+            id={`${ids}-folder`}
+            label={t("settings.watch.folder")}
+            value={path}
+            defaultText={t("settings.watch.noFolder")}
+            chooseText={t("settings.watch.choose")}
+            resetText={t("common.cancel")}
+            onChoose={() => void choose()}
+            onReset={() => setPath(null)}
+          />
+          <DestinationField
+            id={`${ids}-destination`}
+            value={destinationId}
+            onChange={setDestinationId}
+          />
+          <Field id={`${ids}-mode`} label={t("add.mode.label")}>
+            {(props) => (
+              <Choice
+                {...props}
+                value={mode}
+                onChange={setMode}
+                options={[
+                  ["default", t("add.mode.default")] as const,
+                  ...SEND_MODES.map(
+                    (sendMode) => [sendMode, t(`mode.${sendMode}`)] as const,
+                  ),
+                ]}
+              />
+            )}
+          </Field>
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              disabled={
+                !isDesktop() || busy || path === null || destinationId === ""
+              }
+              onClick={add}
+            >
+              <FolderOpen data-icon="inline-start" />
+              {t("settings.watch.add")}
+            </Button>
+          </div>
+        </div>
+      )}
     </Section>
   )
 }

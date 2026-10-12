@@ -41,6 +41,7 @@
     "ITEM_STARTED": "This item has already started and can no longer be changed.",
     "ILLEGAL_TRANSITION": "This action is not possible in the item's current state.",
     "DESTINATION_NOT_FOUND": "This destination no longer exists.",
+    "WATCH_FOLDER_NOT_FOUND": "This watched folder no longer exists.",
     "FILE_UNREADABLE": "A file can't be read or is not a regular file.",
     "FFMPEG_MISSING": "ffmpeg is not installed, or the custom ffmpeg folder doesn't contain ffmpeg.exe and ffprobe.exe.",
     "FFMPEG_ENCODER_UNAVAILABLE": "No video encoder passed its test on this computer.",
@@ -479,6 +480,25 @@
         "hint": "A higher bitrate sounds better and takes room from the picture under the upload limit.",
         "value": "{{kbps}} kbit/s",
         "automatic": "{{kbps}} kbit/s (automatic)"
+      }
+    },
+    "watch": {
+      "title": "Watched folders",
+      "hint": "New photos and videos that appear in these folders are added to the queue as pending. Nothing is sent until you approve each one. Files already in a folder when you add it are left alone, and so are files that arrive while squeezegram is closed.",
+      "locked": "Included with squeezegram Premium. Folders listed here stay saved, but none is watched until then.",
+      "empty": "No folder is watched yet.",
+      "folder": "Folder to watch",
+      "noFolder": "No folder chosen",
+      "choose": "Choose a folder",
+      "add": "Watch this folder",
+      "summary": "To {{destination}}, as {{mode}}",
+      "noDestination": "no destination",
+      "toggle": "Watch {{path}}",
+      "remove": "Stop watching {{path}}",
+      "status": {
+        "active": "Watching: new files wait in the queue for your approval.",
+        "paused": "Paused: new files are not added.",
+        "locked": "Not watched without Premium."
       }
     },
     "send": {
