@@ -730,8 +730,11 @@ pub async fn item_duplicate(
 const MAX_TELEGRAM_LINK: usize = 128;
 
 /// A message link as `getMessageLink` writes it: `https://t.me/` then letters, digits, `_`,
-/// `-` and `/` only. Nothing else may reach `explorer.exe`, which would open any URL or path.
+/// `-` and `/` only, and `?single` for one message of an album (the only query it adds without
+/// a timestamp or a thread). Nothing else may reach `explorer.exe`, which would open any URL or
+/// path.
 fn is_telegram_link(url: &str) -> bool {
+    let url = url.strip_suffix("?single").unwrap_or(url);
     url.len() <= MAX_TELEGRAM_LINK
         && url.strip_prefix("https://t.me/").is_some_and(|rest| {
             !rest.is_empty()
@@ -1633,6 +1636,8 @@ mod tests {
             "https://t.me/c/1234567890/2/42",
             "https://t.me/some_channel/42",
             "https://t.me/Some-Group/7",
+            // One photo or video of an album.
+            "https://t.me/c/1234567890/42?single",
         ] {
             assert!(is_telegram_link(good), "{good}");
         }
@@ -1642,7 +1647,9 @@ mod tests {
             "http://t.me/c/1/2",
             "https://t.me.evil.example/c/1/2",
             "https://t.me@evil.example/x",
-            "https://t.me/c/1/2?single",
+            "https://t.me/c/1/2?single&x=1",
+            "https://t.me/c/1/2?thread=7",
+            "https://t.me/?single",
             "https://t.me/c/1/2 --new-window",
             "https://t.me/c/1/2\"..\\x.exe",
             "https://t.me/..//evil",
