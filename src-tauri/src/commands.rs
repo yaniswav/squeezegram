@@ -664,29 +664,53 @@ pub async fn destination_check(
 
 // --- watched folders ---
 
+/// A watched folder as Settings shows it.
+#[derive(Debug, Serialize)]
+pub struct WatchedFolder {
+    #[serde(flatten)]
+    pub folder: WatchFolder,
+    /// The watcher's last listing of it failed (missing, renamed, offline share).
+    pub unreadable: bool,
+}
+
+fn watched(state: &AppState, folder: WatchFolder) -> WatchedFolder {
+    WatchedFolder {
+        unreadable: state.watcher.is_unreadable(folder.id),
+        folder,
+    }
+}
+
 /// Not in SPEC section 4 (which has `watch_set`): one command per change, as for destinations.
 /// The folders are kept whatever the plan; the watcher lists them only while the license
 /// grants `watched_folder`.
 #[tauri::command]
-pub fn watch_list(state: State<'_, AppState>) -> CommandResult<Vec<WatchFolder>> {
+pub fn watch_list(state: State<'_, AppState>) -> CommandResult<Vec<WatchedFolder>> {
     let result = state.queue.with_store(|store| store.list_watch_folders());
+    let result = result.map(|folders| {
+        folders
+            .into_iter()
+            .map(|folder| watched(&state, folder))
+            .collect()
+    });
     Call::quiet("watch_list").finish(result.map_err(Into::into))
 }
 
-/// Watches an existing folder (`FILE_UNREADABLE` otherwise). The files already in it are left
-/// alone; the next ones are queued for approval. `send_mode` absent: the destination's default.
+/// Watches an existing folder given by its full path (`FILE_UNREADABLE` otherwise: a relative
+/// path would depend on the app's working directory). The files already in it are left alone;
+/// the next ones are queued for approval. `send_mode` absent: the destination's default.
 #[tauri::command]
 pub fn watch_add(
     state: State<'_, AppState>,
     path: String,
     destination_id: i64,
     send_mode: Option<SendMode>,
-) -> CommandResult<WatchFolder> {
+) -> CommandResult<WatchedFolder> {
     let call = Call::new("watch_add")
         .destination(destination_id)
         .arg("dir", path.as_str())
         .arg("send_mode", send_mode.map(SendMode::as_str));
-    let result = if Path::new(&path).is_dir() {
+    let folder = Path::new(&path);
+    let result = if folder.is_absolute() && folder.is_dir() {
         state
             .queue
             .with_store(|store| store.add_watch_folder(&path, destination_id, send_mode))
@@ -696,6 +720,7 @@ pub fn watch_add(
     if result.is_ok() {
         state.watcher.wake();
     }
+    let result = result.map(|folder| watched(&state, folder));
     call.finish(result.map_err(Into::into))
 }
 
@@ -706,7 +731,7 @@ pub fn watch_update(
     state: State<'_, AppState>,
     folder_id: i64,
     patch: WatchFolderPatch,
-) -> CommandResult<WatchFolder> {
+) -> CommandResult<WatchedFolder> {
     let call = Call::new("watch_update")
         .arg("folder_id", folder_id)
         .arg("enabled", patch.enabled)
@@ -718,6 +743,7 @@ pub fn watch_update(
     if result.is_ok() {
         state.watcher.wake();
     }
+    let result = result.map(|folder| watched(&state, folder));
     call.finish(result.map_err(Into::into))
 }
 

@@ -179,6 +179,8 @@ export interface WatchFolder {
   enabled: boolean
   /** null = the destination's default mode when a file is found. */
   send_mode: SendMode | null
+  /** The watcher's last listing of it failed (missing, renamed, offline share). */
+  unreadable: boolean
 }
 
 /** `WatchFolderPatch`: absent = unchanged; `send_mode: null` = the destination's default. */
@@ -908,6 +910,7 @@ const watchFolderDecoder = d.object<WatchFolder>({
   destination_id: d.nullable(d.number),
   enabled: d.boolean,
   send_mode: d.nullable(sendModeDecoder),
+  unreadable: d.boolean,
 })
 
 const historyEntryDecoder = d.object<HistoryEntry>({

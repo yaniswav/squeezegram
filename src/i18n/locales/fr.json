@@ -512,7 +512,8 @@
       "status": {
         "active": "Watching: new files wait in the queue for your approval.",
         "paused": "Paused: new files are not added.",
-        "locked": "Not watched without Premium."
+        "locked": "Not watched without Premium.",
+        "unreadable": "Can't be read: the folder was moved, renamed or deleted, or its drive is offline. Choose it again or remove it."
       }
     },
     "send": {

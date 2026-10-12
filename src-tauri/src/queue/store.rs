@@ -424,6 +424,17 @@ pub struct ClearOutcome {
     pub running: usize,
 }
 
+/// A folder path without its trailing separators, so `C:\In\` and `C:\In` are one folder;
+/// a root keeps its own (`C:\`, not the drive-relative `C:`).
+fn folder_path(path: &str) -> &str {
+    let trimmed = path.trim_end_matches(['\\', '/']);
+    if trimmed.is_empty() || trimmed.ends_with(':') {
+        &path[..(trimmed.len() + 1).min(path.len())]
+    } else {
+        trimmed
+    }
+}
+
 /// Paths compare case-insensitively (Windows) and with either separator.
 fn path_key(path: &str) -> String {
     path.replace('\\', "/").to_lowercase()
@@ -1273,8 +1284,9 @@ impl Store {
             .ok_or(QueueError::WatchFolderNotFound(id))
     }
 
-    /// Watches `path`, enabled. A folder already watched under the same path (compared as
-    /// Windows does, case-insensitively) is returned as it is, not added twice.
+    /// Watches `path`, enabled, stored without trailing separators. A folder already watched
+    /// under the same path (compared as Windows does: case, separators) is returned as it is,
+    /// not added twice.
     pub fn add_watch_folder(
         &mut self,
         path: &str,
@@ -1282,11 +1294,12 @@ impl Store {
         send_mode: Option<SendMode>,
     ) -> Result<WatchFolder> {
         destination_exists(&self.conn, destination_id)?;
+        let path = folder_path(path);
         let key = path_key(path);
         if let Some(existing) = self
             .list_watch_folders()?
             .into_iter()
-            .find(|folder| path_key(&folder.path) == key)
+            .find(|folder| path_key(folder_path(&folder.path)) == key)
         {
             return Ok(existing);
         }
@@ -2169,10 +2182,12 @@ mod tests {
         assert!(folder.enabled);
         assert_eq!(folder.send_mode, Some(SendMode::Document));
         // The same folder spelt differently is the same folder, unchanged.
-        let again = store
-            .add_watch_folder("c:/in", destination_id, None)
-            .unwrap();
-        assert_eq!(again, folder);
+        for spelling in ["c:/in", r"C:\In\", "C:/IN//"] {
+            let again = store
+                .add_watch_folder(spelling, destination_id, None)
+                .unwrap();
+            assert_eq!(again, folder, "{spelling}");
+        }
         assert_eq!(store.list_watch_folders().unwrap().len(), 1);
 
         let patch: WatchFolderPatch = serde_json::from_str(r#"{"enabled": false}"#).unwrap();
@@ -2192,6 +2207,16 @@ mod tests {
             store.update_watch_folder(folder.id, &WatchFolderPatch::default()),
             Err(QueueError::WatchFolderNotFound(_))
         ));
+    }
+
+    #[test]
+    fn folder_paths_lose_trailing_separators_but_roots_keep_theirs() {
+        assert_eq!(folder_path(r"C:\In\"), r"C:\In");
+        assert_eq!(folder_path("C:/In//"), "C:/In");
+        assert_eq!(folder_path(r"C:\In"), r"C:\In");
+        assert_eq!(folder_path(r"C:\"), r"C:\");
+        assert_eq!(folder_path(r"C:\\"), r"C:\");
+        assert_eq!(folder_path(r"\\server\share\"), r"\\server\share");
     }
 
     #[test]

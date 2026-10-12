@@ -627,13 +627,19 @@ function WatchedFolders({ entitlements }: { entitlements: EntitlementState }) {
                 <p className="text-xs text-muted-foreground">
                   {describe(folder)}
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  {!granted
-                    ? t("settings.watch.status.locked")
-                    : folder.enabled
-                      ? t("settings.watch.status.active")
-                      : t("settings.watch.status.paused")}
-                </p>
+                {granted && folder.enabled && folder.unreadable ? (
+                  <p role="status" className="text-xs text-destructive">
+                    {t("settings.watch.status.unreadable")}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {!granted
+                      ? t("settings.watch.status.locked")
+                      : folder.enabled
+                        ? t("settings.watch.status.active")
+                        : t("settings.watch.status.paused")}
+                  </p>
+                )}
               </div>
               <Switch
                 aria-label={t("settings.watch.toggle", { path: folder.path })}

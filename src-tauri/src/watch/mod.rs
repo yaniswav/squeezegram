@@ -336,6 +336,8 @@ pub struct Engine {
     /// Whether the last poll was allowed to watch; `None` before the first poll.
     active: Option<bool>,
     trackers: HashMap<i64, Tracker>,
+    /// Folders whose last listing failed (missing, renamed, offline share), for `watch_list`.
+    unreadable: Arc<Mutex<HashSet<i64>>>,
 }
 
 impl Engine {
@@ -345,7 +347,22 @@ impl Engine {
             entitlements,
             active: None,
             trackers: HashMap::new(),
+            unreadable: Arc::default(),
         }
+    }
+
+    /// Kept up to date by every poll.
+    pub fn unreadable(&self) -> Arc<Mutex<HashSet<i64>>> {
+        self.unreadable.clone()
+    }
+
+    fn publish_unreadable(&self) {
+        *lock(&self.unreadable) = self
+            .trackers
+            .iter()
+            .filter(|(_, tracker)| tracker.failing)
+            .map(|(&folder_id, _)| folder_id)
+            .collect();
     }
 
     pub fn poll(&mut self, now: Instant, stable: Duration) {
@@ -374,6 +391,7 @@ impl Engine {
             }
             keep
         });
+        self.publish_unreadable();
         // Closed for a while at each reconnection or sign-out: the trackers stay as they are.
         if !self.entitlements.allows(Feature::WatchedFolder) {
             if self.active != Some(false) {
@@ -432,6 +450,7 @@ impl Engine {
                 }
             }
         }
+        self.publish_unreadable();
     }
 }
 
@@ -508,6 +527,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct WatchService {
     signals: Mutex<Option<Sender<Signal>>>,
     done: Mutex<Option<Receiver<()>>>,
+    unreadable: Arc<Mutex<HashSet<i64>>>,
 }
 
 impl WatchService {
@@ -518,9 +538,10 @@ impl WatchService {
     ) -> io::Result<Self> {
         let (signals, received) = mpsc::channel();
         let (finished, done) = mpsc::channel();
+        let mut engine = Engine::new(queue, entitlements);
+        let unreadable = engine.unreadable();
         thread::Builder::new().name("watch".into()).spawn(move || {
             let started = Instant::now();
-            let mut engine = Engine::new(queue, entitlements);
             loop {
                 let stable = Duration::from_secs(settings.get().watch.stable_seconds);
                 engine.poll(Instant::now(), stable);
@@ -539,7 +560,13 @@ impl WatchService {
         Ok(Self {
             signals: Mutex::new(Some(signals)),
             done: Mutex::new(Some(done)),
+            unreadable,
         })
+    }
+
+    /// Whether the last listing of this folder failed (journaled as `watch_folder_error`).
+    pub fn is_unreadable(&self, folder_id: i64) -> bool {
+        lock(&self.unreadable).contains(&folder_id)
     }
 
     /// Polls now instead of at the next tick.

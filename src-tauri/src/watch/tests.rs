@@ -482,11 +482,13 @@ fn an_unreadable_folder_is_retried_and_its_baseline_taken_when_it_comes_back() {
     let mut engine = Engine::new(queue.clone(), switch);
     let t0 = Instant::now();
     engine.poll(t0, STABLE);
-    assert!(engine.trackers.values().all(|tracker| tracker.failing));
+    let unreadable = engine.unreadable();
+    assert_eq!(unreadable.lock().unwrap().len(), 1, "shown in Settings");
 
     std::fs::create_dir(&watched).unwrap();
     std::fs::write(watched.join("there.mp4"), b"1").unwrap();
     engine.poll(t0 + secs(3), STABLE);
+    assert!(unreadable.lock().unwrap().is_empty());
     std::fs::write(watched.join("new.mp4"), b"2").unwrap();
     engine.poll(t0 + secs(6), STABLE);
     engine.poll(t0 + secs(20), STABLE);
