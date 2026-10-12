@@ -51,6 +51,7 @@
     "ENCODER_FALLBACK": "Encoder GPU ({{from}}) melaporkan kesalahan setelah {{duration}}. squeezegram beralih ke encoder CPU ({{to}}) dan terus memakainya sampai aplikasi dimulai ulang.",
     "ENCODER_FALLBACK_silent": "Encoder GPU ({{from}}) berhenti tanpa pesan kesalahan (setelah {{duration}}). squeezegram beralih ke encoder CPU ({{to}}) dan terus memakainya sampai aplikasi dimulai ulang.",
     "OUTPUT_TOO_LARGE": "Berkas ini tidak dapat masuk di bawah batas unggah, bahkan setelah dikompresi.",
+    "CAPTION_TOO_LONG": "This caption is too long: {{length}} characters, and Telegram allows {{max}}. Shorten it and retry; nothing was sent.",
     "DISK_SPACE": "Ruang kosong di folder sementara tidak cukup.",
     "DUPLICATE": "Sudah pernah dikirim ke tujuan ini.",
     "SIDECAR_CHECKSUM": "ffmpeg yang diunduh tidak cocok dengan checksum yang diharapkan, sehingga tidak dipasang.",
@@ -203,6 +204,31 @@
     "submit_other": "Tambahkan {{count}} berkas ke antrean",
     "added_other": "{{count}} berkas ditambahkan ke antrean.",
     "addedEach_other": "{{count}} files added to the queue for each of {{destinations}} destinations."
+  },
+  "caption": {
+    "help": {
+      "summary": "Variables you can use",
+      "escape": "Write {{open}} or {{close}} for a literal brace. A name that is not in this list stays as written."
+    },
+    "var": {
+      "name": "File name without extension",
+      "file": "File name with extension",
+      "ext": "Extension, without the dot",
+      "duration": "Duration (m:ss or h:mm:ss)",
+      "original_size": "Size before compression",
+      "final_size": "Size of the file that is sent",
+      "saving": "Percent saved by compression (empty if not compressed)",
+      "resolution": "Width x height, e.g. 1920x1080 (empty for documents)",
+      "date": "Send date, yyyy-mm-dd",
+      "index": "Position of the file in its batch",
+      "count": "Number of files in the batch"
+    },
+    "preview": {
+      "label": "Preview for the first file",
+      "estimated": "Duration, resolution and the sizes after compression are estimates until the file is encoded."
+    },
+    "counter": "{{length}} / {{max}} characters",
+    "tooLong": "Telegram refuses longer captions: the files would fail instead of being sent."
   },
   "queue": {
     "start": "Mulai",
@@ -495,6 +521,11 @@
       "max": "Maksimum (detik)",
       "errorInteger": "Masukkan bilangan bulat detik, 0 atau lebih.",
       "errorOrder": "Nilai minimum tidak boleh lebih besar dari maksimum."
+    },
+    "caption": {
+      "title": "Default caption",
+      "hint": "Prefills the caption when you add files. Leave it empty for no caption.",
+      "label": "Caption template"
     },
     "temp": {
       "title": "Berkas sementara",

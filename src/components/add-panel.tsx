@@ -6,6 +6,7 @@ import {
   DestinationCheckNotice,
   DestinationField,
 } from "@/components/destination-field"
+import { CaptionHelp } from "@/components/caption-help"
 import { DestinationPicker } from "@/components/destination-picker"
 import { PurchaseButton } from "@/components/purchase-button"
 import { Badge } from "@/components/ui/badge"
@@ -20,6 +21,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  captionLength,
+  captionLimit,
+  counterState,
+} from "@/lib/caption-template"
 import { mostRecent } from "@/lib/destination-groups"
 import { grants } from "@/lib/entitlements"
 import { fileName } from "@/lib/format"
@@ -35,10 +41,13 @@ import {
   useDestinationChecks,
   type CheckTarget,
 } from "@/hooks/use-destination-check"
+import { useCaptionPreview } from "@/hooks/use-caption-preview"
 import { useEntitlementStatus } from "@/hooks/use-entitlement-status"
 import { useAlerts } from "@/state/alerts"
+import { useAuth } from "@/state/auth"
 import { useDestinations } from "@/state/destinations"
 import { useQueue } from "@/state/queue"
+import { useSettings } from "@/state/settings"
 
 const MAX_LISTED = 5
 
@@ -65,7 +74,9 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
   /** The user's choice; "" until they pick one. */
   const [destinationId, setDestinationId] = useState("")
   const [mode, setMode] = useState<SendMode | "default">("default")
-  const [caption, setCaption] = useState("")
+  // The user's text; null until they type, so the default template from Settings shows
+  // (also when it loads after the panel, and again after each add).
+  const [captionDraft, setCaptionDraft] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [added, setAdded] = useState<{
     files: number
@@ -74,6 +85,15 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
   const [extraSlots, setExtraSlots] = useState<ExtraDestination[]>([])
   const nextSlot = useRef(0)
   const [entitlements] = useEntitlementStatus()
+  const { settings } = useSettings()
+  const { auth } = useAuth()
+  const caption = captionDraft ?? settings?.send.caption_template ?? ""
+  const previewed = useCaptionPreview(caption, paths[0], paths.length)
+  // What the first file's caption will look like; an unrendered text counts as itself.
+  const shown = previewed ?? caption
+  const limit = captionLimit(auth?.me?.captionMaxChars)
+  const length = captionLength(shown)
+  const counter = counterState(length, limit)
 
   // Without the license the batch keeps one destination, as the core requires.
   const multiGranted =
@@ -158,7 +178,7 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
       )
 
       onPathsChange([])
-      setCaption("")
+      setCaptionDraft(null)
       // One item per file and destination.
       setAdded({
         files: created.length / batch.length,
@@ -405,7 +425,7 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
                     rows={2}
                     value={caption}
                     aria-describedby={`${ids}-caption-hint`}
-                    onChange={(event) => setCaption(event.target.value)}
+                    onChange={(event) => setCaptionDraft(event.target.value)}
                   />
                   <p
                     id={`${ids}-caption-hint`}
@@ -413,6 +433,34 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
                   >
                     {t("add.caption.hint")}
                   </p>
+                  <CaptionHelp />
+                  {previewed !== null && previewed !== caption && (
+                    <div className="space-y-1 rounded-lg bg-muted/50 px-2.5 py-2 text-xs">
+                      <p className="font-medium">
+                        {t("caption.preview.label")}
+                      </p>
+                      <p dir="auto" className="break-words whitespace-pre-wrap">
+                        {previewed}
+                      </p>
+                      <p className="text-muted-foreground">
+                        {t("caption.preview.estimated")}
+                      </p>
+                    </div>
+                  )}
+                  {caption !== "" && (
+                    <p
+                      className={
+                        counter === "over"
+                          ? "text-xs font-medium text-destructive"
+                          : counter === "near"
+                            ? "text-xs text-warning"
+                            : "text-xs text-muted-foreground"
+                      }
+                    >
+                      {t("caption.counter", { length, max: limit })}
+                      {counter === "over" && ` ${t("caption.tooLong")}`}
+                    </p>
+                  )}
                 </div>
               </div>
 

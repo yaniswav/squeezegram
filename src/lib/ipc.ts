@@ -319,7 +319,13 @@ export interface Settings {
     audio_kbps: number
     video_codec: string
   }
-  send: { pause_min_s: number; pause_max_s: number; watchdog_s: number }
+  send: {
+    pause_min_s: number
+    pause_max_s: number
+    watchdog_s: number
+    /** Prefills the caption of the add panel; empty: no caption. */
+    caption_template: string
+  }
   telegram: {
     api_override: { api_id: number } | null
     device_name: string | null
@@ -948,6 +954,7 @@ const settingsDecoder = d.object<Settings>({
     pause_min_s: d.number,
     pause_max_s: d.number,
     watchdog_s: d.number,
+    caption_template: d.string,
   }),
   telegram: d.object<Settings["telegram"]>({
     api_override: d.nullable(
@@ -1189,6 +1196,18 @@ export function queueAdd(
     sendMode,
     caption,
   })
+}
+
+/**
+ * A caption template rendered for the first file of a batch of `count`, by the same function
+ * as the send. Only what is known before encoding is real: see `src-tauri/src/caption.rs`.
+ */
+export function captionPreview(
+  template: string,
+  path: string | undefined,
+  count: number,
+): Promise<string> {
+  return call("caption_preview", d.string, { template, path, count })
 }
 
 export function queueList(): Promise<Item[]> {

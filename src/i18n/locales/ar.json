@@ -51,6 +51,7 @@
     "ENCODER_FALLBACK": "أبلغ مرمِّز بطاقة الرسوميات ({{from}}) عن خطأ بعد {{duration}}. انتقل squeezegram إلى المرمِّز عبر المعالج ({{to}}) وسيستمر في استخدامه حتى إعادة تشغيل التطبيق.",
     "ENCODER_FALLBACK_silent": "توقف مرمِّز بطاقة الرسوميات ({{from}}) دون رسالة خطأ (بعد {{duration}}). انتقل squeezegram إلى المرمِّز عبر المعالج ({{to}}) وسيستمر في استخدامه حتى إعادة تشغيل التطبيق.",
     "OUTPUT_TOO_LARGE": "لا يمكن أن يتسع هذا الملف تحت حد الرفع، حتى بعد الضغط.",
+    "CAPTION_TOO_LONG": "This caption is too long: {{length}} characters, and Telegram allows {{max}}. Shorten it and retry; nothing was sent.",
     "DISK_SPACE": "المساحة الحرة غير كافية في المجلد المؤقت.",
     "DUPLICATE": "سبق إرساله إلى هذه الوجهة.",
     "SIDECAR_CHECKSUM": "لا يطابق ffmpeg الذي تم تنزيله المجموع الاختباري المتوقع، لذلك لم يُثبَّت.",
@@ -238,6 +239,31 @@
     "addedEach_few": "{{count}} files added to the queue for each of {{destinations}} destinations.",
     "addedEach_many": "{{count}} files added to the queue for each of {{destinations}} destinations.",
     "addedEach_other": "{{count}} files added to the queue for each of {{destinations}} destinations."
+  },
+  "caption": {
+    "help": {
+      "summary": "Variables you can use",
+      "escape": "Write {{open}} or {{close}} for a literal brace. A name that is not in this list stays as written."
+    },
+    "var": {
+      "name": "File name without extension",
+      "file": "File name with extension",
+      "ext": "Extension, without the dot",
+      "duration": "Duration (m:ss or h:mm:ss)",
+      "original_size": "Size before compression",
+      "final_size": "Size of the file that is sent",
+      "saving": "Percent saved by compression (empty if not compressed)",
+      "resolution": "Width x height, e.g. 1920x1080 (empty for documents)",
+      "date": "Send date, yyyy-mm-dd",
+      "index": "Position of the file in its batch",
+      "count": "Number of files in the batch"
+    },
+    "preview": {
+      "label": "Preview for the first file",
+      "estimated": "Duration, resolution and the sizes after compression are estimates until the file is encoded."
+    },
+    "counter": "{{length}} / {{max}} characters",
+    "tooLong": "Telegram refuses longer captions: the files would fail instead of being sent."
   },
   "queue": {
     "start": "تشغيل",
@@ -565,6 +591,11 @@
       "max": "الحد الأقصى (ثوانٍ)",
       "errorInteger": "أدخل عدد ثوانٍ صحيحًا، 0 أو أكثر.",
       "errorOrder": "لا يمكن أن يكون الحد الأدنى أكبر من الحد الأقصى."
+    },
+    "caption": {
+      "title": "Default caption",
+      "hint": "Prefills the caption when you add files. Leave it empty for no caption.",
+      "label": "Caption template"
     },
     "temp": {
       "title": "الملفات المؤقتة",

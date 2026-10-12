@@ -10,6 +10,7 @@ import {
 import { AnimatePresence, motion } from "motion/react"
 import { useEffect, useId, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
+import { CaptionHelp } from "@/components/caption-help"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { DestinationField } from "@/components/destination-field"
 import { FfmpegFinder } from "@/components/ffmpeg-finder"
@@ -19,6 +20,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Select,
   SelectContent,
@@ -88,6 +90,7 @@ interface Draft {
   audioKbps: string
   pauseMin: string
   pauseMax: string
+  captionTemplate: string
   tempDir: string | null
   minFreeGb: string
   ffmpegDir: string | null
@@ -136,6 +139,7 @@ function toDraft(settings: Settings): Draft {
     audioKbps: settings.advanced_encoding.audio_kbps.toString(),
     pauseMin: settings.send.pause_min_s.toString(),
     pauseMax: settings.send.pause_max_s.toString(),
+    captionTemplate: settings.send.caption_template,
     tempDir: emptyToNull(settings.temp.dir),
     minFreeGb: settings.temp.min_free_gb.toString(),
     ffmpegDir: emptyToNull(settings.ffmpeg.custom_dir),
@@ -219,6 +223,9 @@ function toPatch(draft: Draft, settings: Settings): SettingsPatch {
 
   if (Number(draft.pauseMax) !== settings.send.pause_max_s)
     send.pause_max_s = Number(draft.pauseMax)
+
+  if (draft.captionTemplate !== saved.captionTemplate)
+    send.caption_template = draft.captionTemplate
 
   if (Object.keys(send).length > 0) patch.send = send
 
@@ -1145,6 +1152,26 @@ function SettingsForm({
             )}
           </Field>
         </div>
+      </Section>
+
+      <Section
+        title={t("settings.caption.title")}
+        hint={t("settings.caption.hint")}
+      >
+        <Field id={`${ids}-caption`} label={t("settings.caption.label")}>
+          {(props) => (
+            <Textarea
+              {...props}
+              dir="auto"
+              rows={2}
+              value={draft.captionTemplate}
+              onChange={(event) =>
+                update("captionTemplate", event.target.value)
+              }
+            />
+          )}
+        </Field>
+        <CaptionHelp />
       </Section>
 
       <Section title={t("settings.temp.title")}>
