@@ -185,6 +185,11 @@
       "unavailableBody": "El núcleo no pudo listar los destinos, así que no se pueden poner archivos en la cola.",
       "empty": "Todavía no hay destinos. Inicie sesión en Telegram y, después, actualice la lista.",
       "loadError": "No se pudieron cargar los destinos.",
+      "extraLabel": "Destination {{number}}",
+      "removeExtra": "Remove destination {{number}}",
+      "addAnother": "Add another destination",
+      "premium": "Premium",
+      "multiLocked": "Sending one batch to several chats or topics is included with squeezegram Premium.",
       "check": {
         "checking": "Comprobando permisos…",
         "ok": "Puede enviar aquí.",
@@ -206,7 +211,10 @@
     "submit_other": "Añadir {{count}} archivos a la cola",
     "added_one": "{{count}} archivo añadido a la cola.",
     "added_many": "{{count}} archivos añadidos a la cola.",
-    "added_other": "{{count}} archivos añadidos a la cola."
+    "added_other": "{{count}} archivos añadidos a la cola.",
+    "addedEach_one": "{{count}} file added to the queue for each of {{destinations}} destinations.",
+    "addedEach_many": "{{count}} files added to the queue for each of {{destinations}} destinations.",
+    "addedEach_other": "{{count}} files added to the queue for each of {{destinations}} destinations."
   },
   "queue": {
     "start": "Iniciar",

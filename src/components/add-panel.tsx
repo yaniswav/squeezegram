@@ -1,11 +1,14 @@
 import { FolderOpen, Plus, X } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
-import { useId, useMemo, useState } from "react"
+import { useId, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
   DestinationCheckNotice,
   DestinationField,
 } from "@/components/destination-field"
+import { DestinationPicker } from "@/components/destination-picker"
+import { PurchaseButton } from "@/components/purchase-button"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -18,15 +21,21 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { mostRecent } from "@/lib/destination-groups"
+import { grants } from "@/lib/entitlements"
 import { fileName } from "@/lib/format"
 import {
   isDesktop,
   pickFiles,
   pickFolder,
   queueAdd,
+  type Destination,
   type SendMode,
 } from "@/lib/ipc"
-import { useDestinationCheck } from "@/hooks/use-destination-check"
+import {
+  useDestinationChecks,
+  type CheckTarget,
+} from "@/hooks/use-destination-check"
+import { useEntitlementStatus } from "@/hooks/use-entitlement-status"
 import { useAlerts } from "@/state/alerts"
 import { useDestinations } from "@/state/destinations"
 import { useQueue } from "@/state/queue"
@@ -34,6 +43,12 @@ import { useQueue } from "@/state/queue"
 const MAX_LISTED = 5
 
 const MODES: readonly SendMode[] = ["video", "document", "photo"]
+
+/** A destination added to the batch after the first one; `id` is "" until one is picked. */
+interface ExtraDestination {
+  key: number
+  id: string
+}
 
 interface AddPanelProps {
   /** Paths dropped on the window or picked, not queued yet (kept in memory only). */
@@ -52,7 +67,19 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
   const [mode, setMode] = useState<SendMode | "default">("default")
   const [caption, setCaption] = useState("")
   const [busy, setBusy] = useState(false)
-  const [added, setAdded] = useState<number | null>(null)
+  const [added, setAdded] = useState<{
+    files: number
+    destinations: number
+  } | null>(null)
+  const [extraSlots, setExtraSlots] = useState<ExtraDestination[]>([])
+  const nextSlot = useRef(0)
+  const [entitlements] = useEntitlementStatus()
+
+  // Without the license the batch keeps one destination, as the core requires.
+  const multiGranted =
+    entitlements !== "failed" && grants(entitlements, "multi_destination")
+
+  const extras = multiGranted ? extraSlots : []
 
   async function browse() {
     const picked = await pickFiles()
@@ -83,21 +110,60 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
   const chosen =
     destinationId !== "" ? destinationId : (suggested?.id.toString() ?? "")
 
+  const destination =
+    chosen === "" ? undefined : destinations.byId.get(Number(chosen))
+
+  const extraDestinations = extras.map((slot) =>
+    slot.id === "" ? undefined : destinations.byId.get(Number(slot.id)),
+  )
+
+  // Every destination once, the first one first.
+  const batch = [destination, ...extraDestinations].filter(
+    (entry, index, all): entry is Destination =>
+      entry !== undefined &&
+      all.findIndex((other) => other?.id === entry.id) === index,
+  )
+
+  // Checked once there are files to add: a destination shown before that (the suggested one)
+  // asks Telegram nothing.
+  const targetOf = (entry: Destination | undefined): CheckTarget | null =>
+    paths.length > 0 && entry
+      ? {
+          destinationId: entry.id,
+          mode: mode === "default" ? entry.default_mode : mode,
+        }
+      : null
+
+  const checkOf = useDestinationChecks(
+    batch.flatMap((entry) => targetOf(entry) ?? []),
+  )
+
+  // A refusal from Telegram's rights blocks the add; a failed check only warns.
+  const blocked = batch.some((entry) => {
+    const check = checkOf(targetOf(entry))
+
+    return check.phase === "done" && !check.check.allowed
+  })
+
   async function submit() {
-    if (!chosen) return
+    if (batch.length === 0) return
     setBusy(true)
 
     try {
       const created = await queueAdd(
         paths,
-        [Number(chosen)],
+        batch.map((entry) => entry.id),
         mode === "default" ? undefined : mode,
         caption.trim() === "" ? undefined : caption,
       )
 
       onPathsChange([])
       setCaption("")
-      setAdded(created.length)
+      // One item per file and destination.
+      setAdded({
+        files: created.length / batch.length,
+        destinations: batch.length,
+      })
       // `queue_add` recorded the use: the recently used list changes.
       void destinations.reload()
       await refresh()
@@ -108,18 +174,22 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
     }
   }
 
-  const destination =
-    chosen === "" ? undefined : destinations.byId.get(Number(chosen))
+  function addSlot() {
+    const key = nextSlot.current
 
-  // Checked once there are files to add: a destination shown before that (the suggested one)
-  // asks Telegram nothing.
-  const check = useDestinationCheck(
-    paths.length > 0 && destination ? destination.id : null,
-    destination ? (mode === "default" ? destination.default_mode : mode) : null,
-  )
+    nextSlot.current += 1
+    setExtraSlots((slots) => [...slots, { key, id: "" }])
+  }
 
-  // A refusal from Telegram's rights blocks the add; a failed check only warns.
-  const blocked = check.phase === "done" && !check.check.allowed
+  function setSlot(key: number, id: string) {
+    setExtraSlots((slots) =>
+      slots.map((slot) => (slot.key === key ? { ...slot, id } : slot)),
+    )
+  }
+
+  function removeSlot(key: number) {
+    setExtraSlots((slots) => slots.filter((slot) => slot.key !== key))
+  }
 
   const canSubmit =
     paths.length > 0 &&
@@ -155,7 +225,12 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
 
         <p role="status" className="text-sm text-success empty:hidden">
           {added !== null && paths.length === 0
-            ? t("add.added", { count: added })
+            ? added.destinations > 1
+              ? t("add.addedEach", {
+                  count: added.files,
+                  destinations: added.destinations,
+                })
+              : t("add.added", { count: added.files })
             : ""}
         </p>
 
@@ -218,7 +293,67 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
                 value={chosen}
                 onChange={setDestinationId}
               />
-              <DestinationCheckNotice state={check} />
+              <DestinationCheckNotice state={checkOf(targetOf(destination))} />
+
+              {extras.map((slot, index) => {
+                const labelId = `${ids}-extra-${slot.key}-label`
+                const number = index + 2
+
+                return (
+                  <div key={slot.key} className="space-y-2">
+                    <span id={labelId} className="sr-only">
+                      {t("add.destination.extraLabel", { number })}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <DestinationPicker
+                        id={`${ids}-extra-${slot.key}`}
+                        value={slot.id}
+                        onChange={(id) => setSlot(slot.key, id)}
+                        labelledBy={labelId}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={t("add.destination.removeExtra", {
+                          number,
+                        })}
+                        onClick={() => removeSlot(slot.key)}
+                      >
+                        <X />
+                      </Button>
+                    </div>
+                    <DestinationCheckNotice
+                      state={checkOf(targetOf(extraDestinations[index]))}
+                    />
+                  </div>
+                )
+              })}
+
+              {destinations.status === "ready" &&
+                destinations.list.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!multiGranted}
+                      onClick={addSlot}
+                    >
+                      <Plus data-icon="inline-start" />
+                      {t("add.destination.addAnother")}
+                    </Button>
+                    {!multiGranted && (
+                      <>
+                        <Badge variant="secondary">
+                          {t("add.destination.premium")}
+                        </Badge>
+                        <p className="min-w-0 flex-1 basis-64 text-sm text-muted-foreground">
+                          {t("add.destination.multiLocked")}
+                        </p>
+                        <PurchaseButton />
+                      </>
+                    )}
+                  </div>
+                )}
 
               <div className="grid gap-4 sm:grid-cols-[12rem_1fr]">
                 <div className="space-y-2">
