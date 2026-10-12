@@ -1,6 +1,5 @@
 import {
   Download,
-  ExternalLink,
   FolderOpen,
   KeyRound,
   RefreshCw,
@@ -14,6 +13,7 @@ import { useTranslation } from "react-i18next"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { FfmpegFinder } from "@/components/ffmpeg-finder"
 import { PageHeader } from "@/components/page-header"
+import { PurchaseButton } from "@/components/purchase-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,6 +26,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import {
+  useEntitlementStatus,
+  type EntitlementState,
+} from "@/hooks/use-entitlement-status"
 import { availableLanguages } from "@/i18n"
 import { errorMessage, errorOf, type ErrorReport } from "@/i18n/errors"
 import {
@@ -39,15 +43,12 @@ import { formatDateTime, formatList, formatNumber } from "@/lib/format"
 import {
   debugExport,
   encoderStatus,
-  entitlementsStatus,
   isDesktop,
   licenseClear,
-  licenseOpenPurchase,
   licenseSet,
   limitStatus,
   logOpenDir,
   logPath,
-  onEntitlementsStatus,
   pickFolder,
   sidecarsStatus,
   type EncoderStatus,
@@ -68,9 +69,6 @@ import { useUpdate } from "@/state/update"
 type Premium = "auto" | "yes" | "no"
 
 type Prefer = "gpu" | "cpu"
-
-/** `null` while loading, `"failed"` when the core could not be asked. */
-type EntitlementState = EntitlementStatus | "failed" | null
 
 /** Text inputs stay strings until validation; folders are null for "default". */
 interface Draft {
@@ -272,52 +270,6 @@ export function SettingsPage({ focusTitle }: { focusTitle: boolean }) {
         </>
       )}
     </div>
-  )
-}
-
-/** `entitlements_status`, then every `entitlements://status` (license change, sign-in, sign-out). */
-function useEntitlementStatus() {
-  const [status, setStatus] = useState<EntitlementState>(null)
-
-  useEffect(() => {
-    let stale = false
-    const stop = onEntitlementsStatus(setStatus)
-
-    entitlementsStatus().then(
-      (next) => {
-        if (!stale) setStatus(next)
-      },
-      () => {
-        if (!stale) setStatus((current) => current ?? "failed")
-      },
-    )
-
-    return () => {
-      stale = true
-      stop()
-    }
-  }, [])
-
-  return [status, setStatus] as const
-}
-
-/** Opens @squeezegram_bot on Telegram; the core holds the address. */
-function PurchaseButton() {
-  const { t } = useTranslation()
-  const { pushError } = useAlerts()
-
-  return (
-    <Button
-      type="button"
-      variant="link"
-      size="sm"
-      className="px-0"
-      disabled={!isDesktop()}
-      onClick={() => void licenseOpenPurchase().catch(pushError)}
-    >
-      <ExternalLink data-icon="inline-start" />
-      {t("settings.license.buy")}
-    </Button>
   )
 }
 
