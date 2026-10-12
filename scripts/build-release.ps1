@@ -6,9 +6,11 @@
     Steps, stopping at the first error:
       1. scripts\check-versions.ps1   package.json, Cargo.toml and tauri.conf.json agree
       2. scripts\stage-tdjson.ps1     pinned tdjson.dll (SHA-256 checked) into the staging folder
-      3. pnpm tauri build             NSIS installer (per-user, no admin rights)
-      4. scripts\make-portable.ps1    dist-release\squeezegram-<version>-portable-x64.zip
-      5. scripts\make-checksums.ps1   dist-release\SHA256SUMS.txt
+      3. scripts\generate-notices.ps1 THIRD-PARTY-NOTICES.txt (needs the pinned cargo-about, see
+                                      scripts\install-cargo-about.ps1, and `pnpm install`)
+      4. pnpm tauri build             NSIS installer (per-user, no admin rights)
+      5. scripts\make-portable.ps1    dist-release\squeezegram-<version>-portable-x64.zip
+      6. scripts\make-checksums.ps1   dist-release\SHA256SUMS.txt
     Then it prints the size and SHA-256 of each artefact.
 
     DO NOT PUBLISH THE OUTPUT OF THIS SCRIPT. A local build compiles the Telegram api_id and
@@ -16,11 +18,11 @@
     installer or the zip can extract them. Only builds made by CI with the intended secrets
     may be published. Checksums written here describe local test artefacts only.
 
-    tdjson.dll is shipped as a Tauri resource mapped to the install root, so it lands next to
-    squeezegram.exe, where library.rs looks for it. The resource is declared in a config
-    overlay generated here rather than in tauri.conf.json: tauri-build fails when a declared
-    resource is missing, which would break `cargo check`, `tauri dev` and the CI dry-run
-    (none of them stage the DLL).
+    tdjson.dll and THIRD-PARTY-NOTICES.txt are shipped as Tauri resources mapped to the install
+    root, so they land next to squeezegram.exe (library.rs looks for the DLL there). The
+    resources are declared in a config overlay generated here rather than in tauri.conf.json:
+    tauri-build fails when a declared resource is missing, which would break `cargo check`,
+    `tauri dev` and the CI dry-run (none of them stage the DLL or generate the notices).
 
     Update artefacts: when the environment variable TAURI_SIGNING_PRIVATE_KEY is set (the
     private updater key, as a path or as its content; TAURI_SIGNING_PRIVATE_KEY_PASSWORD
@@ -50,17 +52,24 @@ function Assert-Native([string] $What) {
     if ($LASTEXITCODE -ne 0) { throw "$What failed with exit code $LASTEXITCODE" }
 }
 
-Write-Host '== 1/5 versions'
+Write-Host '== 1/6 versions'
 $version = & (Join-Path $PSScriptRoot 'check-versions.ps1') | Select-Object -Last 1
 
-Write-Host '== 2/5 tdjson.dll'
+Write-Host '== 2/6 tdjson.dll'
 $staged = & (Join-Path $PSScriptRoot 'stage-tdjson.ps1') | Select-Object -Last 1
 
-Write-Host '== 3/5 pnpm tauri build'
+Write-Host '== 3/6 third-party notices'
+# Fails (and so stops the release) when a crate or package has no licence text.
+$notices = & (Join-Path $PSScriptRoot 'generate-notices.ps1') -Version $version | Select-Object -Last 1
+if (-not (Test-Path -LiteralPath $notices -PathType Leaf)) { throw "Notices not generated: $notices" }
+
+Write-Host '== 4/6 pnpm tauri build'
 # Paths in "resources" are relative to src-tauri; the value is the destination in the bundle.
 $overlay = Join-Path (Split-Path -Parent $staged) 'tauri.release.conf.json'
-$stagedRelative = ($staged.Substring((Join-Path $root 'src-tauri').Length + 1)) -replace '\\', '/'
-$bundle = @{ resources = @{ $stagedRelative = 'tdjson.dll' } }
+$srcTauri = Join-Path $root 'src-tauri'
+$stagedRelative = ($staged.Substring($srcTauri.Length + 1)) -replace '\\', '/'
+$noticesRelative = ($notices.Substring($srcTauri.Length + 1)) -replace '\\', '/'
+$bundle = @{ resources = @{ $stagedRelative = 'tdjson.dll'; $noticesRelative = 'THIRD-PARTY-NOTICES.txt' } }
 # Only the presence of the variable is tested, never its value.
 $signUpdates = -not [string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY)
 if ($signUpdates) { $bundle.createUpdaterArtifacts = $true }
@@ -94,10 +103,10 @@ if ($signUpdates) {
     Copy-Item -LiteralPath "$installer.sig" -Destination "$installerOut.sig" -Force
 }
 
-Write-Host '== 4/5 portable zip'
-$zip = & (Join-Path $PSScriptRoot 'make-portable.ps1') -Version $version -DllPath $staged | Select-Object -Last 1
+Write-Host '== 5/6 portable zip'
+$zip = & (Join-Path $PSScriptRoot 'make-portable.ps1') -Version $version -DllPath $staged -NoticesPath $notices | Select-Object -Last 1
 
-Write-Host '== 5/5 checksums'
+Write-Host '== 6/6 checksums'
 & (Join-Path $PSScriptRoot 'make-checksums.ps1') -Directory $dist
 
 Write-Host ''
