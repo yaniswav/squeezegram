@@ -34,6 +34,11 @@ test("a cause picks the precise sentence of the GPU fallback codes", () => {
   )
 
   assert.equal(
+    messageKey("FFMPEG_FAILED", { ...stopped, cause: "hevc_gpu_only" }, has),
+    "FFMPEG_FAILED_hevc_gpu_only",
+  )
+
+  assert.equal(
     messageKey("ENCODER_FALLBACK", { cause: "silent" }, has),
     "ENCODER_FALLBACK_silent",
   )
@@ -69,6 +74,7 @@ test("the GPU sentences only use params the core sends", () => {
       "fallback",
     ],
     FFMPEG_FAILED_no_cpu_encoder: ["duration", "encoder", "exitCode"],
+    FFMPEG_FAILED_hevc_gpu_only: ["duration", "encoder", "exitCode"],
     ENCODER_FALLBACK: ["duration", "from", "to"],
     ENCODER_FALLBACK_silent: ["duration", "from", "to"],
   }
@@ -86,5 +92,6 @@ test("the GPU sentences only use params the core sends", () => {
 
 test("the fallback notice is information, failures are errors", () => {
   assert.equal(isInfoCode("ENCODER_FALLBACK"), true)
+  assert.equal(isInfoCode("CODEC_FALLBACK"), true)
   assert.equal(isInfoCode("FFMPEG_FAILED"), false)
 })

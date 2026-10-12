@@ -5,6 +5,8 @@ import { test } from "node:test"
 import {
   AUTOMATIC_ENCODING,
   effectiveEncoding,
+  encodingOverrideDecoder,
+  isTargetMb,
   maxResolutionDecoder,
 } from "./advanced-encoding.ts"
 import { DecodeError } from "./decode.ts"
@@ -160,18 +162,52 @@ test("advanced encoding is granted only by the features of an applied license", 
 })
 
 test("without the feature the automatic values are shown, whatever is saved", () => {
-  const saved = { max_resolution: "2160p", audio_kbps: 192 } as const
+  const saved = {
+    max_resolution: "2160p",
+    audio_kbps: 192,
+    video_codec: "hevc",
+    preset: "quality",
+    target_mb: 50,
+  } as const
 
   assert.deepEqual(effectiveEncoding(saved, true), saved)
   assert.deepEqual(effectiveEncoding(saved, false), {
     max_resolution: "1080p",
     audio_kbps: 128,
+    video_codec: "h264",
+    preset: "balanced",
+    target_mb: null,
   })
   assert.deepEqual(effectiveEncoding(saved, false), AUTOMATIC_ENCODING)
 
   for (const value of ["1080p", "1440p", "2160p", "original"])
     assert.equal(maxResolutionDecoder(value, "$"), value)
   assert.throws(() => maxResolutionDecoder("p1080", "$"), DecodeError)
+})
+
+test("a file's encoding choices are a complete set the core can read back", () => {
+  const stored = { video_codec: "hevc", max_resolution: "1440p", target_mb: 25 }
+
+  assert.deepEqual(encodingOverrideDecoder(stored, "$"), stored)
+  assert.deepEqual(
+    encodingOverrideDecoder({ ...stored, target_mb: null }, "$").target_mb,
+    null,
+  )
+  assert.throws(
+    () => encodingOverrideDecoder({ ...stored, video_codec: "av1" }, "$"),
+    DecodeError,
+  )
+  assert.throws(
+    () => encodingOverrideDecoder({ video_codec: "h264" }, "$"),
+    DecodeError,
+  )
+})
+
+test("a custom target is a whole number of MiB within the core's range", () => {
+  for (const ok of [1, 50, 2000, 4000])
+    assert.equal(isTargetMb(ok), true, `${ok}`)
+  for (const bad of [0, -1, 4001, 1.5, Number.NaN])
+    assert.equal(isTargetMb(bad), false, `${bad}`)
 })
 
 test("every license code and feature has an English text", () => {

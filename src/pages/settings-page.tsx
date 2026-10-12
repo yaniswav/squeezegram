@@ -12,6 +12,7 @@ import { useEffect, useId, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { CaptionHelp } from "@/components/caption-help"
 import { ConfirmDialog } from "@/components/confirm-dialog"
+import { CodecNote } from "@/components/codec-note"
 import { DestinationField } from "@/components/destination-field"
 import { FfmpegFinder } from "@/components/ffmpeg-finder"
 import { PageHeader } from "@/components/page-header"
@@ -29,6 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { useCodecSupport } from "@/hooks/use-codec-support"
 import {
   useEntitlementStatus,
   type EntitlementState,
@@ -38,8 +40,13 @@ import { errorMessage, errorOf, type ErrorReport } from "@/i18n/errors"
 import {
   AUDIO_KBPS_CHOICES,
   AUTOMATIC_ENCODING,
+  ENCODE_PRESETS,
   MAX_RESOLUTIONS,
+  TARGET_MB_MAX,
+  TARGET_MB_MIN,
+  VIDEO_CODECS,
   effectiveEncoding,
+  isTargetMb,
 } from "@/lib/advanced-encoding"
 import { grants, hasStoredLicense, licenseView } from "@/lib/entitlements"
 import { formatDateTime, formatList, formatNumber } from "@/lib/format"
@@ -59,6 +66,7 @@ import {
   watchRemove,
   watchUpdate,
   type EncoderStatus,
+  type EncodePreset,
   type EntitlementStatus,
   type LimitStatus,
   type MaxResolution,
@@ -67,6 +75,7 @@ import {
   type SettingsPatch,
   type SidecarStatus,
   type ThemeSetting,
+  type VideoCodec,
   type WatchFolder,
 } from "@/lib/ipc"
 import { isThemePreference } from "@/lib/theme"
@@ -80,6 +89,8 @@ type Premium = "auto" | "yes" | "no"
 
 type Prefer = "gpu" | "cpu"
 
+type TargetMode = "limit" | "custom"
+
 /** Text inputs stay strings until validation; folders are null for "default". */
 interface Draft {
   premium: Premium
@@ -88,6 +99,10 @@ interface Draft {
   prefer: Prefer
   maxResolution: MaxResolution
   audioKbps: string
+  videoCodec: VideoCodec
+  preset: EncodePreset
+  targetMode: TargetMode
+  targetMb: string
   pauseMin: string
   pauseMax: string
   captionTemplate: string
@@ -102,13 +117,14 @@ interface Draft {
 type ErrorKey =
   | "settings.limit.custom.error"
   | "settings.limit.margin.error"
+  | "settings.advanced.target.error"
   | "settings.send.errorInteger"
   | "settings.send.errorOrder"
   | "settings.temp.errorInteger"
 
 type DraftErrors = Partial<
   Record<
-    "customMb" | "margin" | "pauseMin" | "pauseMax" | "minFreeGb",
+    "customMb" | "margin" | "targetMb" | "pauseMin" | "pauseMax" | "minFreeGb",
     ErrorKey
   >
 >
@@ -137,6 +153,11 @@ function toDraft(settings: Settings): Draft {
     prefer: preferOf(settings.encoding.prefer),
     maxResolution: settings.advanced_encoding.max_resolution,
     audioKbps: settings.advanced_encoding.audio_kbps.toString(),
+    videoCodec: settings.advanced_encoding.video_codec,
+    preset: settings.advanced_encoding.preset,
+    targetMode:
+      settings.advanced_encoding.target_mb === null ? "limit" : "custom",
+    targetMb: settings.advanced_encoding.target_mb?.toString() ?? "",
     pauseMin: settings.send.pause_min_s.toString(),
     pauseMax: settings.send.pause_max_s.toString(),
     captionTemplate: settings.send.caption_template,
@@ -161,6 +182,12 @@ function validate(draft: Draft): DraftErrors {
     if (!WHOLE.test(draft.customMb.trim()) || mb <= 0)
       errors.customMb = "settings.limit.custom.error"
   }
+
+  if (
+    draft.targetMode === "custom" &&
+    !(WHOLE.test(draft.targetMb.trim()) && isTargetMb(Number(draft.targetMb)))
+  )
+    errors.targetMb = "settings.advanced.target.error"
 
   const margin = Number(draft.margin)
 
@@ -213,6 +240,16 @@ function toPatch(draft: Draft, settings: Settings): SettingsPatch {
 
   if (Number(draft.audioKbps) !== settings.advanced_encoding.audio_kbps)
     advanced.audio_kbps = Number(draft.audioKbps)
+
+  if (draft.videoCodec !== saved.videoCodec)
+    advanced.video_codec = draft.videoCodec
+
+  if (draft.preset !== saved.preset) advanced.preset = draft.preset
+
+  const targetMb = draft.targetMode === "custom" ? Number(draft.targetMb) : null
+
+  if (targetMb !== settings.advanced_encoding.target_mb)
+    advanced.target_mb = targetMb
 
   if (Object.keys(advanced).length > 0) patch.advanced_encoding = advanced
 
@@ -914,9 +951,15 @@ function SettingsForm({
     {
       max_resolution: draft.maxResolution,
       audio_kbps: Number(draft.audioKbps),
+      video_codec: draft.videoCodec,
+      preset: draft.preset,
+      target_mb: draft.targetMode === "custom" ? Number(draft.targetMb) : null,
     },
     advancedGranted,
   )
+  const targetMode: TargetMode =
+    advancedGranted && draft.targetMode === "custom" ? "custom" : "limit"
+  const codecSupport = useCodecSupport(advancedGranted)
 
   // Read again when a GPU stop is announced while this page is open.
   useEffect(() => {
@@ -1112,7 +1155,85 @@ function SettingsForm({
               />
             )}
           </Field>
+          <Field
+            id={`${ids}-codec`}
+            label={t("settings.advanced.codec.label")}
+            hint={t("settings.advanced.codec.hint")}
+          >
+            {(props) => (
+              <Choice
+                {...props}
+                disabled={!advancedGranted}
+                value={encoding.video_codec}
+                onChange={(value) => update("videoCodec", value)}
+                disabledOptions={codecSupport?.hevc === false ? ["hevc"] : []}
+                options={VIDEO_CODECS.map(
+                  (codec) =>
+                    [codec, t(`settings.advanced.codec.${codec}`)] as const,
+                )}
+              />
+            )}
+          </Field>
+          <Field
+            id={`${ids}-preset`}
+            label={t("settings.advanced.preset.label")}
+            hint={t("settings.advanced.preset.hint")}
+          >
+            {(props) => (
+              <Choice
+                {...props}
+                disabled={!advancedGranted}
+                value={encoding.preset}
+                onChange={(value) => update("preset", value)}
+                options={ENCODE_PRESETS.map(
+                  (preset) =>
+                    [preset, t(`settings.advanced.preset.${preset}`)] as const,
+                )}
+              />
+            )}
+          </Field>
+          <Field
+            id={`${ids}-target`}
+            label={t("settings.advanced.target.label")}
+            hint={t("settings.advanced.target.hint")}
+          >
+            {(props) => (
+              <Choice
+                {...props}
+                disabled={!advancedGranted}
+                value={targetMode}
+                onChange={(value) => update("targetMode", value)}
+                options={[
+                  ["limit", t("settings.advanced.target.limit")],
+                  ["custom", t("settings.advanced.target.custom")],
+                ]}
+              />
+            )}
+          </Field>
+          {targetMode === "custom" && (
+            <Field
+              id={`${ids}-target-mb`}
+              label={t("settings.advanced.target.mb")}
+              error={fieldError("targetMb")}
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  type="number"
+                  min={TARGET_MB_MIN}
+                  max={TARGET_MB_MAX}
+                  step={1}
+                  inputMode="numeric"
+                  value={draft.targetMb}
+                  onChange={(event) => update("targetMb", event.target.value)}
+                />
+              )}
+            </Field>
+          )}
         </div>
+        {advancedGranted && (
+          <CodecNote codec={encoding.video_codec} support={codecSupport} />
+        )}
       </Section>
 
       <Section title={t("settings.send.title")} hint={t("settings.send.hint")}>
@@ -1482,12 +1603,15 @@ function Choice<T extends string>({
   onChange,
   options,
   disabled = false,
+  disabledOptions = [],
   ...props
 }: ControlProps & {
   value: T
   onChange: (value: T) => void
   options: readonly (readonly [T, string])[]
   disabled?: boolean
+  /** Listed but not selectable (HEVC on a computer without a HEVC encoder). */
+  disabledOptions?: readonly T[]
 }) {
   return (
     <Select
@@ -1504,7 +1628,11 @@ function Choice<T extends string>({
       </SelectTrigger>
       <SelectContent position="popper">
         {options.map(([option, label]) => (
-          <SelectItem key={option} value={option}>
+          <SelectItem
+            key={option}
+            value={option}
+            disabled={disabledOptions.includes(option)}
+          >
             {label}
           </SelectItem>
         ))}

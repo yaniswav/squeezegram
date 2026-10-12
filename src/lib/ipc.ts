@@ -18,8 +18,14 @@ import {
   type JsonObject,
 } from "./json"
 import {
+  encodePresetDecoder,
+  encodingOverrideDecoder,
   maxResolutionDecoder,
+  videoCodecDecoder,
   type AdvancedEncoding,
+  type CodecSupport,
+  type EncodeEstimate,
+  type EncodingOverride,
 } from "./advanced-encoding"
 import {
   entitlementStatusDecoder,
@@ -35,7 +41,15 @@ import {
   type UpdateProgress,
 } from "./update"
 
-export type { AdvancedEncoding, MaxResolution } from "./advanced-encoding"
+export type {
+  AdvancedEncoding,
+  CodecSupport,
+  EncodeEstimate,
+  EncodePreset,
+  EncodingOverride,
+  MaxResolution,
+  VideoCodec,
+} from "./advanced-encoding"
 
 export type {
   EntitlementPlan,
@@ -105,6 +119,8 @@ export interface Item {
   tg_sent_at: string | null
   created_at: string
   updated_at: string
+  /** Encoding choices of this file (Premium); null: the global settings apply. */
+  encoding_override: EncodingOverride | null
 }
 
 /** `ItemPatch`: only for items not started yet. */
@@ -871,6 +887,7 @@ const itemDecoder = d.object<Item>({
   tg_sent_at: d.nullable(d.string),
   created_at: d.string,
   updated_at: d.string,
+  encoding_override: d.nullable(encodingOverrideDecoder),
 })
 
 const itemDeltaDecoder = d.object<ItemDelta>({
@@ -990,6 +1007,9 @@ const settingsDecoder = d.object<Settings>({
   advanced_encoding: d.object<Settings["advanced_encoding"]>({
     max_resolution: maxResolutionDecoder,
     audio_kbps: d.number,
+    video_codec: videoCodecDecoder,
+    preset: encodePresetDecoder,
+    target_mb: d.nullable(d.number),
   }),
 })
 
@@ -1013,6 +1033,31 @@ const encoderStatusDecoder = d.object<EncoderStatus>({
     d.object<NonNullable<EncoderStatus["gpu_failed"]>>({
       encoder: d.string,
       at_seconds: d.number,
+    }),
+  ),
+})
+
+const encodeEstimateDecoder = d.object<EncodeEstimate>({
+  outcome: d.literals<EncodeEstimate["outcome"]>({
+    encode: true,
+    as_is: true,
+    photo: true,
+    too_small: true,
+    unknown: true,
+  }),
+  bytes: d.nullable(d.number),
+  limit_bytes: d.number,
+  codec: videoCodecDecoder,
+  codec_fallback: d.boolean,
+})
+
+const codecSupportDecoder = d.object<CodecSupport>({
+  hevc: d.boolean,
+  hevc_encoder: d.nullable(d.string),
+  reason: d.nullable(
+    d.literals<NonNullable<CodecSupport["reason"]>>({
+      no_hevc_encoder: true,
+      ffmpeg_unavailable: true,
     }),
   ),
 })
@@ -1242,6 +1287,33 @@ export function itemUpdate(itemId: number, patch: ItemPatch): Promise<void> {
 }
 
 /** User retry of a `failed` item: back to `encoded` if the prepared file is still there, else `ready`. */
+/**
+ * Premium: this file's encoding choices; `null` goes back to the global settings. Only while
+ * the item has not started.
+ */
+export function itemEncodingSet(
+  itemId: number,
+  options: EncodingOverride | null,
+): Promise<void> {
+  return call("item_encoding_set", d.nothing, { itemId, options })
+}
+
+/** The output size of a queued file under `options` (`null`: the global settings). */
+export function itemEncodingEstimate(
+  itemId: number,
+  options: EncodingOverride | null,
+): Promise<EncodeEstimate> {
+  return call("item_encoding_estimate", encodeEstimateDecoder, {
+    itemId,
+    options,
+  })
+}
+
+/** Whether HEVC can be encoded here (a GPU encoder passed its test encode). */
+export function codecSupport(): Promise<CodecSupport> {
+  return call("codec_support", codecSupportDecoder)
+}
+
 export function queueRetry(itemId: number): Promise<ItemState> {
   return call("queue_retry", itemStateDecoder, { itemId })
 }

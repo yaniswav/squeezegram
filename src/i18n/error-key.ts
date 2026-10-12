@@ -11,7 +11,10 @@ const VARIANT_PARAM: Readonly<Record<string, string>> = {
 }
 
 /** Codes that inform (the work went on) rather than report an error. */
-const INFO_CODES: ReadonlySet<string> = new Set(["ENCODER_FALLBACK"])
+const INFO_CODES: ReadonlySet<string> = new Set([
+  "ENCODER_FALLBACK",
+  "CODEC_FALLBACK",
+])
 
 /** Catalogue key of `code` for these params; `has` tells whether a key exists. */
 export function messageKey(

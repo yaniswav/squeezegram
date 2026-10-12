@@ -48,8 +48,10 @@
     "FFMPEG_FAILED": "ffmpeg a échoué pendant le traitement de ce fichier.",
     "FFMPEG_FAILED_fallback_failed": "L'encodeur GPU ({{encoder}}) s'est arrêté après {{duration}} (code de sortie {{exitCode}}), et l'encodeur CPU ({{fallback}}) a lui aussi échoué. Réessayez ce fichier. Si l'échec se répète, réglez Paramètres › Encodage › Encodeur sur « Processeur d'abord ».",
     "FFMPEG_FAILED_no_cpu_encoder": "L'encodeur GPU ({{encoder}}) s'est arrêté après {{duration}} sans terminer (code de sortie {{exitCode}}), et aucun encodeur CPU ne fonctionne avec ce ffmpeg pour prendre le relais. Réessayez, idéalement pendant qu'aucun jeu ni enregistrement d'écran n'utilise la carte graphique, ou utilisez un ffmpeg qui inclut libx264.",
+    "FFMPEG_FAILED_hevc_gpu_only": "The GPU encoder ({{encoder}}) stopped after {{duration}} without finishing (exit code {{exitCode}}). HEVC can only be encoded by the graphics card, so no CPU encoder can take over. Retry, ideally while no game or screen recording uses the graphics card, or switch to H.264 in the advanced encoding settings.",
     "ENCODER_FALLBACK": "L'encodeur GPU ({{from}}) a signalé une erreur après {{duration}}. squeezegram est passé à l'encodeur CPU ({{to}}) et le conserve jusqu'au redémarrage de l'application.",
     "ENCODER_FALLBACK_silent": "L'encodeur GPU ({{from}}) s'est arrêté sans message d'erreur (après {{duration}}). squeezegram est passé à l'encodeur CPU ({{to}}) et le conserve jusqu'au redémarrage de l'application.",
+    "CODEC_FALLBACK": "HEVC is not available on this computer, so this file was compressed as H.264 instead.",
     "OUTPUT_TOO_LARGE": "Ce fichier ne peut pas passer sous la limite d'envoi, même compressé.",
     "CAPTION_TOO_LONG": "This caption is too long: {{length}} characters, and Telegram allows {{max}}. Shorten it and retry; nothing was sent.",
     "DISK_SPACE": "Espace libre insuffisant dans le dossier temporaire.",
@@ -341,6 +343,26 @@
         "edit": "Modifier la légende",
         "save": "Enregistrer la légende"
       },
+      "encoding": {
+        "open": "Encoding options",
+        "intro": "These choices replace the settings for this file only. You can change them until the file starts.",
+        "inactive": "This file has custom choices, but they are ignored without Premium.",
+        "locked": "Choose the codec, resolution and size of a single file with squeezegram Premium.",
+        "apply": "Apply to this file",
+        "reset": "Use the settings",
+        "fillLimit": "fills the limit",
+        "summary": "Custom encoding: {{codec}}, {{resolution}}, {{size}}",
+        "estimate": {
+          "loading": "Estimating the size…",
+          "failed": "The size cannot be estimated right now.",
+          "encode": "Estimated size: about {{size}} (limit {{limit}}).",
+          "as_is": "Sent as it is or repackaged, without re-encoding: about {{size}}.",
+          "photo": "No estimate for a photo.",
+          "too_small": "This size is too small for the length of this video.",
+          "unknown": "No estimate: the length of this video is unknown.",
+          "fallback": "HEVC is not available on this computer: this file will be H.264."
+        }
+      },
       "duplicate": {
         "body": "Ce fichier a déjà été envoyé à cette destination. Il attend votre confirmation.",
         "confirm": "Envoyer quand même",
@@ -520,6 +542,27 @@
         "hint": "Un débit plus élevé sonne mieux, mais prend de la place à l'image sous la limite d'envoi.",
         "value": "{{kbps}} kbit/s",
         "automatic": "{{kbps}} kbit/s (automatique)"
+      },
+      "codec": {
+        "label": "Video codec",
+        "hint": "HEVC keeps more detail at the same size, but it needs a graphics card that can encode it, and some Telegram apps do not play it inline. It only applies to a file that gets re-encoded.",
+        "h264": "H.264 (automatic)",
+        "hevc": "HEVC (H.265)"
+      },
+      "preset": {
+        "label": "Encoder speed",
+        "hint": "Faster finishes sooner; higher quality takes longer for a better picture at the same size. Encoders without a speed setting ignore this.",
+        "faster": "Faster",
+        "balanced": "Balanced (automatic)",
+        "quality": "Higher quality"
+      },
+      "target": {
+        "label": "Output size",
+        "hint": "Fill the upload limit, or aim for a smaller file. A file never goes over the limit.",
+        "limit": "Fill the upload limit (automatic)",
+        "custom": "Custom size",
+        "mb": "Target size (Mo)",
+        "error": "Enter a whole number of Mo from 1 to 4000."
       }
     },
     "watch": {
@@ -760,5 +803,12 @@
     "unnamedHint": "Chats sans nom, souvent des comptes supprimés.",
     "unnamedShow": "Les afficher",
     "unnamedHide": "Les masquer"
+  },
+  "codec": {
+    "hevcWarning": "HEVC files may not play inline in every Telegram app. Choose H.264 if the people you send to use older apps.",
+    "unavailable": {
+      "no_hevc_encoder": "HEVC is unavailable: none of the graphics card encoders (NVENC, Quick Sync, AMF) of the ffmpeg in use works for HEVC on this computer. Choose an ffmpeg that has one in Settings.",
+      "ffmpeg_unavailable": "HEVC cannot be checked because ffmpeg is not available."
+    }
   }
 }
