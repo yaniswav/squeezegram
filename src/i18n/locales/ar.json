@@ -553,23 +553,23 @@
       "premium": {
         "label": "Telegram Premium",
         "auto": "الكشف من حسابي",
-        "yes": "Premium (4000 MB)",
-        "no": "غير Premium (2000 MB)",
-        "hint": "“الكشف من حسابي” يستخدم حد حساب Telegram المسجَّل: 4000 MB مع Premium، و2000 MB بدونه، أو عند عدم تسجيل الدخول. يتجاوزه الحد المخصص.",
+        "yes": "Telegram Premium (4000 MB)",
+        "no": "No Telegram Premium (2000 MB)",
+        "hint": "“Detect from my account” uses the limit of the signed-in Telegram account: 4000 MB with Telegram Premium, 2000 MB without, or while signed out. A custom limit overrides it.",
         "current": "المطبَّق الآن: {{mb}} MB، {{source}}.",
         "currentUnavailable": "تعذّرت قراءة الحد المطبَّق حاليًا.",
         "source": {
           "custom": "من الحد المخصص",
-          "forcedPremium": "Premium مضبوط هنا",
-          "forcedStandard": "ليس Premium، مضبوط هنا",
-          "accountPremium": "مكتشف: حساب Premium",
+          "forcedPremium": "Telegram Premium set here",
+          "forcedStandard": "no Telegram Premium, set here",
+          "accountPremium": "detected: Telegram Premium account",
           "accountStandard": "مكتشف: حساب عادي",
           "default": "غير مسجَّل الدخول إلى Telegram"
         }
       },
       "custom": {
         "label": "حد مخصص (MB)",
-        "hint": "يتجاوز حد Premium. اتركه فارغًا لاستخدامه.",
+        "hint": "Overrides the Telegram Premium limit. Leave empty to use it.",
         "error": "أدخل عددًا صحيحًا من MB أكبر من 0."
       },
       "margin": {

@@ -525,23 +525,23 @@
       "premium": {
         "label": "Telegram Premium",
         "auto": "Определять по аккаунту",
-        "yes": "Premium (4000 МБ)",
-        "no": "Не Premium (2000 МБ)",
-        "hint": "«Определять по аккаунту» использует лимит вошедшего аккаунта Telegram: 4000 МБ с Premium, 2000 МБ без Premium или если вход не выполнен. Пользовательский лимит имеет приоритет.",
+        "yes": "Telegram Premium (4000 МБ)",
+        "no": "No Telegram Premium (2000 МБ)",
+        "hint": "“Detect from my account” uses the limit of the signed-in Telegram account: 4000 МБ with Telegram Premium, 2000 МБ without, or while signed out. A custom limit overrides it.",
         "current": "Применяется сейчас: {{mb}} МБ, {{source}}.",
         "currentUnavailable": "Не удалось прочитать лимит, который применяется сейчас.",
         "source": {
           "custom": "из пользовательского лимита",
-          "forcedPremium": "Premium задан здесь",
-          "forcedStandard": "не Premium, задано здесь",
-          "accountPremium": "определено: аккаунт Premium",
+          "forcedPremium": "Telegram Premium set here",
+          "forcedStandard": "no Telegram Premium, set here",
+          "accountPremium": "detected: Telegram Premium account",
           "accountStandard": "определено: обычный аккаунт",
           "default": "вход в Telegram не выполнен"
         }
       },
       "custom": {
         "label": "Пользовательский лимит (МБ)",
-        "hint": "Заменяет лимит Premium. Оставьте поле пустым, чтобы использовать его.",
+        "hint": "Overrides the Telegram Premium limit. Leave empty to use it.",
         "error": "Введите целое число МБ больше 0."
       },
       "margin": {

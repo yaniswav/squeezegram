@@ -511,23 +511,23 @@
       "premium": {
         "label": "Telegram Premium",
         "auto": "Detectar desde mi cuenta",
-        "yes": "Premium (4000 MB)",
-        "no": "No Premium (2000 MB)",
-        "hint": "“Detectar desde mi cuenta” usa el límite de la cuenta de Telegram con sesión iniciada: 4000 MB con Premium, 2000 MB sin Premium, o si no hay sesión iniciada. Un límite personalizado lo sustituye.",
+        "yes": "Telegram Premium (4000 MB)",
+        "no": "No Telegram Premium (2000 MB)",
+        "hint": "“Detect from my account” uses the limit of the signed-in Telegram account: 4000 MB with Telegram Premium, 2000 MB without, or while signed out. A custom limit overrides it.",
         "current": "Aplicado ahora: {{mb}} MB, {{source}}.",
         "currentUnavailable": "No se pudo leer el límite aplicado ahora.",
         "source": {
           "custom": "del límite personalizado",
-          "forcedPremium": "Premium fijado aquí",
-          "forcedStandard": "no Premium, fijado aquí",
-          "accountPremium": "detectado: cuenta Premium",
+          "forcedPremium": "Telegram Premium set here",
+          "forcedStandard": "no Telegram Premium, set here",
+          "accountPremium": "detected: Telegram Premium account",
           "accountStandard": "detectado: cuenta estándar",
           "default": "sin sesión iniciada en Telegram"
         }
       },
       "custom": {
         "label": "Límite personalizado (MB)",
-        "hint": "Sustituye al límite Premium. Déjelo vacío para usar este.",
+        "hint": "Overrides the Telegram Premium limit. Leave empty to use it.",
         "error": "Introduzca un número entero de MB, mayor que 0."
       },
       "margin": {
