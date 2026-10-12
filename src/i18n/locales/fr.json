@@ -94,6 +94,7 @@
     "PROXY_INVALID_password": "The password is too long or contains a line break.",
     "PROXY_INVALID_secret": "This MTProto secret is not valid. Copy it exactly as given with the proxy (hexadecimal or base64url).",
     "METADATA_STRIP_FAILED": "The location and camera data of this file couldn't be removed (the file looks damaged), so it was not sent. To send it as it is, turn off \"Remove location and camera data\" in Settings.",
+    "LINK_REFUSED": "Only links to Telegram messages (https://t.me/…) can be opened.",
     "CANCELLED": "Annulé.",
     "FILES_SKIPPED_one": "{{count}} fichier qui n'est ni une vidéo ni une photo a été ignoré dans ce dossier.",
     "FILES_SKIPPED_many": "{{count}} fichiers qui ne sont ni des vidéos ni des photos ont été ignorés dans ce dossier.",
@@ -378,6 +379,8 @@
       },
       "duplicate": {
         "body": "Ce fichier a déjà été envoyé à cette destination. Il attend votre confirmation.",
+        "sentTo": "Already sent to {{destination}} on {{date}}.",
+        "open": "Open the message",
         "confirm": "Envoyer quand même",
         "dialogTitle": "Renvoyer ce fichier ?",
         "dialogBody": "{{name}} a déjà été envoyé à cette destination. Le renvoyer publie un message en double.",

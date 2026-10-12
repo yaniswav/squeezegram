@@ -2,6 +2,7 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  ExternalLink,
   File,
   Film,
   Image,
@@ -10,7 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react"
 import { motion } from "motion/react"
-import { useId, useState, type ReactNode } from "react"
+import { useEffect, useId, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { ItemEncoding } from "@/components/item-encoding"
@@ -37,15 +38,18 @@ import {
   formatTime,
 } from "@/lib/format"
 import {
+  itemDuplicate,
   itemMedia,
   itemEncodingSet,
   itemReconcile,
   itemPlan,
   itemResolveUnknown,
   itemUpdate,
+  openTelegramLink,
   queueCancel,
   queuePromote,
   queueRetry,
+  type DuplicateInfo,
   type Item,
   type Phase,
   type QueueProgress,
@@ -335,6 +339,7 @@ function StatusPanel({
     case "pending_review":
       return item.hold_reason === "duplicate" ? (
         <Notice tone="attention" text={t("queue.item.duplicate.body")}>
+          <EarlierSend item={item} />
           <Button
             size="sm"
             variant="outline"
@@ -435,6 +440,63 @@ function StatusPanel({
     case "cancelled":
       return null
   }
+}
+
+/**
+ * Where a held duplicate already went: the date and destination of the earlier send, and a
+ * link to that message where Telegram has one (supergroups and channels).
+ */
+function EarlierSend({ item }: { item: Item }) {
+  const { t, i18n } = useTranslation()
+  const { pushError } = useAlerts()
+  const { byId } = useDestinations()
+  const [info, setInfo] = useState<DuplicateInfo | null>(null)
+
+  useEffect(() => {
+    let stale = false
+
+    // Nothing to show is not an error: the notice above already says why the item waits.
+    itemDuplicate(item.id).then(
+      (next) => {
+        if (!stale) setInfo(next)
+      },
+      () => {
+        if (!stale) setInfo(null)
+      },
+    )
+
+    return () => {
+      stale = true
+    }
+  }, [item.id])
+
+  if (!info) return null
+  const destination = byId.get(info.destination_id)
+
+  return (
+    <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1">
+      <p className="text-xs text-muted-foreground">
+        {t("queue.item.duplicate.sentTo", {
+          destination: destination
+            ? destinationName(destination)
+            : t("common.destinationNumber", { id: info.destination_id }),
+          date: formatDateTime(new Date(info.sent_at), i18n.language),
+        })}
+      </p>
+      {info.link && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            if (info.link) void openTelegramLink(info.link).catch(pushError)
+          }}
+        >
+          <ExternalLink data-icon="inline-start" />
+          {t("queue.item.duplicate.open")}
+        </Button>
+      )}
+    </div>
+  )
 }
 
 /** An upload interrupted mid-way: search the chat for it, then let the user decide. */

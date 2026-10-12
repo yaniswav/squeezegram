@@ -628,6 +628,15 @@ export interface DestinationCheck {
   checked_at: string
 }
 
+/** `item_duplicate` (transport/service.rs): the earlier send of a held duplicate. */
+export interface DuplicateInfo {
+  sent_at: string
+  destination_id: number
+  message_id: number | null
+  /** Always `https://t.me/…`; null in private chats, basic groups, Saved Messages. */
+  link: string | null
+}
+
 /** `SentCandidate` (transport/mod.rs, snake_case fields). */
 export interface SentCandidate {
   message_id: number
@@ -1433,6 +1442,27 @@ export function itemResolveUnknown(
 /** Read only: messages of the destination that may be this `unknown` item. */
 export function itemReconcile(itemId: number): Promise<SentCandidate[]> {
   return call("item_reconcile", d.array(sentCandidateDecoder), { itemId })
+}
+
+/** When and where a held duplicate was already sent; null when there is nothing to show. */
+export function itemDuplicate(itemId: number): Promise<DuplicateInfo | null> {
+  return call(
+    "item_duplicate",
+    d.nullable(
+      d.object<DuplicateInfo>({
+        sent_at: d.string,
+        destination_id: d.number,
+        message_id: d.nullable(d.number),
+        link: d.nullable(d.string),
+      }),
+    ),
+    { itemId },
+  )
+}
+
+/** Opens a `https://t.me/` message link; the core refuses anything else (`LINK_REFUSED`). */
+export function openTelegramLink(url: string): Promise<void> {
+  return call("open_telegram_link", d.nothing, { url })
 }
 
 /** Destinations known locally (no network). */
