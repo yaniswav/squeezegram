@@ -53,13 +53,38 @@ fn is_email_domain(c: char) -> bool {
     c.is_ascii_alphanumeric() || ".-".contains(c)
 }
 
-/// Replaces e-mail addresses, `+`-prefixed phone numbers and `tg://` links (QR login tokens)
-/// with placeholders. Applied to every text the UI sends to the journal, and to the export.
+/// Length of a Telegram `api_hash`: 32 hexadecimal digits.
+const API_HASH_HEX: usize = 32;
+
+/// Whether `chars[i..]` starts a word of exactly `API_HASH_HEX` hexadecimal digits (not part of
+/// a longer word: a SHA-256 or a BLAKE3 hash, 64 digits, stays).
+fn is_hex32_at(chars: &[char], i: usize) -> bool {
+    let alnum = |c: &char| c.is_ascii_alphanumeric();
+    if i > 0 && alnum(&chars[i - 1]) {
+        return false;
+    }
+    let word = chars[i..].iter().take_while(|c| alnum(c)).count();
+    word == API_HASH_HEX
+        && chars[i..i + API_HASH_HEX]
+            .iter()
+            .all(char::is_ascii_hexdigit)
+}
+
+/// Replaces e-mail addresses, `+`-prefixed phone numbers, `tg://` links (QR login tokens) and
+/// 32-hex-digit words (the shape of an `api_hash`) with placeholders. Applied to every text the
+/// UI sends to the journal, and to the export.
 pub fn scrub_secrets(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     while i < chars.len() {
+        // A personal `api_hash` pasted somewhere the UI logs: the page never logs it on
+        // purpose, this is the net under that rule.
+        if is_hex32_at(&chars, i) {
+            out.push_str("<hex32>");
+            i += API_HASH_HEX;
+            continue;
+        }
         // tg://login?token=…, tg://… : up to whitespace or a quote.
         if chars[i..].starts_with(&['t', 'g', ':', '/', '/']) {
             let mut end = i;
@@ -236,6 +261,23 @@ mod tests {
         assert_eq!(
             scrubbed,
             "call <phone> or <phone>, mail <email>, scan <tg_link> then 1+1=2 and @mention and x@y"
+        );
+    }
+
+    #[test]
+    fn a_32_hex_word_is_scrubbed_but_longer_hashes_stay() {
+        let hash = "0123456789abcdefABCDEF0123456789";
+        let sha256 = "ab".repeat(32);
+        let text = format!(
+            "api_hash={hash}; \"{hash}\" x{hash} {sha256} {}",
+            &hash[..31]
+        );
+        assert_eq!(
+            scrub_secrets(&text),
+            format!(
+                "api_hash=<hex32>; \"<hex32>\" x{hash} {sha256} {}",
+                &hash[..31]
+            )
         );
     }
 
