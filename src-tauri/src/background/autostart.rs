@@ -8,8 +8,9 @@
 //!
 //! The entry is the only record of the choice (no setting to drift from it). Windows also
 //! keeps an on/off flag per entry for the Startup page of Task Manager
-//! (`...\Explorer\StartupApproved\Run`): turning the option on clears it, so an entry the
-//! user once switched off there starts again when they switch the option back on.
+//! (`...\Explorer\StartupApproved\Run`, a binary value whose first byte is 3 when the user
+//! switched the entry off). The option reads as off while that flag says so, since Windows
+//! then starts nothing; turning the option on clears it, an explicit choice of the user.
 
 use std::io;
 use std::path::Path;
@@ -19,11 +20,24 @@ use crate::entitlements::{Entitlements, Feature};
 
 /// The persistence of the "start with Windows" choice; the registry in the app, a fake in tests.
 pub trait Autostart: Send + Sync {
-    fn is_enabled(&self) -> bool;
+    /// The Run entry exists.
+    fn is_registered(&self) -> bool;
+    /// False when the user switched the entry off on Task Manager's Startup page: Windows
+    /// then skips it although it exists.
+    fn is_approved(&self) -> bool;
+    /// Whether Windows will start the app at login.
+    fn is_enabled(&self) -> bool {
+        self.is_registered() && self.is_approved()
+    }
     /// Creates or replaces the entry, which runs `command`.
     fn enable(&self, command: &str) -> io::Result<()>;
     /// Removes the entry; already gone is not an error.
     fn disable(&self) -> io::Result<()>;
+}
+
+/// Whether a `StartupApproved` value says the user switched the entry off in Task Manager.
+fn switched_off(value: &[u8]) -> bool {
+    value.first() == Some(&3)
 }
 
 /// The command line the entry runs: the executable, quoted, and the hidden-start argument.
@@ -68,7 +82,8 @@ mod registry {
 
     use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, WIN32_ERROR};
     use windows::Win32::System::Registry::{
-        HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
+        HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_SZ, RegDeleteKeyValueW,
+        RegGetValueW, RegSetKeyValueW,
     };
     use windows::core::{PCWSTR, w};
 
@@ -91,7 +106,28 @@ mod registry {
     pub struct RegistryAutostart;
 
     impl Autostart for RegistryAutostart {
-        fn is_enabled(&self) -> bool {
+        fn is_approved(&self) -> bool {
+            // Windows writes 12 bytes: a status (2 or 6 enabled, 3 disabled) and a time.
+            let mut data = [0u8; 12];
+            let mut size = data.len() as u32;
+            // SAFETY: the buffer and its byte size are valid for the call; the names are
+            // NUL-ended literals.
+            let status = unsafe {
+                RegGetValueW(
+                    HKEY_CURRENT_USER,
+                    APPROVED_KEY,
+                    VALUE,
+                    RRF_RT_REG_BINARY,
+                    None,
+                    Some(data.as_mut_ptr().cast()),
+                    Some(&mut size),
+                )
+            };
+            // No value, or one that cannot be read: nobody switched it off.
+            !(status == ERROR_SUCCESS && super::switched_off(&data[..size as usize]))
+        }
+
+        fn is_registered(&self) -> bool {
             let mut size = 0u32;
             // SAFETY: no data buffer is given; `size` is a valid out value. The key and value
             // names are NUL-ended literals.
@@ -142,8 +178,12 @@ pub struct RegistryAutostart;
 
 #[cfg(not(windows))]
 impl Autostart for RegistryAutostart {
-    fn is_enabled(&self) -> bool {
+    fn is_registered(&self) -> bool {
         false
+    }
+
+    fn is_approved(&self) -> bool {
+        true
     }
 
     fn enable(&self, _command: &str) -> io::Result<()> {
@@ -167,12 +207,18 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         command: Mutex<Option<String>>,
+        /// The Task Manager switch is off.
+        switched_off: Mutex<bool>,
         fail: bool,
     }
 
     impl Autostart for Fake {
-        fn is_enabled(&self) -> bool {
+        fn is_registered(&self) -> bool {
             self.command.lock().unwrap().is_some()
+        }
+
+        fn is_approved(&self) -> bool {
+            !*self.switched_off.lock().unwrap()
         }
 
         fn enable(&self, command: &str) -> io::Result<()> {
@@ -180,6 +226,7 @@ mod tests {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
             *self.command.lock().unwrap() = Some(command.to_owned());
+            *self.switched_off.lock().unwrap() = false;
             Ok(())
         }
 
@@ -242,6 +289,28 @@ mod tests {
         assert!(!fake.is_enabled());
         // Already gone is fine.
         assert!(!set(&fake, &FreeOnly, &exe(), false).unwrap());
+    }
+
+    #[test]
+    fn an_entry_switched_off_in_task_manager_reads_as_off_until_turned_on_again() {
+        let fake = Fake::default();
+        set(&fake, &Licensed, &exe(), true).unwrap();
+        *fake.switched_off.lock().unwrap() = true;
+        assert!(fake.is_registered());
+        assert!(!fake.is_enabled(), "Windows will not start it");
+        // The user turns the option on: the flag is cleared.
+        assert!(set(&fake, &Licensed, &exe(), true).unwrap());
+    }
+
+    #[test]
+    fn the_task_manager_flag_is_read_from_the_first_byte() {
+        let enabled = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let enabled_by_policy = [6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let disabled = [3, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8];
+        assert!(!switched_off(&enabled));
+        assert!(!switched_off(&enabled_by_policy));
+        assert!(switched_off(&disabled));
+        assert!(!switched_off(&[]), "an empty value switches nothing off");
     }
 
     #[test]
