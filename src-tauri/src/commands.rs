@@ -36,7 +36,9 @@ use crate::queue::{QueueError, State as ItemState};
 use crate::settings::{Settings, SettingsError, SettingsStore, patch_keys};
 use crate::sidecars::discover::{self, Discovery};
 use crate::sidecars::{SidecarError, SidecarService, SidecarStatus};
-use crate::transport::identity_settings::{IdentityRuntime, TelegramIdentity};
+use crate::transport::identity_settings::{
+    self, IdentityChangeError, IdentityRuntime, TelegramIdentity,
+};
 use crate::transport::select::TransportKind;
 use crate::transport::service::{self, AuthPayload, DestinationCheck, ServiceError};
 use crate::transport::{AuthInput, SentCandidate, TelegramTransport, TransportError};
@@ -136,6 +138,27 @@ impl From<ServiceError> for CommandError {
         match error {
             ServiceError::Queue(error) => error.into(),
             ServiceError::Transport(error) => error.into(),
+        }
+    }
+}
+
+impl From<IdentityChangeError> for CommandError {
+    fn from(error: IdentityChangeError) -> Self {
+        match error {
+            IdentityChangeError::SignedIn => Self {
+                code: "TG_SIGN_OUT_FIRST",
+                params: json!({}),
+            },
+            // The field only: what was typed never leaves the core.
+            IdentityChangeError::Invalid(field) => Self {
+                code: "SETTINGS_INVALID",
+                params: json!({ "field": field }),
+            },
+            IdentityChangeError::Storage(error) => {
+                tracing::warn!(event = "command_error_detail", error_code = "IO_ERROR", error = %error, "api_hash not stored");
+                CommandError::io()
+            }
+            IdentityChangeError::Settings(error) => error.into(),
         }
     }
 }
@@ -900,6 +923,32 @@ pub fn telegram_identity(state: State<'_, AppState>) -> TelegramIdentity {
     Call::quiet("telegram_identity").done(state.identity.status(&state.settings.get()))
 }
 
+/// Personal API identity (F32), used from the next start. Refused with `TG_SIGN_OUT_FIRST`
+/// while an account is signed in, `SETTINGS_INVALID { field }` for a malformed value. The
+/// result says only whether an `api_hash` is stored; neither value reaches the journal.
+#[tauri::command]
+pub fn api_identity_set(
+    state: State<'_, AppState>,
+    api_id: String,
+    api_hash: String,
+) -> CommandResult<TelegramIdentity> {
+    let call = Call::new("api_identity_set");
+    let auth = state.transport.auth_state().borrow().clone();
+    let result = state
+        .identity
+        .set_override(&state.settings, &auth, &api_id, &api_hash);
+    call.finish(result.map_err(Into::into))
+}
+
+/// Back to the product's identity, from the next start; same sign-out rule as the set.
+#[tauri::command]
+pub fn api_identity_clear(state: State<'_, AppState>) -> CommandResult<TelegramIdentity> {
+    let call = Call::new("api_identity_clear");
+    let auth = state.transport.auth_state().borrow().clone();
+    let result = state.identity.clear_override(&state.settings, &auth);
+    call.finish(result.map_err(Into::into))
+}
+
 // --- settings, history, sidecars ---
 
 #[tauri::command]
@@ -911,6 +960,13 @@ pub fn settings_get(state: State<'_, AppState>) -> Settings {
 #[tauri::command]
 pub fn settings_set(state: State<'_, AppState>, patch: Value) -> CommandResult<Settings> {
     let call = Call::new("settings_set").arg("keys", patch_keys(&patch));
+    if identity_settings::touches_api_override(&patch) {
+        // `api_identity_set` / `_clear` own it: they store the hash and check the session.
+        return call.finish(Err(CommandError {
+            code: "SETTINGS_INVALID",
+            params: json!({ "field": "telegram.api_override" }),
+        }));
+    }
     let result = state.settings.set(&patch).inspect(|settings| {
         state.queue.set_pauses(settings.pause_range());
         // The badges of the files still waiting were worked out under the old limit and
@@ -1338,6 +1394,17 @@ mod tests {
         assert!(!value.to_string().contains("4242") && !value.to_string().contains("SECRET"));
         let plain = settings_for_report(&Settings::default());
         assert!(plain["telegram"]["api_override"].is_null());
+    }
+
+    #[test]
+    fn identity_refusals_carry_a_code_and_no_value() {
+        let signed_in: CommandError = IdentityChangeError::SignedIn.into();
+        assert_eq!(signed_in.code, "TG_SIGN_OUT_FIRST");
+        let invalid: CommandError = IdentityChangeError::Invalid("api_hash").into();
+        assert_eq!(
+            (invalid.code, invalid.params),
+            ("SETTINGS_INVALID", json!({ "field": "api_hash" }))
+        );
     }
 
     use crate::entitlements::{EntitlementSource, FreeOnly, Plan};

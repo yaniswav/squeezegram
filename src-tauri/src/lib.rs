@@ -392,6 +392,8 @@ pub fn run() {
             commands::auth_submit,
             commands::auth_logout,
             commands::telegram_identity,
+            commands::api_identity_set,
+            commands::api_identity_clear,
             commands::settings_get,
             commands::settings_set,
             commands::history_query,
