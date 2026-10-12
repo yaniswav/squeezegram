@@ -289,7 +289,7 @@ pub struct Topic {
 
 // ---------- Pre-send check ----------
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaKind {
     Video,

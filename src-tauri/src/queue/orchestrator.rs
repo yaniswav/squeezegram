@@ -148,6 +148,19 @@ pub trait MediaStage: Send + Sync {
 
 #[async_trait]
 pub trait SendStage: Send + Sync {
+    /// Asked right before the media work of an item starts (probe, then the encode, which is
+    /// the expensive part): a destination checked when the file was added can have lost the
+    /// right to receive it while the item waited. `Err` stops the item before any of that
+    /// work; the upload checks the rights again by itself, so nothing is asked after it.
+    /// A destination that cannot be checked is not a refusal. Accepts by default.
+    async fn preflight(
+        &self,
+        _item: &Item,
+        _destination: &Destination,
+    ) -> std::result::Result<(), StageError> {
+        Ok(())
+    }
+
     /// Must honour `ctx.cancel`; returns `Sent` if the message went out before the cancel
     /// took effect.
     async fn upload(
@@ -705,6 +718,24 @@ impl Orchestrator {
             attempts = item.attempts,
             "media work started"
         );
+        let destination = self.with_store(|store| store.get_destination(item.destination_id))?;
+        if let Err(error) = self.inner.send.preflight(&item, &destination).await {
+            match error {
+                StageError::Cancelled => self.finish_cancelled(id)?,
+                StageError::Failed { code, params } => {
+                    self.finish_with(
+                        id,
+                        State::Failed,
+                        &code,
+                        HistoryStatus::Failed,
+                        "destination_refused",
+                    )?;
+                    self.alert(Some(id), &code, params);
+                    self.release_outputs(id)?;
+                }
+            }
+            return Ok(false);
+        }
         let ctx = self.context(id, Phase::Probing, cancel);
         let probe = match self.inner.media.probe(&item, &ctx).await {
             Ok(probe) => probe,

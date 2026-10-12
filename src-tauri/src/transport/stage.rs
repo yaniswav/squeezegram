@@ -3,18 +3,19 @@
 //! stable error codes. Watchdog: no progress for `send.watchdog_s` raises a
 //! `TG_NO_PROGRESS` alert and never cancels by itself.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use super::service::{item_kind, plan_of, target_of};
+use super::service::{check_destination, item_kind, mode_kind, plan_of, target_of};
 use super::{
-    Caption, MediaKind, Payload, Phase, Progress, Sent, TelegramTransport, TransportError,
+    Caption, MediaKind, Payload, Phase, Progress, Sent, Target, TelegramTransport, TransportError,
     UploadRequest,
 };
 use crate::caption;
@@ -22,7 +23,7 @@ use crate::limit;
 use crate::media::plan::{Kind, Plan};
 use crate::media::probe::MediaInfo;
 use crate::queue::events::{self, Phase as QueuePhase};
-use crate::queue::orchestrator::{SendError, SendOutcome, SendStage, StageContext};
+use crate::queue::orchestrator::{SendError, SendOutcome, SendStage, StageContext, StageError};
 use crate::queue::store::{Destination, Item};
 use crate::settings::SettingsStore;
 
@@ -32,9 +33,19 @@ const PROGRESS_BUFFER: usize = 32;
 const CAP_LONG: f64 = 1920.0;
 const CAP_SHORT: f64 = 1080.0;
 
+/// How long a destination check is trusted. A batch of items for one chat shares it, and an
+/// item that waits behind a long encode is checked again: rights change slowly compared with
+/// this, but a chat is never trusted across the minutes an encode takes.
+const PREFLIGHT_TTL: Duration = Duration::from_secs(30);
+
+/// What a check found out: the refusal, or `None` when the destination takes the item.
+type Refusal = Option<(&'static str, Value)>;
+
 pub struct TransportStage {
     transport: Arc<dyn TelegramTransport>,
     settings: Arc<SettingsStore>,
+    /// Recent checks, by chat (topic included) and media kind.
+    checks: Mutex<HashMap<(Target, MediaKind), (Instant, Refusal)>>,
 }
 
 impl TransportStage {
@@ -42,7 +53,22 @@ impl TransportStage {
         Self {
             transport,
             settings,
+            checks: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn recent_check(&self, key: &(Target, MediaKind)) -> Option<Refusal> {
+        let checks = self.checks.lock().unwrap_or_else(|p| p.into_inner());
+        checks
+            .get(key)
+            .filter(|(at, _)| at.elapsed() < PREFLIGHT_TTL)
+            .map(|(_, refusal)| refusal.clone())
+    }
+
+    fn remember_check(&self, key: (Target, MediaKind), refusal: Refusal) {
+        let mut checks = self.checks.lock().unwrap_or_else(|p| p.into_inner());
+        checks.retain(|_, (at, _)| at.elapsed() < PREFLIGHT_TTL);
+        checks.insert(key, (Instant::now(), refusal));
     }
 }
 
@@ -291,6 +317,53 @@ impl Meter {
 
 #[async_trait]
 impl SendStage for TransportStage {
+    async fn preflight(&self, item: &Item, destination: &Destination) -> Result<(), StageError> {
+        // A row this app did not write: the upload reports it.
+        let Some(target) = target_of(destination) else {
+            return Ok(());
+        };
+        let key = (target, mode_kind(item.send_mode));
+        let refusal = match self.recent_check(&key) {
+            Some(refusal) => {
+                tracing::debug!(
+                    event = "preflight_cached",
+                    destination_id = destination.id,
+                    "destination check reused"
+                );
+                refusal
+            }
+            None => match check_destination(self.transport.as_ref(), destination, item.send_mode)
+                .await
+            {
+                Ok(check) => {
+                    let refusal = (!check.allowed)
+                        .then(|| check.code.map(|code| (code, check.params)))
+                        .flatten();
+                    self.remember_check(key, refusal.clone());
+                    refusal
+                }
+                // Offline or signed out: not a verdict, and not cached. The upload fails
+                // with its own code if the problem is still there.
+                Err(error) => {
+                    tracing::warn!(
+                        event = "preflight_unavailable",
+                        destination_id = destination.id,
+                        error = %error,
+                        "destination could not be checked before the media work"
+                    );
+                    None
+                }
+            },
+        };
+        match refusal {
+            None => Ok(()),
+            Some((code, params)) => Err(StageError::Failed {
+                code: code.to_owned(),
+                params,
+            }),
+        }
+    }
+
     async fn upload(
         &self,
         item: &Item,
@@ -388,7 +461,7 @@ impl SendStage for TransportStage {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 
     use super::*;
     use crate::queue::State;
@@ -402,12 +475,17 @@ mod tests {
     use crate::transport::service::refresh_destinations;
     use crate::transport::{Forbidden, Peer};
 
-    /// Sends the source as is (no ffmpeg in these tests).
-    struct AsIs;
+    /// Sends the source as is (no ffmpeg in these tests); counts the items it was asked to
+    /// probe, which is where the media work of an item begins.
+    #[derive(Default)]
+    struct AsIs {
+        probes: AtomicUsize,
+    }
 
     #[async_trait]
     impl MediaStage for AsIs {
         async fn probe(&self, item: &Item, _: &StageContext) -> Result<ProbeOutcome, StageError> {
+            self.probes.fetch_add(1, Ordering::SeqCst);
             Ok(ProbeOutcome {
                 content_id: format!("{}:{}", item.source_size, item.id),
                 identity_weak: false,
@@ -430,6 +508,7 @@ mod tests {
     struct Harness {
         queue: Orchestrator,
         mock: Arc<MockTransport>,
+        media: Arc<AsIs>,
         sink: Arc<Recorder>,
         dir: TestDir,
         settings: Arc<SettingsStore>,
@@ -448,9 +527,10 @@ mod tests {
             Arc::new(SettingsStore::load(dir.path().join(crate::settings::FILE_NAME)).unwrap());
         let mock = Arc::new(mock);
         let sink = Arc::new(Recorder::default());
+        let media = Arc::new(AsIs::default());
         let queue = Orchestrator::new(
             Store::open_in_memory().unwrap(),
-            Arc::new(AsIs),
+            media.clone(),
             Arc::new(TransportStage::new(mock.clone(), settings.clone())),
             sink.clone(),
             PauseRange {
@@ -464,6 +544,7 @@ mod tests {
         Harness {
             queue,
             mock,
+            media,
             sink,
             dir,
             settings,
@@ -605,8 +686,112 @@ mod tests {
             alerts[2].params,
             json!({ "tgCode": 400, "message": "MEDIA_EMPTY" })
         );
+        // The refused chat never reached the probe, so the item has no identity to record.
         let history = h.queue.history(&HistoryFilter::default()).unwrap();
-        assert_eq!(history.len(), 3);
+        assert_eq!(history.len(), 2);
+    }
+
+    /// The chat was fine when the file was added and is not any more when the item's turn
+    /// comes: it is refused before the probe, hence before any encode, with the code the
+    /// upload would have given, and a retry sends it once the chat takes files again.
+    #[tokio::test(start_paused = true)]
+    async fn a_destination_that_lost_its_rights_is_refused_before_the_media_work() {
+        use crate::transport::mock::MOCK_SLOW_GROUP;
+        let h = harness("stage-preflight", MockTransport::authorized()).await;
+        let cases = [
+            (
+                Forbidden::AdminsOnly,
+                "TG_WRITE_FORBIDDEN",
+                json!({ "reason": "admins_only" }),
+            ),
+            (
+                Forbidden::TopicClosed,
+                "TG_WRITE_FORBIDDEN",
+                json!({ "reason": "topic_closed" }),
+            ),
+            (
+                Forbidden::PaidMessages { stars: 5 },
+                "TG_PAID_MESSAGES",
+                json!({ "stars": 5 }),
+            ),
+        ];
+        for (forbidden, code, params) in cases {
+            h.mock.revoke_write(MOCK_SLOW_GROUP, forbidden);
+            let id = h.add("a.mp4", MOCK_SLOW_GROUP);
+            h.queue.start();
+            h.wait_state(id, State::Failed).await;
+            assert_eq!(h.item(id).last_error.as_deref(), Some(code));
+            let alerts = h.sink.alerts.lock().unwrap();
+            let alert = alerts.iter().rev().find(|a| a.item_id == Some(id)).unwrap();
+            assert_eq!((alert.code.as_str(), &alert.params), (code, &params));
+            drop(alerts);
+            // Let the cached refusal expire so the next case asks again.
+            tokio::time::sleep(PREFLIGHT_TTL + Duration::from_secs(1)).await;
+        }
+        assert_eq!(
+            h.media.probes.load(Ordering::SeqCst),
+            0,
+            "no media work started"
+        );
+        assert_eq!(h.mock.uploads(), 0, "nothing reached the upload");
+
+        // Failed, not lost: once the chat accepts files again the user retries and it goes.
+        h.mock.restore_write(MOCK_SLOW_GROUP);
+        tokio::time::sleep(PREFLIGHT_TTL + Duration::from_secs(1)).await;
+        let retried = h.queue.with_store(|s| s.list_items()).unwrap()[0].id;
+        h.queue.retry_failed(retried).unwrap();
+        h.wait_state(retried, State::Sent).await;
+        assert_eq!(h.media.probes.load(Ordering::SeqCst), 1);
+    }
+
+    /// 50 files for one chat cost one TDLib check while the answer is fresh, a second chat
+    /// its own, and the chat is asked again once the answer is old. A slow mode is a wait,
+    /// not a refusal.
+    #[tokio::test(start_paused = true)]
+    async fn the_check_is_shared_by_a_batch_and_expires() {
+        use crate::transport::mock::MOCK_SLOW_GROUP;
+        // Uploads take no time here: the 30 s of a check's life are not spent by the batch.
+        let mock = MockTransport::authorized().with_step_delay(Duration::ZERO);
+        let h = harness("stage-preflight-cache", mock).await;
+        let ids: Vec<i64> = (0..50)
+            .map(|n| h.add(&format!("{n}.mp4"), MOCK_SLOW_GROUP))
+            .collect();
+        let other = h.add("other.mp4", MOCK_SAVED);
+        h.queue.start();
+        h.wait_state(other, State::Sent).await;
+        for id in &ids {
+            h.wait_state(*id, State::Sent).await;
+        }
+        assert_eq!(
+            h.mock.checks(),
+            2,
+            "one check per chat, not one per file ({} files)",
+            ids.len() + 1
+        );
+
+        tokio::time::sleep(PREFLIGHT_TTL + Duration::from_secs(1)).await;
+        let later = h.add("later.mp4", MOCK_SLOW_GROUP);
+        h.wait_state(later, State::Sent).await;
+        assert_eq!(h.mock.checks(), 3, "asked again after the answer got old");
+        assert!(h.sink.alert_codes().is_empty());
+    }
+
+    /// A chat that cannot be checked (signed out, offline) is not refused by the check: the
+    /// upload gives its own verdict.
+    #[tokio::test(start_paused = true)]
+    async fn a_check_that_cannot_run_does_not_refuse_the_item() {
+        let h = harness("stage-preflight-offline", MockTransport::authorized()).await;
+        h.mock.log_out().await.unwrap();
+        let id = h.add("a.mp4", MOCK_SAVED);
+        h.queue.start();
+        h.wait_state(id, State::Failed).await;
+        assert_eq!(h.item(id).last_error.as_deref(), Some("TG_NOT_AUTHORIZED"));
+        assert_eq!(
+            h.media.probes.load(Ordering::SeqCst),
+            1,
+            "the media work started"
+        );
+        assert_eq!(h.mock.checks(), 0);
     }
 
     #[tokio::test(start_paused = true)]

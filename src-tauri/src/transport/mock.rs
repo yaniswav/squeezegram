@@ -198,6 +198,10 @@ struct MockState {
     messages: Vec<Message>,
     next_message_id: i64,
     uploads: usize,
+    /// Calls to `can_send`.
+    checks: usize,
+    /// Chats whose rights were taken away after the start (`revoke_write`).
+    revoked: Vec<(Peer, Forbidden)>,
 }
 
 pub struct MockTransport {
@@ -226,6 +230,8 @@ impl MockTransport {
                 messages: Vec::new(),
                 next_message_id: 1,
                 uploads: 0,
+                checks: 0,
+                revoked: Vec::new(),
             }),
             step_delay: Duration::from_millis(200),
         }
@@ -323,6 +329,24 @@ impl MockTransport {
     /// Calls to `upload`, whatever their outcome.
     pub fn uploads(&self) -> usize {
         self.lock().uploads
+    }
+
+    /// Calls to `can_send`: what a pre-send check costs in TDLib requests.
+    pub fn checks(&self) -> usize {
+        self.lock().checks
+    }
+
+    /// From now on `peer` refuses messages (rights lost, topic closed, paid messages…), as a
+    /// chat can while an item waits in the queue.
+    pub fn revoke_write(&self, peer: Peer, forbidden: Forbidden) {
+        let mut state = self.lock();
+        state.revoked.retain(|(other, _)| *other != peer);
+        state.revoked.push((peer, forbidden));
+    }
+
+    /// Undoes `revoke_write`.
+    pub fn restore_write(&self, peer: Peer) {
+        self.lock().revoked.retain(|(other, _)| *other != peer);
     }
 
     /// Messages that went out, as `(message_id, target, file name)`.
@@ -477,6 +501,25 @@ impl MockTransport {
             ]),
             _ => None,
         }
+    }
+
+    /// `check` with the rights taken away by `revoke_write`.
+    fn current_check(
+        &self,
+        target: &Target,
+        media: MediaKind,
+    ) -> Result<SendCheck, TransportError> {
+        let mut check = Self::check(target, media)?;
+        let revoked = self
+            .lock()
+            .revoked
+            .iter()
+            .find(|(peer, _)| *peer == target.peer)
+            .map(|(_, forbidden)| forbidden.clone());
+        if let Some(forbidden) = revoked {
+            check.verdict = Verdict::Denied(forbidden);
+        }
+        Ok(check)
     }
 
     fn check(target: &Target, media: MediaKind) -> Result<SendCheck, TransportError> {
@@ -667,7 +710,8 @@ impl TelegramTransport for MockTransport {
         media: MediaKind,
     ) -> Result<SendCheck, TransportError> {
         self.ensure_ready()?;
-        Self::check(target, media)
+        self.lock().checks += 1;
+        self.current_check(target, media)
     }
 
     async fn upload(
@@ -679,7 +723,7 @@ impl TelegramTransport for MockTransport {
         self.lock().uploads += 1;
         self.ensure_ready()?;
         let media = req.payload.media_kind();
-        if let Verdict::Denied(forbidden) = Self::check(&req.target, media)?.verdict {
+        if let Verdict::Denied(forbidden) = self.current_check(&req.target, media)?.verdict {
             return Err(TransportError::WriteForbidden(forbidden));
         }
         if !req.path.is_file() {
