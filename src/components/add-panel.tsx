@@ -191,8 +191,13 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
     setExtraSlots((slots) => slots.filter((slot) => slot.key !== key))
   }
 
+  // An added slot with no destination is never dropped silently: the add waits for a choice
+  // or for the slot to be removed.
+  const emptySlot = extraDestinations.some((entry) => entry === undefined)
+
   const canSubmit =
     paths.length > 0 &&
+    !emptySlot &&
     destinations.status === "ready" &&
     destination !== undefined &&
     !blocked &&
@@ -322,9 +327,15 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
                         <X />
                       </Button>
                     </div>
-                    <DestinationCheckNotice
-                      state={checkOf(targetOf(extraDestinations[index]))}
-                    />
+                    {extraDestinations[index] === undefined ? (
+                      <p className="text-sm text-muted-foreground">
+                        {t("add.destination.extraEmpty")}
+                      </p>
+                    ) : (
+                      <DestinationCheckNotice
+                        state={checkOf(targetOf(extraDestinations[index]))}
+                      />
+                    )}
                   </div>
                 )
               })}

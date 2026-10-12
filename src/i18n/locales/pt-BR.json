@@ -187,6 +187,7 @@
       "loadError": "Não foi possível carregar os destinos.",
       "extraLabel": "Destination {{number}}",
       "removeExtra": "Remove destination {{number}}",
+      "extraEmpty": "Choose a destination for this slot, or remove it.",
       "addAnother": "Add another destination",
       "premium": "Premium",
       "multiLocked": "Sending one batch to several chats or topics is included with squeezegram Premium.",
