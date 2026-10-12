@@ -31,7 +31,8 @@ pub enum Feature {
     /// Only the batch is paid: reusing an encoded file is not gated, so a free user who queues
     /// the same file for two destinations in two adds also gets one encode.
     MultiDestination,
-    /// Declared, not wired to anything yet.
+    /// Watched folders (`watch`): new files are queued for approval. Folders stay configured
+    /// without it; the watcher lists them only while it is granted.
     WatchedFolder,
     /// Declared, not wired to anything yet.
     Background,

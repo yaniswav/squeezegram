@@ -297,7 +297,7 @@ fn before_installer(app: &AppHandle) {
             version = state.updates.announced_version().as_deref(),
             "installer starting, the app closes"
         );
-        crate::close_core(&state.queue, state.transport.clone());
+        crate::close_core(&state);
     }
     logging::app_exit("update");
     app.cleanup_before_exit();

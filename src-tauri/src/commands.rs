@@ -27,7 +27,7 @@ use crate::queue::intake;
 use crate::queue::orchestrator::{Orchestrator, ResolveAction};
 use crate::queue::store::{
     ClearScope, Destination, DestinationPatch, HistoryEntry, HistoryFilter, Item, ItemPatch,
-    NewItem, SendMode,
+    NewItem, SendMode, WatchFolder, WatchFolderPatch,
 };
 use crate::queue::{QueueError, State as ItemState};
 use crate::settings::{Settings, SettingsError, SettingsStore, patch_keys};
@@ -37,6 +37,7 @@ use crate::transport::select::TransportKind;
 use crate::transport::service::{self, AuthPayload, DestinationCheck, ServiceError};
 use crate::transport::{AuthInput, SentCandidate, TelegramTransport, TransportError};
 use crate::update::{self, Trigger, UpdateError, UpdateInfo, UpdateNotice, UpdateService};
+use crate::watch::WatchService;
 
 /// Event of the login state machine.
 pub const AUTH_STATE: &str = "auth://state";
@@ -61,6 +62,8 @@ pub struct AppState {
     pub entitlements: Arc<LicenseEntitlements>,
     /// Last status sent on `entitlements://status`.
     pub entitlement_feed: Arc<StatusFeed>,
+    /// Watched folders (`watch_*`); woken after a change of the folders or of the license.
+    pub watcher: Arc<WatchService>,
     /// Update checks and installs (`update_*`).
     pub updates: Arc<UpdateService>,
     /// Items changed by the startup recovery, announced once the page has loaded.
@@ -95,6 +98,7 @@ impl From<QueueError> for CommandError {
         let params = match &error {
             QueueError::ItemNotFound(id) | QueueError::ItemStarted(id) => json!({ "itemId": id }),
             QueueError::DestinationNotFound(id) => json!({ "destinationId": id }),
+            QueueError::WatchFolderNotFound(id) => json!({ "folderId": id }),
             QueueError::IllegalTransition { item_id, from, to } => {
                 json!({ "itemId": item_id, "from": from, "to": to })
             }
@@ -658,6 +662,78 @@ pub async fn destination_check(
     call.finish(result)
 }
 
+// --- watched folders ---
+
+/// Not in SPEC section 4 (which has `watch_set`): one command per change, as for destinations.
+/// The folders are kept whatever the plan; the watcher lists them only while the license
+/// grants `watched_folder`.
+#[tauri::command]
+pub fn watch_list(state: State<'_, AppState>) -> CommandResult<Vec<WatchFolder>> {
+    let result = state.queue.with_store(|store| store.list_watch_folders());
+    Call::quiet("watch_list").finish(result.map_err(Into::into))
+}
+
+/// Watches an existing folder (`FILE_UNREADABLE` otherwise). The files already in it are left
+/// alone; the next ones are queued for approval. `send_mode` absent: the destination's default.
+#[tauri::command]
+pub fn watch_add(
+    state: State<'_, AppState>,
+    path: String,
+    destination_id: i64,
+    send_mode: Option<SendMode>,
+) -> CommandResult<WatchFolder> {
+    let call = Call::new("watch_add")
+        .destination(destination_id)
+        .arg("dir", path.as_str())
+        .arg("send_mode", send_mode.map(SendMode::as_str));
+    let result = if Path::new(&path).is_dir() {
+        state
+            .queue
+            .with_store(|store| store.add_watch_folder(&path, destination_id, send_mode))
+    } else {
+        Err(QueueError::FileUnreadable(path.clone()))
+    };
+    if result.is_ok() {
+        state.watcher.wake();
+    }
+    call.finish(result.map_err(Into::into))
+}
+
+/// Enables or disables a folder, or changes its destination or mode (`send_mode: null`: the
+/// destination's default). Enabled again, it leaves alone the files that came meanwhile.
+#[tauri::command]
+pub fn watch_update(
+    state: State<'_, AppState>,
+    folder_id: i64,
+    patch: WatchFolderPatch,
+) -> CommandResult<WatchFolder> {
+    let call = Call::new("watch_update")
+        .arg("folder_id", folder_id)
+        .arg("enabled", patch.enabled)
+        .arg("destination_id", patch.destination_id)
+        .arg("send_mode", patch.send_mode.is_some());
+    let result = state
+        .queue
+        .with_store(|store| store.update_watch_folder(folder_id, &patch));
+    if result.is_ok() {
+        state.watcher.wake();
+    }
+    call.finish(result.map_err(Into::into))
+}
+
+/// Stops watching a folder; the items it brought stay in the queue.
+#[tauri::command]
+pub fn watch_remove(state: State<'_, AppState>, folder_id: i64) -> CommandResult<()> {
+    let call = Call::new("watch_remove").arg("folder_id", folder_id);
+    let result = state
+        .queue
+        .with_store(|store| store.remove_watch_folder(folder_id));
+    if result.is_ok() {
+        state.watcher.wake();
+    }
+    call.finish(result.map_err(Into::into))
+}
+
 // --- Telegram session ---
 
 /// Current `auth://state` payload, for a page that subscribes after the last change.
@@ -780,6 +856,7 @@ pub fn license_set(
     let result = state.entitlements.save(&token);
     if let Ok(status) = &result {
         state.entitlement_feed.publish(&app, status.clone());
+        state.watcher.wake();
     }
     call.finish(result.map_err(Into::into))
 }
@@ -794,6 +871,7 @@ pub fn license_clear(
     let result = state.entitlements.clear().map(|()| {
         let status = state.entitlements.status();
         state.entitlement_feed.publish(&app, status.clone());
+        state.watcher.wake();
         status
     });
     call.finish(result.map_err(Into::into))

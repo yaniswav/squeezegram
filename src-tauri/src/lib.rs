@@ -8,7 +8,7 @@
 //! - `media`: ffprobe, plan, encoder detection, ffmpeg encode/remux/photo, BLAKE3 hashing,
 //!   child processes with a Job Object (`media::procs`)
 //! - `sidecars`: ffmpeg/ffprobe resolution and download, path of the bundled `tdjson.dll`
-//! - `watch`: watched folders (file size stability)
+//! - `watch`: watched folders (polling, file size stability, `pending_review` only)
 //! - `settings`: versioned settings
 //! - `limit`: the effective upload limit (settings, else the signed-in account)
 //! - `logging`: the JSON Lines journal
@@ -25,6 +25,7 @@ pub mod settings;
 pub mod sidecars;
 pub mod transport;
 pub mod update;
+pub mod watch;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -45,6 +46,7 @@ use transport::TelegramTransport;
 use transport::select::TransportKind;
 use transport::stage::TransportStage;
 use update::UpdateService;
+use watch::WatchService;
 
 /// Label of the main window, see `app.windows` in `tauri.conf.json`.
 const MAIN_WINDOW: &str = "main";
@@ -133,6 +135,12 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         Arc::new(TauriEvents(app.clone())),
         settings.get().pause_range(),
     );
+    // Its own thread; lists nothing until the license grants `watched_folder`.
+    let watcher = Arc::new(WatchService::start(
+        queue.clone(),
+        entitlements.clone(),
+        settings.clone(),
+    )?);
     let updates = Arc::new(UpdateService::new(
         settings.clone(),
         update::current_kind(),
@@ -148,6 +156,7 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         limits,
         entitlements,
         entitlement_feed: Arc::new(StatusFeed::default()),
+        watcher,
         updates,
         recovered: Mutex::new(recovered),
     })
@@ -185,10 +194,12 @@ fn spawn_transport(
 
 /// Sends `entitlements://status` after every change of the login state (the commands send it
 /// after a license change). The status is computed for the account signed in at that moment.
+/// The folder watcher is woken too: its gate follows the same verdict.
 fn spawn_entitlements_watch(
     app: &AppHandle,
     entitlements: Arc<LicenseEntitlements>,
     feed: Arc<StatusFeed>,
+    watcher: Arc<WatchService>,
     mut states: tokio::sync::watch::Receiver<transport::AuthState>,
 ) {
     let app = app.clone();
@@ -196,6 +207,7 @@ fn spawn_entitlements_watch(
         loop {
             states.borrow_and_update();
             feed.publish(&app, entitlements.status());
+            watcher.wake();
             if states.changed().await.is_err() {
                 return;
             }
@@ -243,10 +255,13 @@ fn start_journal(boot: &Result<Boot, Box<dyn std::error::Error>>) {
 }
 
 /// Clean shutdown, shared by the exit and by the update install (which ends the process
-/// without `RunEvent::Exit`): an item still uploading becomes `unknown`, then the transport
-/// closes (`close`, wait for `authorizationStateClosed`, bounded). Blocks: call it from a
-/// thread that is not a runtime worker.
-pub(crate) fn close_core(queue: &Orchestrator, transport: Arc<dyn TelegramTransport>) {
+/// without `RunEvent::Exit`): the folder watcher stops (bounded) so it queues nothing more,
+/// an item still uploading becomes `unknown`, then the transport closes (`close`, wait for
+/// `authorizationStateClosed`, bounded). Blocks: call it from a thread that is not a runtime
+/// worker.
+pub(crate) fn close_core(state: &AppState) {
+    state.watcher.stop();
+    let (queue, transport) = (&state.queue, state.transport.clone());
     if let Err(error) = queue.shutdown() {
         tracing::error!(event = "shutdown_error", error_code = error.code(), error = %error, "queue shutdown failed");
     }
@@ -299,6 +314,7 @@ pub fn run() {
                 app.handle(),
                 state.entitlements.clone(),
                 state.entitlement_feed.clone(),
+                state.watcher.clone(),
                 state.transport.auth_state(),
             );
             tauri::async_runtime::spawn(async move { queue.run().await });
@@ -326,6 +342,10 @@ pub fn run() {
             commands::destinations_list,
             commands::destination_update,
             commands::destination_check,
+            commands::watch_list,
+            commands::watch_add,
+            commands::watch_update,
+            commands::watch_remove,
             commands::auth_state,
             commands::auth_submit,
             commands::auth_logout,
@@ -373,14 +393,14 @@ pub fn run() {
         }
     };
     app.run(|app, event| match event {
-        // Clean shutdown: an item still uploading becomes `unknown`, then
+        // Clean shutdown: the watcher stops, an item still uploading becomes `unknown`, then
         // the transport closes (`close`, wait for `authorizationStateClosed`, bounded).
         RunEvent::ExitRequested { .. } => {
             tracing::info!(event = "shutdown_start", "exit requested");
             let Some(state) = app.try_state::<AppState>() else {
                 return;
             };
-            close_core(&state.queue, state.transport.clone());
+            close_core(&state);
         }
         RunEvent::Exit => logging::app_exit("exit"),
         _ => {}
