@@ -13,6 +13,7 @@ import { motion } from "motion/react"
 import { useId, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { ConfirmDialog } from "@/components/confirm-dialog"
+import { ItemEncoding } from "@/components/item-encoding"
 import { PlanBadge, QueueStateBadge } from "@/components/queue-state-badge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -36,6 +37,7 @@ import {
 } from "@/lib/format"
 import {
   itemMedia,
+  itemEncodingSet,
   itemReconcile,
   itemPlan,
   itemResolveUnknown,
@@ -244,6 +246,13 @@ export function QueueItem({
             item={item}
             busy={busy}
             onSave={(patch) => run(() => itemUpdate(item.id, patch))}
+          />
+        )}
+        {editable && item.send_mode !== "document" && (
+          <ItemEncoding
+            item={item}
+            busy={busy}
+            onApply={(choices) => run(() => itemEncodingSet(item.id, choices))}
           />
         )}
         {!editable && item.caption !== "" && (
