@@ -378,6 +378,10 @@
         "body": "O Telegram pediu para desacelerar. Nada foi enviado; ele tenta de novo sozinho às {{time}}.",
         "countdown": "Nova tentativa em {{duration}}"
       },
+      "interval": {
+        "body": "Waiting for this chat's minimum interval between sends. It goes out at {{time}}; other files go meanwhile.",
+        "countdown": "Sends in {{duration}}"
+      },
       "unknown": {
         "body": "O app parou enquanto este arquivo era enviado. Ele pode ou não ter chegado ao Telegram.",
         "markSent": "Foi enviado",
@@ -772,9 +776,15 @@
     "favorite": "Adicionar {{name}} aos favoritos",
     "unfavorite": "Remover {{name}} dos favoritos",
     "favorites": "Favoritos",
-    "rename": "Renomear {{name}}",
+    "edit": "Name and send interval of {{name}}",
     "renameLabel": "Nome local",
     "renameHint": "Aparece só no squeezegram. Deixe vazio para usar o nome do Telegram.",
+    "interval": {
+      "label": "Minimum time between two sends (minutes)",
+      "hint": "Empty or 0: no minimum. Files for this chat wait until this much time has passed since the last one sent there; files for other chats go meanwhile.",
+      "error": "Enter a whole number of minutes, from 0 to 10080 (one week).",
+      "summary": "At least {{duration}} between two sends to this chat."
+    },
     "save": "Salvar",
     "unnamed": "Chat sem nome",
     "panelLabel": "Escolha um destino",

@@ -352,6 +352,10 @@
         "body": "Telegram meminta untuk memperlambat. Tidak ada yang dikirim; percobaan ulang otomatis pada {{time}}.",
         "countdown": "Coba lagi dalam {{duration}}"
       },
+      "interval": {
+        "body": "Waiting for this chat's minimum interval between sends. It goes out at {{time}}; other files go meanwhile.",
+        "countdown": "Sends in {{duration}}"
+      },
       "unknown": {
         "body": "Aplikasi berhenti saat berkas ini sedang diunggah. Berkas mungkin sudah sampai ke Telegram atau belum.",
         "markSent": "Sudah terkirim",
@@ -742,9 +746,15 @@
     "favorite": "Tambahkan {{name}} ke favorit",
     "unfavorite": "Hapus {{name}} dari favorit",
     "favorites": "Favorit",
-    "rename": "Ganti nama {{name}}",
+    "edit": "Name and send interval of {{name}}",
     "renameLabel": "Nama lokal",
     "renameHint": "Hanya ditampilkan di squeezegram. Kosongkan untuk memakai nama Telegram.",
+    "interval": {
+      "label": "Minimum time between two sends (minutes)",
+      "hint": "Empty or 0: no minimum. Files for this chat wait until this much time has passed since the last one sent there; files for other chats go meanwhile.",
+      "error": "Enter a whole number of minutes, from 0 to 10080 (one week).",
+      "summary": "At least {{duration}} between two sends to this chat."
+    },
     "save": "Simpan",
     "unnamed": "Chat tanpa nama",
     "panelLabel": "Pilih tujuan",

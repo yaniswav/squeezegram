@@ -406,10 +406,19 @@ function StatusPanel({
       )
     }
 
+    case "encoded":
+      // Held by a schedule: its destination's minimum interval, or a FLOOD_WAIT carried over
+      // a restart. Other items run meanwhile.
+      return (
+        <>
+          {item.next_run_at && <ScheduledNotice item={item} />}
+          <Steps item={item} progress={progress} />
+        </>
+      )
+
     case "probing":
     case "encoding":
     case "remuxing":
-    case "encoded":
     case "uploading":
       return <Steps item={item} progress={progress} />
 
@@ -597,6 +606,36 @@ function WaitingNotice({
         {t("queue.item.waiting.countdown", {
           duration: formatDuration(remaining, i18n.language),
         })}
+      </p>
+    </Notice>
+  )
+}
+
+/** An `encoded` item whose `next_run_at` is still ahead; nothing once it is due. */
+function ScheduledNotice({ item }: { item: Item }) {
+  const { t, i18n } = useTranslation()
+  const now = useNow(true)
+  const target = item.next_run_at ? Date.parse(item.next_run_at) : Number.NaN
+
+  if (Number.isNaN(target) || target <= now) return null
+
+  const remaining = (target - now) / 1000
+  const flood = item.last_error === "TG_FLOOD_WAIT"
+
+  return (
+    <Notice
+      tone="attention"
+      text={t(flood ? "queue.item.waiting.body" : "queue.item.interval.body", {
+        time: formatTime(new Date(target), i18n.language),
+      })}
+    >
+      <p className="text-xs text-muted-foreground tabular-nums" aria-live="off">
+        {t(
+          flood
+            ? "queue.item.waiting.countdown"
+            : "queue.item.interval.countdown",
+          { duration: formatDuration(remaining, i18n.language) },
+        )}
       </p>
     </Notice>
   )

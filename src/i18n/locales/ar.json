@@ -417,6 +417,10 @@
         "body": "طلب Telegram إبطاء الإرسال. لم يُرسل شيء، وستتم إعادة المحاولة تلقائيًا في {{time}}.",
         "countdown": "إعادة المحاولة خلال {{duration}}"
       },
+      "interval": {
+        "body": "Waiting for this chat's minimum interval between sends. It goes out at {{time}}; other files go meanwhile.",
+        "countdown": "Sends in {{duration}}"
+      },
       "unknown": {
         "body": "توقف التطبيق أثناء رفع هذا الملف. ربما وصل إلى Telegram، وربما لم يصل.",
         "markSent": "أُرسل",
@@ -817,9 +821,15 @@
     "favorite": "إضافة {{name}} إلى المفضلة",
     "unfavorite": "إزالة {{name}} من المفضلة",
     "favorites": "المفضلة",
-    "rename": "إعادة تسمية {{name}}",
+    "edit": "Name and send interval of {{name}}",
     "renameLabel": "الاسم المحلي",
     "renameHint": "يظهر في squeezegram فقط. اتركه فارغًا لاستخدام اسم Telegram.",
+    "interval": {
+      "label": "Minimum time between two sends (minutes)",
+      "hint": "Empty or 0: no minimum. Files for this chat wait until this much time has passed since the last one sent there; files for other chats go meanwhile.",
+      "error": "Enter a whole number of minutes, from 0 to 10080 (one week).",
+      "summary": "At least {{duration}} between two sends to this chat."
+    },
     "save": "حفظ",
     "unnamed": "محادثة بلا اسم",
     "panelLabel": "اختر وجهة",

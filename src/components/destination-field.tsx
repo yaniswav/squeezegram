@@ -6,7 +6,7 @@ import {
   Star,
   TriangleAlert,
 } from "lucide-react"
-import { useState } from "react"
+import { useId, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { DestinationPicker } from "@/components/destination-picker"
 import { Button } from "@/components/ui/button"
@@ -14,8 +14,25 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { CheckState } from "@/hooks/use-destination-check"
 import { errorMessage } from "@/i18n/errors"
-import { type Destination } from "@/lib/ipc"
+import { formatDuration } from "@/lib/format"
+import { type Destination, type DestinationPatch } from "@/lib/ipc"
 import { destinationName, useDestinations } from "@/state/destinations"
+
+/** `store::MAX_MIN_INTERVAL_S` (one week), in the minutes the form uses. */
+const MAX_INTERVAL_MINUTES = 7 * 24 * 60
+
+const WHOLE = /^\d+$/
+
+/** Minutes typed for the interval, or null when it is not a whole number in range. */
+function intervalSeconds(minutes: string): number | null {
+  const text = minutes.trim()
+
+  if (text === "") return 0
+
+  if (!WHOLE.test(text) || Number(text) > MAX_INTERVAL_MINUTES) return null
+
+  return Number(text) * 60
+}
 
 interface DestinationFieldProps {
   id: string
@@ -25,19 +42,22 @@ interface DestinationFieldProps {
 
 /**
  * Destination field: the picker (Saved Messages, favorites, recently used, folders, all chats,
- * archive, other; forum topics on demand; Telegram search), then favorite, local name and
- * refresh. Favorite and local name go through `destination_update`.
+ * archive, other; forum topics on demand; Telegram search), then favorite, local settings
+ * (name, minimum interval between two sends) and refresh. Favorite and local settings go
+ * through `destination_update`.
  */
 export function DestinationField({
   id,
   value,
   onChange,
 }: DestinationFieldProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { status, list, byId, refresh, update } = useDestinations()
   const [refreshing, setRefreshing] = useState(false)
-  const [renaming, setRenaming] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState("")
+  const [minutes, setMinutes] = useState("")
+  const ids = useId()
 
   if (status === "unavailable") {
     return (
@@ -71,12 +91,29 @@ export function DestinationField({
     }
   }
 
-  async function saveName(destination: Destination) {
+  const interval = intervalSeconds(minutes)
+
+  function edit(destination: Destination) {
+    setDraft(destination.alias ?? "")
+    setMinutes(
+      destination.min_interval_s > 0
+        ? Math.ceil(destination.min_interval_s / 60).toString()
+        : "",
+    )
+    setEditing(true)
+  }
+
+  async function save(destination: Destination) {
+    if (interval === null) return
     // A blank name removes the alias, which brings back the Telegram name.
     const alias = draft.trim()
+    const patch: DestinationPatch = { alias: alias === "" ? null : alias }
+    const shown = Math.ceil(destination.min_interval_s / 60) * 60
 
-    if (await update(destination.id, { alias: alias === "" ? null : alias }))
-      setRenaming(false)
+    // Left as shown: a value saved in seconds is not rounded to minutes behind the user's back.
+    if (interval !== shown) patch.min_interval_s = interval
+
+    if (await update(destination.id, patch)) setEditing(false)
   }
 
   return (
@@ -127,13 +164,11 @@ export function DestinationField({
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label={t("destinations.rename", {
+                aria-label={t("destinations.edit", {
                   name: selectedName,
                 })}
-                onClick={() => {
-                  setDraft(selected.alias ?? "")
-                  setRenaming(true)
-                }}
+                title={t("destinations.edit", { name: selectedName })}
+                onClick={() => edit(selected)}
               >
                 <Pencil />
               </Button>
@@ -152,40 +187,93 @@ export function DestinationField({
         </div>
       )}
 
-      {selected && renaming && (
+      {selected && !editing && selected.min_interval_s > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {t("destinations.interval.summary", {
+            duration: formatDuration(selected.min_interval_s, i18n.language),
+          })}
+        </p>
+      )}
+
+      {selected && editing && (
         <form
-          className="space-y-2 rounded-lg border p-3"
+          noValidate
+          className="space-y-3 rounded-lg border p-3"
           onSubmit={(event) => {
             event.preventDefault()
-            void saveName(selected)
+            void save(selected)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setEditing(false)
           }}
         >
-          <Label htmlFor={`${id}-alias`}>{t("destinations.renameLabel")}</Label>
-          <Input
-            id={`${id}-alias`}
-            dir="auto"
-            autoFocus
-            value={draft}
-            placeholder={selected.title}
-            aria-describedby={`${id}-alias-hint`}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setRenaming(false)
-            }}
-          />
-          <p id={`${id}-alias-hint`} className="text-xs text-muted-foreground">
-            {t("destinations.renameHint")}
-          </p>
+          <div className="space-y-2">
+            <Label htmlFor={`${ids}-alias`}>
+              {t("destinations.renameLabel")}
+            </Label>
+            <Input
+              id={`${ids}-alias`}
+              dir="auto"
+              autoFocus
+              value={draft}
+              placeholder={selected.title}
+              aria-describedby={`${ids}-alias-hint`}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <p
+              id={`${ids}-alias-hint`}
+              className="text-xs text-muted-foreground"
+            >
+              {t("destinations.renameHint")}
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor={`${ids}-interval`}>
+              {t("destinations.interval.label")}
+            </Label>
+            <Input
+              id={`${ids}-interval`}
+              type="number"
+              min={0}
+              max={MAX_INTERVAL_MINUTES}
+              step={1}
+              inputMode="numeric"
+              className="sm:w-40"
+              value={minutes}
+              placeholder="0"
+              aria-invalid={interval === null ? true : undefined}
+              aria-describedby={
+                interval === null
+                  ? `${ids}-interval-error ${ids}-interval-hint`
+                  : `${ids}-interval-hint`
+              }
+              onChange={(event) => setMinutes(event.target.value)}
+            />
+            {interval === null && (
+              <p
+                id={`${ids}-interval-error`}
+                className="text-xs text-destructive"
+              >
+                {t("destinations.interval.error")}
+              </p>
+            )}
+            <p
+              id={`${ids}-interval-hint`}
+              className="text-xs text-muted-foreground"
+            >
+              {t("destinations.interval.hint")}
+            </p>
+          </div>
           <div className="flex justify-end gap-2">
             <Button
               type="button"
               size="sm"
               variant="ghost"
-              onClick={() => setRenaming(false)}
+              onClick={() => setEditing(false)}
             >
               {t("common.cancel")}
             </Button>
-            <Button type="submit" size="sm">
+            <Button type="submit" size="sm" disabled={interval === null}>
               {t("destinations.save")}
             </Button>
           </div>
