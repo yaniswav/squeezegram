@@ -7,6 +7,7 @@
 //! the main thread. Callers never wait for the window system, and no queue lock is ever held
 //! while the tray is touched.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -65,6 +66,8 @@ pub struct Background {
     tray: Mutex<Option<TrayParts>>,
     /// Since when the license has been waiting for its account, if it is.
     pending_since: Mutex<Option<Instant>>,
+    /// The startup entry was checked against this executable (once per run).
+    autostart_checked: AtomicBool,
     start: Mutex<Start>,
 }
 
@@ -98,6 +101,7 @@ impl Background {
             wake: Notify::new(),
             tray: Mutex::new(None),
             pending_since: Mutex::new(None),
+            autostart_checked: AtomicBool::new(false),
             start: Mutex::new(Start {
                 page_loaded: false,
                 show_when_loaded: !hidden_start,
@@ -292,6 +296,9 @@ impl Background {
         let allows = self.entitlements.allows(Feature::Background);
         let pending = !allows && self.is_pending();
         self.track_pending(pending);
+        if allows {
+            self.repair_autostart();
+        }
 
         let mut tray = lock(&self.tray);
         let licensed = self.licensed(tray.is_some());
@@ -329,6 +336,31 @@ impl Background {
         let tray_exists = tray.is_some();
         drop(tray);
         self.settle_start(tray_exists, pending);
+    }
+
+    /// Once per run, with the license: an entry that runs another path (the app was moved or
+    /// reinstalled elsewhere) is pointed at this executable. Not in a debug build, which runs
+    /// from `target` and would take over the entry of the installed app.
+    fn repair_autostart(&self) {
+        if cfg!(debug_assertions) || self.autostart_checked.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let repaired = std::env::current_exe().and_then(|exe| {
+            autostart::repair(self.autostart.as_ref(), self.entitlements.as_ref(), &exe)
+        });
+        match repaired {
+            Ok(Some(from)) => {
+                tracing::info!(
+                    event = "autostart_repaired",
+                    from = from.as_str(),
+                    "startup entry pointed at this executable"
+                )
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(event = "autostart_error", error = %error, "could not repair the startup entry")
+            }
+        }
     }
 
     /// Remembers since when the license waits for its account, and wakes up when the grace

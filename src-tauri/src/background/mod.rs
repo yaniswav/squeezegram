@@ -12,14 +12,16 @@
 //! - **Start with Windows** (`autostart`): an `HKCU\...\Run` entry that starts the app with
 //!   `--background`. The entry is the only record of the choice. It is created only with the
 //!   license; removing it is always allowed. Without the license the entry is left as it is,
-//!   and an app started by it shows its window (no tray without the feature).
+//!   and an app started by it shows its window (no tray without the feature). At a licensed
+//!   start an entry that runs another path is pointed at this executable. The installer's
+//!   uninstaller removes the entry (see `windows/hooks.nsh`).
 //!
 //! Every decision that does not need the window system lives here as a function of its
 //! inputs, so the license and setting combinations are tested without an app.
 //!
 //! Journal: `tray_created`, `tray_removed`, `tray_error`, `tray_action`, `app_hidden`,
 //! `app_shown`, `tray_quit`, `quit_confirmation`, `start_visible`, `autostart_set`,
-//! `autostart_error`.
+//! `autostart_repaired`, `autostart_error`.
 
 pub mod autostart;
 mod labels;

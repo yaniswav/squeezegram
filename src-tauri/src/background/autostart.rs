@@ -20,17 +20,19 @@ use crate::entitlements::{Entitlements, Feature};
 
 /// The persistence of the "start with Windows" choice; the registry in the app, a fake in tests.
 pub trait Autostart: Send + Sync {
-    /// The Run entry exists.
-    fn is_registered(&self) -> bool;
+    /// What the Run entry runs; `None` when there is no entry.
+    fn command(&self) -> Option<String>;
     /// False when the user switched the entry off on Task Manager's Startup page: Windows
     /// then skips it although it exists.
     fn is_approved(&self) -> bool;
     /// Whether Windows will start the app at login.
     fn is_enabled(&self) -> bool {
-        self.is_registered() && self.is_approved()
+        self.command().is_some() && self.is_approved()
     }
-    /// Creates or replaces the entry, which runs `command`.
-    fn enable(&self, command: &str) -> io::Result<()>;
+    /// Creates or replaces the Run entry, which runs `command`.
+    fn write(&self, command: &str) -> io::Result<()>;
+    /// Clears the Task Manager flag: the entry starts again if the user switched it off there.
+    fn approve(&self) -> io::Result<()>;
     /// Removes the entry; already gone is not an error.
     fn disable(&self) -> io::Result<()>;
 }
@@ -66,11 +68,35 @@ pub fn set(
         if !entitlements.allows(Feature::Background) {
             return Err(AutostartError::NotLicensed);
         }
-        autostart.enable(&command_line(exe))?;
+        autostart.write(&command_line(exe))?;
+        autostart.approve()?;
     } else {
         autostart.disable()?;
     }
     Ok(autostart.is_enabled())
+}
+
+/// Points an existing entry at this executable. The entry keeps the path it was created with:
+/// after an update that moves the app, or a portable copy that is moved, it would start
+/// nothing while the option reads as on. Only with the license (without it the entry is left
+/// alone) and without touching the Task Manager flag. Returns the command it replaced.
+pub fn repair(
+    autostart: &dyn Autostart,
+    entitlements: &dyn Entitlements,
+    exe: &Path,
+) -> io::Result<Option<String>> {
+    if !entitlements.allows(Feature::Background) {
+        return Ok(None);
+    }
+    let Some(found) = autostart.command() else {
+        return Ok(None);
+    };
+    let wanted = command_line(exe);
+    if found.eq_ignore_ascii_case(&wanted) {
+        return Ok(None);
+    }
+    autostart.write(&wanted)?;
+    Ok(Some(found))
 }
 
 #[cfg(windows)]
@@ -127,10 +153,10 @@ mod registry {
             !(status == ERROR_SUCCESS && super::switched_off(&data[..size as usize]))
         }
 
-        fn is_registered(&self) -> bool {
+        fn command(&self) -> Option<String> {
             let mut size = 0u32;
-            // SAFETY: no data buffer is given; `size` is a valid out value. The key and value
-            // names are NUL-ended literals.
+            // SAFETY: no data buffer is given, so only the size is returned; `size` is a valid
+            // out value. The key and value names are NUL-ended literals.
             let status = unsafe {
                 RegGetValueW(
                     HKEY_CURRENT_USER,
@@ -142,10 +168,32 @@ mod registry {
                     Some(&mut size),
                 )
             };
-            status == ERROR_SUCCESS
+            if status != ERROR_SUCCESS {
+                return None;
+            }
+            let mut text = vec![0u16; (size as usize).div_ceil(2)];
+            let mut size = (text.len() * 2) as u32;
+            // SAFETY: the buffer and its byte size are valid for the call.
+            let status = unsafe {
+                RegGetValueW(
+                    HKEY_CURRENT_USER,
+                    RUN_KEY,
+                    VALUE,
+                    RRF_RT_REG_SZ,
+                    None,
+                    Some(text.as_mut_ptr().cast()),
+                    Some(&mut size),
+                )
+            };
+            if status != ERROR_SUCCESS {
+                return None;
+            }
+            // The size counts the closing NUL.
+            let len = (size as usize / 2).saturating_sub(1).min(text.len());
+            Some(String::from_utf16_lossy(&text[..len]))
         }
 
-        fn enable(&self, command: &str) -> io::Result<()> {
+        fn write(&self, command: &str) -> io::Result<()> {
             let data: Vec<u16> = command.encode_utf16().chain(Some(0)).collect();
             // SAFETY: `data` is NUL-ended and its byte size is given; the names are literals.
             let status = unsafe {
@@ -158,7 +206,10 @@ mod registry {
                     (data.len() * 2) as u32,
                 )
             };
-            check(status, false)?;
+            check(status, false)
+        }
+
+        fn approve(&self) -> io::Result<()> {
             // SAFETY: the names are NUL-ended literals.
             let status = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, APPROVED_KEY, VALUE) };
             check(status, true)
@@ -178,16 +229,20 @@ pub struct RegistryAutostart;
 
 #[cfg(not(windows))]
 impl Autostart for RegistryAutostart {
-    fn is_registered(&self) -> bool {
-        false
+    fn command(&self) -> Option<String> {
+        None
     }
 
     fn is_approved(&self) -> bool {
         true
     }
 
-    fn enable(&self, _command: &str) -> io::Result<()> {
+    fn write(&self, _command: &str) -> io::Result<()> {
         Err(io::ErrorKind::Unsupported.into())
+    }
+
+    fn approve(&self) -> io::Result<()> {
+        Ok(())
     }
 
     fn disable(&self) -> io::Result<()> {
@@ -213,19 +268,23 @@ mod tests {
     }
 
     impl Autostart for Fake {
-        fn is_registered(&self) -> bool {
-            self.command.lock().unwrap().is_some()
+        fn command(&self) -> Option<String> {
+            self.command.lock().unwrap().clone()
         }
 
         fn is_approved(&self) -> bool {
             !*self.switched_off.lock().unwrap()
         }
 
-        fn enable(&self, command: &str) -> io::Result<()> {
+        fn write(&self, command: &str) -> io::Result<()> {
             if self.fail {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
             *self.command.lock().unwrap() = Some(command.to_owned());
+            Ok(())
+        }
+
+        fn approve(&self) -> io::Result<()> {
             *self.switched_off.lock().unwrap() = false;
             Ok(())
         }
@@ -296,7 +355,7 @@ mod tests {
         let fake = Fake::default();
         set(&fake, &Licensed, &exe(), true).unwrap();
         *fake.switched_off.lock().unwrap() = true;
-        assert!(fake.is_registered());
+        assert!(fake.command().is_some());
         assert!(!fake.is_enabled(), "Windows will not start it");
         // The user turns the option on: the flag is cleared.
         assert!(set(&fake, &Licensed, &exe(), true).unwrap());
@@ -311,6 +370,43 @@ mod tests {
         assert!(!switched_off(&enabled_by_policy));
         assert!(switched_off(&disabled));
         assert!(!switched_off(&[]), "an empty value switches nothing off");
+    }
+
+    #[test]
+    fn an_entry_pointing_elsewhere_is_rewritten_for_a_licensed_start_only() {
+        let moved = r#""D:\Old\squeezegram.exe" --background"#;
+        let fake = Fake::default();
+        *fake.command.lock().unwrap() = Some(moved.to_owned());
+        *fake.switched_off.lock().unwrap() = true;
+
+        // Without the license the entry is left as it is.
+        assert_eq!(repair(&fake, &FreeOnly, &exe()).unwrap(), None);
+        assert_eq!(fake.command().as_deref(), Some(moved));
+
+        // Licensed: it follows the executable, and the user's Task Manager choice stays.
+        assert_eq!(
+            repair(&fake, &Licensed, &exe()).unwrap().as_deref(),
+            Some(moved)
+        );
+        assert_eq!(
+            fake.command().as_deref(),
+            Some(command_line(&exe()).as_str())
+        );
+        assert!(!fake.is_approved());
+
+        // Already right (whatever the case of the path): nothing to do.
+        assert_eq!(repair(&fake, &Licensed, &exe()).unwrap(), None);
+        let upper = command_line(&exe()).to_uppercase();
+        *fake.command.lock().unwrap() = Some(upper.clone());
+        assert_eq!(repair(&fake, &Licensed, &exe()).unwrap(), None);
+        assert_eq!(fake.command().as_deref(), Some(upper.as_str()));
+    }
+
+    #[test]
+    fn no_entry_means_nothing_to_repair() {
+        let fake = Fake::default();
+        assert_eq!(repair(&fake, &Licensed, &exe()).unwrap(), None);
+        assert!(fake.command().is_none(), "never creates the entry");
     }
 
     #[test]
