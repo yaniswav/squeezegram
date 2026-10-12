@@ -443,6 +443,25 @@ function StatusPanel({
 }
 
 /**
+ * Earlier sends already asked for, by item. Reading the link costs two TDLib requests
+ * (`getMessage`, `getMessageLink`): asked once per held item and session, not each time its
+ * row is shown again. A failure is forgotten so that the next showing asks again.
+ */
+const earlierSends = new Map<number, Promise<DuplicateInfo | null>>()
+
+function earlierSend(itemId: number): Promise<DuplicateInfo | null> {
+  let pending = earlierSends.get(itemId)
+
+  if (!pending) {
+    pending = itemDuplicate(itemId)
+    earlierSends.set(itemId, pending)
+    pending.catch(() => earlierSends.delete(itemId))
+  }
+
+  return pending
+}
+
+/**
  * Where a held duplicate already went: the date and destination of the earlier send, and a
  * link to that message where Telegram has one (supergroups and channels).
  */
@@ -456,7 +475,7 @@ function EarlierSend({ item }: { item: Item }) {
     let stale = false
 
     // Nothing to show is not an error: the notice above already says why the item waits.
-    itemDuplicate(item.id).then(
+    earlierSend(item.id).then(
       (next) => {
         if (!stale) setInfo(next)
       },
