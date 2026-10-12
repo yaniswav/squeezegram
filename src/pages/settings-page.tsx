@@ -66,6 +66,7 @@ import {
   watchRemove,
   watchUpdate,
   type EncoderStatus,
+  type CloseAction,
   type EncodePreset,
   type EntitlementStatus,
   type LimitStatus,
@@ -99,6 +100,7 @@ interface Draft {
   prefer: Prefer
   maxResolution: MaxResolution
   audioKbps: string
+  closeAction: CloseAction
   videoCodec: VideoCodec
   preset: EncodePreset
   targetMode: TargetMode
@@ -153,6 +155,7 @@ function toDraft(settings: Settings): Draft {
     prefer: preferOf(settings.encoding.prefer),
     maxResolution: settings.advanced_encoding.max_resolution,
     audioKbps: settings.advanced_encoding.audio_kbps.toString(),
+    closeAction: settings.background.close_action,
     videoCodec: settings.advanced_encoding.video_codec,
     preset: settings.advanced_encoding.preset,
     targetMode:
@@ -252,6 +255,9 @@ function toPatch(draft: Draft, settings: Settings): SettingsPatch {
     advanced.target_mb = targetMb
 
   if (Object.keys(advanced).length > 0) patch.advanced_encoding = advanced
+
+  if (draft.closeAction !== saved.closeAction)
+    patch.background = { close_action: draft.closeAction }
 
   const send: NonNullable<SettingsPatch["send"]> = {}
 
@@ -946,6 +952,9 @@ function SettingsForm({
   const advancedGranted =
     entitlements !== "failed" && grants(entitlements, "advanced_encoding")
 
+  const backgroundGranted =
+    entitlements !== "failed" && grants(entitlements, "background")
+
   // Without the feature the controls show what an encode uses, not what is saved.
   const encoding = effectiveEncoding(
     {
@@ -1234,6 +1243,39 @@ function SettingsForm({
         {advancedGranted && (
           <CodecNote codec={encoding.video_codec} support={codecSupport} />
         )}
+      </Section>
+
+      <Section title={t("settings.background.title")}>
+        {!backgroundGranted && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Badge variant="secondary">
+              {t("settings.background.premium")}
+            </Badge>
+            <p className="min-w-0 flex-1 basis-64 text-sm text-muted-foreground">
+              {t("settings.background.locked")}
+            </p>
+            <PurchaseButton />
+          </div>
+        )}
+        <Field
+          id={`${ids}-close`}
+          label={t("settings.background.close.label")}
+          hint={t("settings.background.close.hint")}
+        >
+          {(props) => (
+            <Choice
+              {...props}
+              disabled={!backgroundGranted}
+              // Without the feature, closing quits whatever is saved.
+              value={backgroundGranted ? draft.closeAction : "quit"}
+              onChange={(value) => update("closeAction", value)}
+              options={[
+                ["quit", t("settings.background.close.quit")],
+                ["tray", t("settings.background.close.tray")],
+              ]}
+            />
+          )}
+        </Field>
       </Section>
 
       <Section title={t("settings.send.title")} hint={t("settings.send.hint")}>

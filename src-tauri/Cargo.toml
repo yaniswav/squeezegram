@@ -15,7 +15,8 @@ name = "squeezegram_lib"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `tray-icon`: the notification-area icon of the background mode.
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 # Updates: the plugin downloads and checks the minisign signature against the public key in

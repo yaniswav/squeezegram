@@ -47,6 +47,27 @@ pub struct Settings {
     pub updates: Updates,
     /// Paid feature `advanced_encoding`. Absent from older files: the defaults apply.
     pub advanced_encoding: AdvancedEncoding,
+    /// Paid feature `background`. Absent from older files: the defaults apply.
+    pub background: Background,
+}
+
+/// What closing the window does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseAction {
+    /// The app exits. The only behavior without the license.
+    #[default]
+    Quit,
+    /// The window hides and the app keeps running from the notification area.
+    Tray,
+}
+
+/// Background mode (`background` module). Saved whatever the plan; `Tray` only takes effect
+/// while the license grants `background`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Background {
+    pub close_action: CloseAction,
 }
 
 /// Audio bitrates offered for an encode, in kbit/s.
@@ -192,6 +213,7 @@ impl Default for Settings {
             logging: Logging::default(),
             updates: Updates::default(),
             advanced_encoding: AdvancedEncoding::default(),
+            background: Background::default(),
         }
     }
 }
@@ -453,7 +475,8 @@ mod tests {
               "advanced_encoding": {
                 "max_resolution": "1080p", "audio_kbps": 128, "video_codec": "h264",
                 "preset": "balanced", "target_mb": null
-              }
+              },
+              "background": { "close_action": "quit" }
             })
         );
     }
@@ -562,6 +585,35 @@ mod tests {
             );
         }
         assert_eq!(store.get(), reset, "a refused patch changes nothing");
+    }
+
+    #[test]
+    fn a_file_without_background_quits_on_close_and_the_choice_is_validated() {
+        let dir = TestDir::new("settings-background");
+        let path = dir.path().join(FILE_NAME);
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("background");
+        std::fs::write(&path, old.to_string()).unwrap();
+        let store = SettingsStore::load(path.clone()).unwrap();
+        assert_eq!(store.get().background.close_action, CloseAction::Quit);
+
+        let saved = store
+            .set(&json!({ "background": { "close_action": "tray" } }))
+            .unwrap();
+        assert_eq!(saved.background.close_action, CloseAction::Tray);
+        assert_eq!(SettingsStore::load(path).unwrap().get(), saved);
+        for bad in [
+            json!({ "background": { "close_action": "minimize" } }),
+            json!({ "background": { "close_action": true } }),
+            json!({ "background": { "autostart": true } }),
+        ] {
+            assert_eq!(
+                store.set(&bad).unwrap_err().code(),
+                "SETTINGS_INVALID",
+                "{bad}"
+            );
+        }
+        assert_eq!(store.get(), saved);
     }
 
     #[test]

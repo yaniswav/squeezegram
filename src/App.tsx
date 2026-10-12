@@ -6,6 +6,7 @@ import { AlertStack } from "@/components/alert-stack"
 import { AppSidebar, type Page } from "@/components/app-sidebar"
 import { DropOverlay } from "@/components/drop-overlay"
 import { AppProviders } from "@/components/providers"
+import { QuitConfirm } from "@/components/quit-confirm"
 import { SidecarBanner } from "@/components/sidecar-banner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { UpdateBanner } from "@/components/update-banner"
@@ -106,6 +107,7 @@ function Shell() {
         </div>
       </main>
       <DropOverlay visible={dragging} />
+      <QuitConfirm />
     </div>
   )
 }

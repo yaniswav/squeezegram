@@ -671,6 +671,17 @@
       "available": "Доступна версия {{version}}.",
       "lastChecked": "Последняя проверка: {{date}}",
       "neverChecked": "Ещё не проверялось."
+    },
+    "background": {
+      "title": "Background",
+      "premium": "Premium",
+      "locked": "Included with squeezegram Premium. Until then, closing the window quits the app.",
+      "close": {
+        "label": "When I close the window",
+        "hint": "While it keeps running, the queue and the watched folders go on working. Right-click the icon in the notification area to pause the queue or quit.",
+        "quit": "Quit squeezegram",
+        "tray": "Keep running in the notification area"
+      }
     }
   },
   "update": {
@@ -827,5 +838,19 @@
       "no_hevc_encoder": "HEVC is unavailable: none of the graphics card encoders (NVENC, Quick Sync, AMF) of the ffmpeg in use works for HEVC on this computer. Choose an ffmpeg that has one in Settings.",
       "ffmpeg_unavailable": "HEVC cannot be checked because ffmpeg is not available."
     }
+  },
+  "tray": {
+    "open": "Open squeezegram",
+    "pause": "Pause the queue",
+    "resume": "Resume the queue",
+    "quit": "Quit",
+    "idle": "squeezegram: idle",
+    "working": "squeezegram: {{count}} in queue",
+    "paused": "squeezegram: paused, {{count}} in queue"
+  },
+  "quit": {
+    "title": "Quit squeezegram?",
+    "body": "A file is being compressed or sent. If you quit now, it is interrupted. A file that was being sent is marked Unconfirmed, so you can check next time whether it arrived.",
+    "confirm": "Quit"
   }
 }

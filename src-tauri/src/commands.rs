@@ -11,9 +11,10 @@ use std::time::{Instant, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::background::Background;
 use crate::entitlements::store::StoreError;
 use crate::entitlements::{self, EntitlementStatus, Entitlements, Feature, LicenseEntitlements};
 use crate::limit::{EffectiveLimit, LimitResolver};
@@ -65,6 +66,8 @@ pub struct AppState {
     pub entitlement_feed: Arc<StatusFeed>,
     /// Watched folders (`watch_*`); woken after a change of the folders or of the license.
     pub watcher: Arc<WatchService>,
+    /// Tray icon and window visibility (`app_quit`).
+    pub background: Arc<Background>,
     /// Update checks and installs (`update_*`).
     pub updates: Arc<UpdateService>,
     /// Items changed by the startup recovery, announced once the page has loaded.
@@ -279,11 +282,19 @@ impl TauriEvents {
             tracing::warn!(event = "emit_failed", name, error = %error, "could not emit an event to the window");
         }
     }
+
+    /// The tray shows what the queue is doing; it updates after a pause, never inline.
+    fn refresh_tray(&self) {
+        if let Some(state) = self.0.try_state::<AppState>() {
+            state.background.refresh();
+        }
+    }
 }
 
 impl EventSink for TauriEvents {
     fn queue_changed(&self, event: &QueueChanged) {
         self.emit(QUEUE_CHANGED, event);
+        self.refresh_tray();
     }
 
     fn queue_progress(&self, event: &QueueProgress) {
@@ -300,6 +311,7 @@ impl EventSink for TauriEvents {
 
     fn queue_status(&self, event: &QueueStatus) {
         self.emit(QUEUE_STATUS, event);
+        self.refresh_tray();
     }
 }
 
@@ -902,6 +914,8 @@ pub fn settings_set(state: State<'_, AppState>, patch: Value) -> CommandResult<S
     let result = state.settings.set(&patch).inspect(|settings| {
         state.queue.set_pauses(settings.pause_range());
         logging::apply_level(settings.logging.level.as_deref());
+        // The tray follows the close choice and the language.
+        state.background.refresh();
     });
     call.finish(result.map_err(Into::into))
 }
@@ -1000,6 +1014,7 @@ pub fn license_set(
     if let Ok(status) = &result {
         state.entitlement_feed.publish(&app, status.clone());
         state.watcher.wake();
+        state.background.refresh();
     }
     call.finish(result.map_err(Into::into))
 }
@@ -1015,9 +1030,19 @@ pub fn license_clear(
         let status = state.entitlements.status();
         state.entitlement_feed.publish(&app, status.clone());
         state.watcher.wake();
+        state.background.refresh();
         status
     });
     call.finish(result.map_err(Into::into))
+}
+
+/// Quits the app after the user confirmed it in the window (`app://quit-requested`): the
+/// normal exit, with the clean shutdown. Needs no license: it is any exit.
+#[tauri::command]
+pub fn app_quit(state: State<'_, AppState>) {
+    let call = Call::new("app_quit");
+    state.background.quit("confirmation");
+    call.done(())
 }
 
 /// `explorer.exe` from the Windows folder. A bare name would be looked up in the working

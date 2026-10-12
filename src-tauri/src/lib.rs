@@ -9,12 +9,14 @@
 //!   child processes with a Job Object (`media::procs`)
 //! - `sidecars`: ffmpeg/ffprobe resolution and download, path of the bundled `tdjson.dll`
 //! - `watch`: watched folders (polling, file size stability, `pending_review` only)
+//! - `background`: close to the tray, the tray icon and its menu (paid feature `background`)
 //! - `settings`: versioned settings
 //! - `limit`: the effective upload limit (settings, else the signed-in account)
 //! - `logging`: the JSON Lines journal
 //! - `entitlements`: paid features, granted by a license verified offline (`LicenseEntitlements`)
 //! - `update`: update checks (installer: download and install; portable: tell the user)
 
+pub mod background;
 pub mod caption;
 mod commands;
 pub mod entitlements;
@@ -33,8 +35,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Manager, RunEvent, WebviewWindow};
+use tauri::{AppHandle, Manager, RunEvent, WebviewWindow, WindowEvent};
 
+use background::Background;
 use commands::{AppState, StatusFeed, TauriEvents};
 use entitlements::{Entitlements, LicenseEntitlements};
 use limit::LimitResolver;
@@ -50,11 +53,11 @@ use update::UpdateService;
 use watch::WatchService;
 
 /// Label of the main window, see `app.windows` in `tauri.conf.json`.
-const MAIN_WINDOW: &str = "main";
+pub(crate) const MAIN_WINDOW: &str = "main";
 /// `close` then `authorizationStateClosed` took 6 to 22 ms when measured; bounded anyway.
 const TRANSPORT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
-fn show_and_focus(window: &WebviewWindow) -> tauri::Result<()> {
+pub(crate) fn show_and_focus(window: &WebviewWindow) -> tauri::Result<()> {
     window.unminimize()?;
     window.show()?;
     window.set_focus()
@@ -142,6 +145,12 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         entitlements.clone(),
         settings.clone(),
     )?);
+    let background = Background::new(
+        app.clone(),
+        queue.clone(),
+        settings.clone(),
+        entitlements.clone(),
+    );
     let updates = Arc::new(UpdateService::new(
         settings.clone(),
         update::current_kind(),
@@ -158,6 +167,7 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         entitlements,
         entitlement_feed: Arc::new(StatusFeed::default()),
         watcher,
+        background,
         updates,
         recovered: Mutex::new(recovered),
     })
@@ -195,12 +205,13 @@ fn spawn_transport(
 
 /// Sends `entitlements://status` after every change of the login state (the commands send it
 /// after a license change). The status is computed for the account signed in at that moment.
-/// The folder watcher is woken too: its gate follows the same verdict.
+/// The folder watcher and the tray are woken too: their gates follow the same verdict.
 fn spawn_entitlements_watch(
     app: &AppHandle,
     entitlements: Arc<LicenseEntitlements>,
     feed: Arc<StatusFeed>,
     watcher: Arc<WatchService>,
+    background: Arc<Background>,
     mut states: tokio::sync::watch::Receiver<transport::AuthState>,
 ) {
     let app = app.clone();
@@ -209,6 +220,7 @@ fn spawn_entitlements_watch(
             states.borrow_and_update();
             feed.publish(&app, entitlements.status());
             watcher.wake();
+            background.refresh();
             if states.changed().await.is_err() {
                 return;
             }
@@ -316,10 +328,13 @@ pub fn run() {
                 state.entitlements.clone(),
                 state.entitlement_feed.clone(),
                 state.watcher.clone(),
+                state.background.clone(),
                 state.transport.auth_state(),
             );
             tauri::async_runtime::spawn(async move { queue.run().await });
+            let background = state.background.clone();
             app.manage(state);
+            background.spawn();
             tracing::info!(event = "setup_done", "core ready");
             Ok(())
         })
@@ -376,7 +391,23 @@ pub fn run() {
             commands::update_check,
             commands::update_install,
             commands::update_open_page,
+            commands::app_quit,
         ])
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == MAIN_WINDOW
+                && let Some(state) = window.app_handle().try_state::<AppState>()
+                && state.background.hide_on_close()
+            {
+                api.prevent_close();
+                match window.hide() {
+                    Ok(()) => state.background.hidden(),
+                    Err(error) => {
+                        tracing::warn!(event = "window_error", error = %error, "could not hide the main window")
+                    }
+                }
+            }
+        })
         // The window is created hidden (tauri.conf.json) and shown once the page has loaded,
         // so a dark theme never flashes white while the WebView starts.
         .on_page_load(|webview, payload| {

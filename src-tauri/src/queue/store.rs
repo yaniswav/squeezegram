@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::str::FromStr;
 
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
@@ -240,6 +241,21 @@ pub struct WatchFolderPatch {
     pub destination_id: Option<i64>,
     #[serde(default, deserialize_with = "present_or_null")]
     pub send_mode: Option<Option<SendMode>>,
+}
+
+/// Result of `Store::activity`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Activity {
+    /// Being worked on: probing, encoding, remuxing, uploading or waiting for the server.
+    pub running: usize,
+    /// Will be picked up when the queue runs.
+    pub waiting: usize,
+}
+
+impl Activity {
+    pub fn total(self) -> usize {
+        self.running + self.waiting
+    }
 }
 
 /// A file of a watched folder the watcher has dealt with (`watch_seen`, schema v7): left alone
@@ -841,6 +857,27 @@ impl Store {
             .items_in_states(&[State::Ready, State::Encoded])?
             .into_iter()
             .next())
+    }
+
+    /// What the queue has to do now, for the tray: items being worked on (`State::is_running`)
+    /// and items that will run (`ready`, `encoded`). `pending_review` is the user's to decide.
+    pub fn activity(&self) -> Result<Activity> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT state, COUNT(*) FROM items GROUP BY state")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?;
+        let mut activity = Activity::default();
+        for row in rows {
+            let (name, count) = row?;
+            match State::from_str(&name) {
+                Ok(state) if state.is_running() => activity.running += count,
+                Ok(State::Ready | State::Encoded) => activity.waiting += count,
+                _ => {}
+            }
+        }
+        Ok(activity)
     }
 
     pub fn transition(&mut self, id: i64, to: State, changes: &Changes) -> Result<State> {
@@ -2530,6 +2567,36 @@ mod tests {
             store.update_watch_folder(folder.id, &WatchFolderPatch::default()),
             Err(QueueError::WatchFolderNotFound(_))
         ));
+    }
+
+    #[test]
+    fn activity_counts_what_runs_and_what_will_run_but_not_what_waits_for_the_user() {
+        let mut store = memory_store();
+        assert_eq!(store.activity().unwrap(), Activity::default());
+        for state in [
+            State::PendingReview,
+            State::Ready,
+            State::Encoded,
+            State::Encoding,
+            State::Uploading,
+            State::WaitingServer,
+            State::Sent,
+            State::Failed,
+            State::Unknown,
+            State::Cancelled,
+        ] {
+            let id = add_item(&mut store, &format!("{}.mp4", state.as_str()));
+            force_state(&store, id, state);
+        }
+        let activity = store.activity().unwrap();
+        assert_eq!(
+            activity,
+            Activity {
+                running: 3,
+                waiting: 2
+            }
+        );
+        assert_eq!(activity.total(), 5);
     }
 
     #[test]

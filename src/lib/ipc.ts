@@ -360,7 +360,18 @@ export interface Settings {
   }
   /** Used by an encode only while the license grants `advanced_encoding`. */
   advanced_encoding: AdvancedEncoding
+  /** `background`: takes effect only while the license grants the feature. */
+  background: { close_action: CloseAction }
 }
+
+/** Payload of `app://quit-requested`. */
+export interface QuitRequest {
+  /** Items being worked on (compressed or sent) that a quit would interrupt. */
+  running: number
+}
+
+/** What closing the window does: `quit` the app, or `tray` (keep running hidden). */
+export type CloseAction = "quit" | "tray"
 
 /** JSON merge patch (RFC 7396): objects merge, `null` resets a field to its default. */
 export type SettingsPatch = {
@@ -1011,6 +1022,9 @@ const settingsDecoder = d.object<Settings>({
     preset: encodePresetDecoder,
     target_mb: d.nullable(d.number),
   }),
+  background: d.object<Settings["background"]>({
+    close_action: d.literals<CloseAction>({ quit: true, tray: true }),
+  }),
 })
 
 const sidecarStatusDecoder = d.object<SidecarStatus>({
@@ -1516,6 +1530,11 @@ export function logPath(): Promise<string> {
   return call("log_path", d.string)
 }
 
+/** Quits the app (after the confirmation of `onQuitRequested`), through the clean shutdown. */
+export function appQuit(): Promise<void> {
+  return call("app_quit", d.nothing)
+}
+
 /** Opens the journal folder in the file explorer. */
 export function logOpenDir(): Promise<void> {
   return call("log_open_dir", d.nothing)
@@ -1595,6 +1614,13 @@ function subscribe<T>(
     stopped = true
     stop?.()
   }
+}
+
+const quitRequestedDecoder = d.object<QuitRequest>({ running: d.number })
+
+/** The tray's Quit was used while items run: the window asks before quitting. */
+export function onQuitRequested(handler: (event: QuitRequest) => void) {
+  return subscribe("app://quit-requested", quitRequestedDecoder, handler)
 }
 
 export function onQueueChanged(handler: (event: QueueChanged) => void) {
