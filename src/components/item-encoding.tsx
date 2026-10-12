@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from "react"
+import type { TFunction } from "i18next"
 import { useTranslation } from "react-i18next"
 import { CodecNote } from "@/components/codec-note"
 import { PurchaseButton } from "@/components/purchase-button"
@@ -73,7 +74,7 @@ function toOverride(draft: Draft): EncodingOverride | null {
 
 /** One line telling what a file is set to encode with. */
 function summary(
-  t: ReturnType<typeof useTranslation>["t"],
+  t: TFunction,
   language: string,
   choices: EncodingOverride,
 ): string {
