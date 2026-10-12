@@ -20,8 +20,26 @@ In progress or missing:
 - The TDLib transport is being integrated. The sign-in flow is tested against recorded TDLib responses only. Real sign-in, destination listing, uploads, FLOOD_WAIT handling and reconciliation are not verified end to end yet.
 - In a debug build the app uses a mock transport by default, so nothing reaches Telegram.
 - Update check and self-update are written but have never run against a real release (none is published yet).
-- Not written yet: watched folder, thumbnails, the release pipeline.
+- Not written yet: watched folder, thumbnails. The release pipeline (`.github/workflows/release.yml`) is written but has never run.
 - Windows 10/11 x64 only.
+
+## Download and verify
+
+Release builds will be published on the [Releases page](https://github.com/yaniswav/squeezegram/releases): an installer (per-user, with automatic updates) and a portable zip (no automatic updates), each with its SHA-256 in `SHA256SUMS.txt`.
+
+These builds are not code-signed:
+
+- Windows SmartScreen may show "Windows protected your PC". If you trust the file after checking its hash, choose "More info", then "Run anyway".
+- Some antivirus programs may flag the executable or `tdjson.dll` (the Telegram library). Unsigned software often triggers false positives. The source is public, so you can build it yourself.
+- Check the hash of what you downloaded before running it, and compare it with `SHA256SUMS.txt`:
+
+  ```powershell
+  Get-FileHash .\squeezegram-<version>-setup-x64.exe -Algorithm SHA256
+  ```
+
+  If the hashes differ, do not run the file.
+
+The app downloads an LGPL build of ffmpeg the first time you start it.
 
 ## Requirements
 
@@ -68,7 +86,7 @@ This starts the app with the mock transport. To use the real Telegram transport:
 
    Without `SQUEEZEGRAM_TRANSPORT`, a debug build uses `mock` and a release build uses `tdlib`.
 
-Checks (the CI workflow in `.github/workflows/build.yml` runs all of them except `cargo test`):
+Checks (the CI workflow in `.github/workflows/build.yml` runs all of them; for the tests it runs `cargo test --locked --lib`):
 
 ```powershell
 pnpm typecheck; pnpm lint; pnpm format:check

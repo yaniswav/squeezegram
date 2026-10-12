@@ -1,0 +1,192 @@
+# Release build: runs only when a tag vX.Y.Z is pushed to this repository.
+# It builds the installer and the portable zip, signs the installer for the updater and
+# creates a DRAFT GitHub release. It never publishes: the owner reviews the draft and
+# publishes it by hand.
+#
+# Secrets used (repository secrets, never written to a file or printed):
+#   SQUEEZEGRAM_TG_API_ID, SQUEEZEGRAM_TG_API_HASH   compiled into the executable by build.rs
+#   TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD)          updater signature of the installer
+# They are only visible to the "Build" step of the first job. The job that creates the
+# release has contents: write and no other secret.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # tdjson.dll (TDLib 1.8.68) is an asset of a release of this repository, published once
+  # with scripts/publish-tdjson.ps1. Its SHA-256 is the same pin as in
+  # scripts/stage-tdjson.ps1 and src-tauri/src/transport/tdlib/library.rs.
+  TDJSON_URL: https://github.com/${{ github.repository }}/releases/download/tdjson-1.8.68/tdjson.dll
+  TDJSON_SHA256: 048af1d1c97ef9b860dd5de132c4d2d901d444691ec86fc15012e5896dbde6b8
+
+jobs:
+  build:
+    name: Build
+    # The signing key and the Telegram identity live in the "release" environment, which
+    # only accepts v* tags and waits for the owner's approval before this job starts.
+    environment: release
+    runs-on: windows-latest
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Installs the exact version pinned in the "packageManager" field of package.json.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      # Restore only: a build that saw the release secrets never writes a cache.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          save-if: false
+
+      # The tag must be vX.Y.Z with X.Y.Z the version shared by package.json, Cargo.toml and
+      # tauri.conf.json (scripts/check-versions.ps1 fails if those three differ).
+      - name: Check that the tag matches the project version
+        id: version
+        shell: pwsh
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if ($env:REF_TYPE -ne 'tag') { throw "Not a tag: $env:REF_TYPE" }
+          $version = & ./scripts/check-versions.ps1 | Select-Object -Last 1
+          if ($env:REF_NAME -ne "v$version") {
+            throw "Tag $env:REF_NAME does not match the project version v$version"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # Download, then refuse anything but the pinned build. install-tdjson.ps1 and
+      # stage-tdjson.ps1 check the same hash again afterwards.
+      - name: Download tdjson.dll and check its SHA-256
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'tdjson-download'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $dll = Join-Path $dir 'tdjson.dll'
+          Invoke-WebRequest -Uri $env:TDJSON_URL -OutFile $dll -MaximumRedirection 5
+          $actual = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:TDJSON_SHA256) {
+            throw "tdjson.dll: SHA-256 $actual does not match the pinned $env:TDJSON_SHA256"
+          }
+          & ./scripts/install-tdjson.ps1 -FromFile $dll
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The only step that sees the secrets. build-release.ps1 reads them from the
+      # environment (build.rs and the Tauri bundler do); nothing echoes them or writes them
+      # to a file, and no shell tracing is on.
+      - name: Build installer, portable zip and checksums
+        shell: pwsh
+        env:
+          SQUEEZEGRAM_TG_API_ID: ${{ secrets.SQUEEZEGRAM_TG_API_ID }}
+          SQUEEZEGRAM_TG_API_HASH: ${{ secrets.SQUEEZEGRAM_TG_API_HASH }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          foreach ($name in 'SQUEEZEGRAM_TG_API_ID', 'SQUEEZEGRAM_TG_API_HASH', 'TAURI_SIGNING_PRIVATE_KEY') {
+            if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name))) {
+              throw "The repository secret $name is not set"
+            }
+          }
+          & ./scripts/build-release.ps1
+
+      - name: Write latest.json and the release notes
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          $sig = Join-Path 'dist-release' "squeezegram-$env:VERSION-setup-x64.exe.sig"
+          & ./scripts/make-latest-json.ps1 -Version $env:VERSION -Tag $env:REF_NAME -Repository $env:REPOSITORY -SignatureFile $sig
+          & ./scripts/render-release-notes.ps1 -Version $env:VERSION -Tag $env:REF_NAME -Repository $env:REPOSITORY
+
+      # Handed to the next job, which holds the write permission. The files are those the
+      # release will carry anyway; a short retention keeps an abandoned draft's files from
+      # lingering as workflow artifacts.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-files
+          path: |
+            dist-release/squeezegram-${{ steps.version.outputs.version }}-setup-x64.exe
+            dist-release/squeezegram-${{ steps.version.outputs.version }}-setup-x64.exe.sig
+            dist-release/squeezegram-${{ steps.version.outputs.version }}-portable-x64.zip
+            dist-release/SHA256SUMS.txt
+            dist-release/latest.json
+            dist-release/release-notes.md
+          if-no-files-found: error
+          retention-days: 1
+
+  draft-release:
+    name: Create draft release
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-files
+          path: release-files
+
+      # A draft is invisible to the public and to the updater until the owner publishes it.
+      # --verify-tag refuses to create a tag; the command fails if a release for this tag
+      # already exists, so nothing is overwritten. A version with a suffix (0.1.0-beta.1)
+      # is marked as a pre-release.
+      - name: Create the draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          # gh release create does not refuse a second draft for the same tag: check first.
+          $existing = & gh release list --repo $env:REPOSITORY --limit 100 --json tagName --jq '.[].tagName'
+          if ($LASTEXITCODE -ne 0) { throw "gh release list failed with exit code $LASTEXITCODE" }
+          if (@($existing) -contains $env:REF_NAME) { throw "A release or draft already exists for $env:REF_NAME" }
+          $dir = 'release-files'
+          $assets = @(
+            "squeezegram-$env:VERSION-setup-x64.exe",
+            "squeezegram-$env:VERSION-setup-x64.exe.sig",
+            "squeezegram-$env:VERSION-portable-x64.zip",
+            'SHA256SUMS.txt',
+            'latest.json'
+          ) | ForEach-Object {
+            $path = Join-Path $dir $_
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing release file: $path" }
+            $path
+          }
+          $notes = Join-Path $dir 'release-notes.md'
+          $flags = @('--draft', '--verify-tag', '--title', "squeezegram $env:VERSION", '--notes-file', $notes)
+          if ($env:VERSION -match '-') { $flags += '--prerelease' }
+          & gh release create $env:REF_NAME --repo $env:REPOSITORY @flags @assets
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
+          Write-Host "Draft release created for $env:REF_NAME. Review it, write the notes, then publish it by hand."
