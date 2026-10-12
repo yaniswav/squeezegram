@@ -34,7 +34,8 @@ pub enum Feature {
     /// Watched folders (`watch`): new files are queued for approval. Folders stay configured
     /// without it; the watcher lists them only while it is granted.
     WatchedFolder,
-    /// Declared, not wired to anything yet.
+    /// Background mode (`background`): closing the window can keep the app running from the
+    /// tray, and the app can start with Windows, hidden.
     Background,
 }
 
@@ -62,8 +63,10 @@ impl Feature {
     /// Flip a feature to `true` in the batch that wires it.
     pub fn shipped(self) -> bool {
         match self {
-            Feature::AdvancedEncoding | Feature::MultiDestination | Feature::WatchedFolder => true,
-            Feature::Background => false,
+            Feature::AdvancedEncoding
+            | Feature::MultiDestination
+            | Feature::WatchedFolder
+            | Feature::Background => true,
         }
     }
 
@@ -177,14 +180,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn advanced_encoding_multi_destination_and_watched_folder_are_shipped_today() {
+    fn every_declared_feature_is_shipped_today() {
         let shipped: Vec<_> = Feature::ALL.into_iter().filter(|f| f.shipped()).collect();
         assert_eq!(
             shipped,
             [
                 Feature::AdvancedEncoding,
                 Feature::MultiDestination,
-                Feature::WatchedFolder
+                Feature::WatchedFolder,
+                Feature::Background
             ]
         );
     }
