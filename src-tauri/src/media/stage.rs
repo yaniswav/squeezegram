@@ -339,6 +339,9 @@ impl FfmpegStage {
         temp_root(&self.settings.get().temp)
     }
 
+    /// Where `item`'s own encode is written. Not the only folder its output can be in: an item
+    /// that reuses another item's encoded file (`Store::reusable_output`) names a path under
+    /// that item's folder, so a cleanup must look at every row naming a path, not at ids.
     fn item_dir(&self, item: &Item) -> PathBuf {
         self.temp_base().join(item.id.to_string())
     }
