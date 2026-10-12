@@ -98,9 +98,18 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
+      # scripts/build-release.ps1 generates THIRD-PARTY-NOTICES.txt with cargo-about. The version
+      # is pinned in scripts/install-cargo-about.ps1 and compiled from crates.io with its own
+      # lock file (checksum-verified). Installed here, before the step that sees the secrets.
+      - name: Install cargo-about (pinned)
+        shell: pwsh
+        run: ./scripts/install-cargo-about.ps1
+
       # The only step that sees the secrets. build-release.ps1 reads them from the
       # environment (build.rs and the Tauri bundler do); nothing echoes them or writes them
       # to a file, and no shell tracing is on.
+      # It also generates THIRD-PARTY-NOTICES.txt (installer and zip) and fails if a crate or
+      # package has no licence text.
       - name: Build installer, portable zip and checksums
         shell: pwsh
         env:

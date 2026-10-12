@@ -43,6 +43,17 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
+      # The release ships THIRD-PARTY-NOTICES.txt, generated from Cargo.lock and pnpm-lock.yaml.
+      # Generating it here fails the build as soon as a dependency has no usable licence text,
+      # instead of at release time. cargo-about is pinned in scripts/install-cargo-about.ps1.
+      - name: Install cargo-about (pinned)
+        shell: pwsh
+        run: ./scripts/install-cargo-about.ps1
+
+      - name: Generate third-party notices
+        shell: pwsh
+        run: ./scripts/generate-notices.ps1
+
       - name: Type-check
         run: pnpm typecheck
 
