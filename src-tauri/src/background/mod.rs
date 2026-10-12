@@ -44,8 +44,10 @@ pub const QUIT_REQUESTED: &str = "app://quit-requested";
 pub const PENDING_GRACE: Duration = Duration::from_secs(60);
 
 /// How long an app started hidden waits for the license verdict, which needs the signed-in
-/// account, before it shows its window rather than stay invisible.
-pub const START_VERDICT_TIMEOUT: Duration = Duration::from_secs(20);
+/// account (TDLib opens its database and asks for `getMe`), before it shows its window rather
+/// than stay invisible. Generous because a login is when the disk and the network are
+/// busiest: giving up early would show the window of a licensed user at every boot.
+pub const START_VERDICT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Whether the arguments of this launch ask for a hidden start.
 pub fn started_in_background<I, S>(args: I) -> bool
