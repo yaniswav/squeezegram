@@ -407,8 +407,7 @@
         "advanced_encoding": "codificación avanzada",
         "multi_destination": "varios destinos",
         "watched_folder": "carpetas vigiladas",
-        "background": "modo en segundo plano",
-        "caption_templates": "plantillas de pie de foto"
+        "background": "modo en segundo plano"
       },
       "input": {
         "label": "Pegue su licencia",

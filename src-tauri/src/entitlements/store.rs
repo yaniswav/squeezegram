@@ -128,7 +128,13 @@ impl Verdict {
             Verdict::Applies(license) => EntitlementStatus {
                 plan: license.plan,
                 source: EntitlementSource::License,
-                features: license.features.clone(),
+                // Declared-but-unwired features are not shown as unlocked (`allows` is unchanged).
+                features: license
+                    .features
+                    .iter()
+                    .copied()
+                    .filter(|feature| feature.shipped())
+                    .collect(),
                 account_matches: Some(true),
                 reason: None,
             },
@@ -404,7 +410,7 @@ mod tests {
         EntitlementStatus {
             plan: Plan::Lifetime,
             source: EntitlementSource::License,
-            features: vec![Feature::AdvancedEncoding, Feature::MultiDestination],
+            features: vec![Feature::AdvancedEncoding],
             account_matches: Some(true),
             reason: None,
         }

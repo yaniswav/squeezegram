@@ -407,8 +407,7 @@
         "advanced_encoding": "encodage avancé",
         "multi_destination": "plusieurs destinations",
         "watched_folder": "dossiers surveillés",
-        "background": "mode arrière-plan",
-        "caption_templates": "modèles de légende"
+        "background": "mode arrière-plan"
       },
       "input": {
         "label": "Collez votre licence",

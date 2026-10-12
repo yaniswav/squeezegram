@@ -394,8 +394,7 @@
         "advanced_encoding": "advanced encoding",
         "multi_destination": "several destinations",
         "watched_folder": "watched folders",
-        "background": "background mode",
-        "caption_templates": "caption templates"
+        "background": "background mode"
       },
       "input": {
         "label": "Paste your license",

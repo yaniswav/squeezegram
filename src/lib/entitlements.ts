@@ -22,11 +22,7 @@ export type EntitlementSource =
 
 /** `entitlements::Feature`. */
 export type Feature =
-  | "advanced_encoding"
-  | "multi_destination"
-  | "watched_folder"
-  | "background"
-  | "caption_templates"
+  "advanced_encoding" | "multi_destination" | "watched_folder" | "background"
 
 /** `license::LicenseError::code`. */
 export type LicenseCode =
@@ -62,7 +58,6 @@ export const entitlementStatusDecoder = d.object<EntitlementStatus>({
       multi_destination: true,
       watched_folder: true,
       background: true,
-      caption_templates: true,
     }),
   ),
   account_matches: d.nullable(d.boolean),

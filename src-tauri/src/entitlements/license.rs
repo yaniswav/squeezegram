@@ -258,6 +258,7 @@ pub(crate) mod test_vectors {
     #[derive(Deserialize)]
     pub struct TestKey {
         pub kid: String,
+        pub seed_hex: String,
         pub public_hex: String,
     }
 
@@ -354,6 +355,37 @@ mod tests {
             verify(&vectors.case("valid").token, &KeyRing::empty()),
             Err(LicenseError::UnknownKid)
         );
+    }
+
+    #[test]
+    fn a_license_issued_with_caption_templates_still_verifies() {
+        // Caption templates left the Feature enum (they will be free), but licences already
+        // sold list "caption_templates" in `feat`. The test key's seed is public, so the token
+        // can be signed here instead of added to the vectors.
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let vectors = test_vectors::load();
+        let seed = hex32(&vectors.test_key.seed_hex);
+        let payload = serde_json::json!({
+            "v": 1,
+            "kid": vectors.test_key.kid,
+            "sub": subject_for(777000001),
+            "plan": "lifetime",
+            "feat": ["caption_templates", "advanced_encoding"],
+            "iat": 1_700_000_000,
+            "jti": "legacy-caption-templates",
+        });
+        let signed = format!(
+            "{PREFIX}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap())
+        );
+        let signature = SigningKey::from_bytes(&seed).sign(signed.as_bytes());
+        let token = format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()));
+
+        let license = verify(&token, &vectors.key_ring()).unwrap();
+        assert_eq!(license.features, [Feature::AdvancedEncoding]);
+        assert!(license.allows(Feature::AdvancedEncoding));
+        assert_eq!(Feature::from_name("caption_templates"), None);
     }
 
     #[test]

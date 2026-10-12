@@ -381,8 +381,7 @@
         "advanced_encoding": "encoding lanjutan",
         "multi_destination": "beberapa tujuan",
         "watched_folder": "folder yang dipantau",
-        "background": "mode latar belakang",
-        "caption_templates": "templat keterangan"
+        "background": "mode latar belakang"
       },
       "input": {
         "label": "Tempel lisensi Anda",

@@ -203,7 +203,6 @@ test("every license code and feature has an English text", () => {
     "multi_destination",
     "watched_folder",
     "background",
-    "caption_templates",
   ]) {
     assert.ok(isJsonString(names[feature]), feature)
   }

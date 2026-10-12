@@ -420,8 +420,7 @@
         "advanced_encoding": "расширенное кодирование",
         "multi_destination": "несколько получателей",
         "watched_folder": "отслеживаемые папки",
-        "background": "фоновый режим",
-        "caption_templates": "шаблоны подписей"
+        "background": "фоновый режим"
       },
       "input": {
         "label": "Вставьте лицензию",

@@ -407,8 +407,7 @@
         "advanced_encoding": "codificação avançada",
         "multi_destination": "vários destinos",
         "watched_folder": "pastas monitoradas",
-        "background": "modo em segundo plano",
-        "caption_templates": "modelos de legenda"
+        "background": "modo em segundo plano"
       },
       "input": {
         "label": "Cole sua licença",

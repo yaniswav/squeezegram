@@ -32,17 +32,14 @@ pub enum Feature {
     WatchedFolder,
     /// Declared, not wired to anything yet.
     Background,
-    /// Declared, not wired to anything yet.
-    CaptionTemplates,
 }
 
 impl Feature {
-    pub const ALL: [Feature; 5] = [
+    pub const ALL: [Feature; 4] = [
         Feature::AdvancedEncoding,
         Feature::MultiDestination,
         Feature::WatchedFolder,
         Feature::Background,
-        Feature::CaptionTemplates,
     ];
 
     /// Name in a license's `feat` list (also its serialized form).
@@ -52,11 +49,23 @@ impl Feature {
             Feature::MultiDestination => "multi_destination",
             Feature::WatchedFolder => "watched_folder",
             Feature::Background => "background",
-            Feature::CaptionTemplates => "caption_templates",
         }
     }
 
-    /// `None` for a name this version does not know.
+    /// Whether the feature does something in this version. The licence screen lists only
+    /// these: a licence may name features that are declared but not wired yet, and showing
+    /// them as "Unlocked" would promise something that does not exist. `allows` ignores this.
+    /// Flip a feature to `true` in the batch that wires it.
+    pub fn shipped(self) -> bool {
+        match self {
+            Feature::AdvancedEncoding => true,
+            Feature::MultiDestination | Feature::WatchedFolder | Feature::Background => false,
+        }
+    }
+
+    /// `None` for a name this version does not know. Caption templates were removed (they
+    /// will be free), but licences already issued still list `caption_templates`: it lands
+    /// here and is ignored, so those licences keep verifying.
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
@@ -162,6 +171,12 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn only_advanced_encoding_is_shipped_today() {
+        let shipped: Vec<_> = Feature::ALL.into_iter().filter(|f| f.shipped()).collect();
+        assert_eq!(shipped, [Feature::AdvancedEncoding]);
+    }
 
     #[test]
     fn free_only_refuses_every_feature() {
