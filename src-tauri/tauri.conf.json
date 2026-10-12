@@ -55,7 +55,8 @@
       ],
       "windows": {
         "installMode": "passive"
-      }
+      },
+      "requireSignedVersion": true
     }
   },
   "bundle": {

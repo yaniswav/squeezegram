@@ -453,6 +453,9 @@ mod tests {
             ["https://github.com/yaniswav/squeezegram/releases/latest/download/latest.json"]
         );
         assert_eq!(updater.windows.unwrap().install_mode.to_string(), "passive");
+        // latest.json is not signed: without this, a crafted manifest could pair a new version
+        // number with an older, genuinely signed release and force a downgrade.
+        assert!(updater.require_signed_version);
         // A public minisign key: base64 of "untrusted comment: minisign public key: ...".
         let decoded =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &updater.pubkey)
