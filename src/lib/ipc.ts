@@ -1535,6 +1535,19 @@ export function appQuit(): Promise<void> {
   return call("app_quit", d.nothing)
 }
 
+/** Whether the app starts with Windows (the startup entry exists). */
+export function autostartStatus(): Promise<boolean> {
+  return call("autostart_status", d.boolean)
+}
+
+/**
+ * Turns "start with Windows" on (`FEATURE_NOT_LICENSED` without the license) or off (always
+ * allowed). Resolves to whether it is on.
+ */
+export function autostartSet(enabled: boolean): Promise<boolean> {
+  return call("autostart_set", d.boolean, { enabled })
+}
+
 /** Opens the journal folder in the file explorer. */
 export function logOpenDir(): Promise<void> {
   return call("log_open_dir", d.nothing)

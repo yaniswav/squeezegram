@@ -667,6 +667,11 @@
         "hint": "While it keeps running, the queue and the watched folders go on working. Right-click the icon in the notification area to pause the queue or quit.",
         "quit": "Quit squeezegram",
         "tray": "Keep running in the notification area"
+      },
+      "autostart": {
+        "label": "Start with Windows",
+        "hint": "squeezegram starts when you sign in to Windows and stays hidden in the notification area. This applies right away; there is nothing to save.",
+        "inactive": "Starting hidden needs Premium. The startup entry is still there, so Windows starts squeezegram with its window showing. Turn this off to remove the entry."
       }
     }
   },

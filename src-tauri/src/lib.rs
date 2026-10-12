@@ -38,6 +38,7 @@ use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, RunEvent, WebviewWindow, WindowEvent};
 
 use background::Background;
+use background::autostart::RegistryAutostart;
 use commands::{AppState, StatusFeed, TauriEvents};
 use entitlements::{Entitlements, LicenseEntitlements};
 use limit::LimitResolver;
@@ -64,11 +65,16 @@ pub(crate) fn show_and_focus(window: &WebviewWindow) -> tauri::Result<()> {
 }
 
 /// Called in the running instance whenever the user starts the app a second time.
-fn focus_main_window(app: &AppHandle) {
+fn focus_main_window(app: &AppHandle, args: &[String]) {
     tracing::info!(
         event = "second_instance",
+        hidden = background::started_in_background(args),
         "second launch forwarded to this instance"
     );
+    // The login entry firing while the app already runs must not pull its window up.
+    if background::started_in_background(args) {
+        return;
+    }
     if let Some(window) = app.get_webview_window(MAIN_WINDOW)
         && let Err(error) = show_and_focus(&window)
     {
@@ -150,6 +156,8 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         queue.clone(),
         settings.clone(),
         entitlements.clone(),
+        Arc::new(RegistryAutostart),
+        background::started_in_background(std::env::args()),
     );
     let updates = Arc::new(UpdateService::new(
         settings.clone(),
@@ -305,8 +313,8 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         // Must stay the first plugin: a second launch is forwarded to this instance, then exits.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            focus_main_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            focus_main_window(app, &args);
         }))
         .plugin(tauri_plugin_dialog::init())
         // Driven from `commands::update_*` only: the page gets no permission on the plugin.
@@ -392,6 +400,8 @@ pub fn run() {
             commands::update_install,
             commands::update_open_page,
             commands::app_quit,
+            commands::autostart_status,
+            commands::autostart_set,
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event
@@ -412,9 +422,15 @@ pub fn run() {
         // so a dark theme never flashes white while the WebView starts.
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
-                tracing::info!(event = "page_loaded", "page loaded, window shown");
-                if let Err(error) = webview.window().show() {
-                    tracing::warn!(event = "window_error", error = %error, "could not show the main window");
+                tracing::info!(event = "page_loaded", "page loaded");
+                // Shown now, unless the app started hidden in the tray.
+                match webview.app_handle().try_state::<AppState>() {
+                    Some(state) => state.background.page_loaded(),
+                    None => {
+                        if let Err(error) = webview.window().show() {
+                            tracing::warn!(event = "window_error", error = %error, "could not show the main window");
+                        }
+                    }
                 }
                 announce_recovery(webview.app_handle());
                 start_update_check(webview.app_handle());

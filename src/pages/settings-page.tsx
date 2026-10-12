@@ -51,6 +51,8 @@ import {
 import { grants, hasStoredLicense, licenseView } from "@/lib/entitlements"
 import { formatDateTime, formatList, formatNumber } from "@/lib/format"
 import {
+  autostartSet,
+  autostartStatus,
   debugExport,
   encoderStatus,
   isDesktop,
@@ -327,6 +329,65 @@ export function SettingsPage({ focusTitle }: { focusTitle: boolean }) {
           <WatchedFolders entitlements={entitlements} />
           <SettingsForm settings={settings} entitlements={entitlements} />
         </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * "Start with Windows" is a startup entry, not a saved setting: it applies at once and the
+ * page asks the core for its state. Turning it on needs the license; turning it off never
+ * does, so an entry left from a lost license can be removed.
+ */
+function StartWithWindows({ granted }: { granted: boolean }) {
+  const { t } = useTranslation()
+  const { pushError } = useAlerts()
+  const id = useId()
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    autostartStatus().then(setEnabled, () => setEnabled(null))
+  }, [])
+
+  async function change(next: boolean) {
+    setBusy(true)
+
+    try {
+      setEnabled(await autostartSet(next))
+    } catch (error) {
+      pushError(error)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0 space-y-1">
+          <label htmlFor={id} className="block text-sm font-medium">
+            {t("settings.background.autostart.label")}
+          </label>
+          <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+            {t("settings.background.autostart.hint")}
+          </p>
+        </div>
+        <Switch
+          id={id}
+          aria-describedby={`${id}-hint`}
+          checked={enabled === true}
+          disabled={busy || enabled === null || (!granted && !enabled)}
+          onCheckedChange={(checked) => void change(checked)}
+        />
+      </div>
+      {enabled === true && !granted && (
+        <p
+          role="status"
+          className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm"
+        >
+          {t("settings.background.autostart.inactive")}
+        </p>
       )}
     </div>
   )
@@ -1276,6 +1337,7 @@ function SettingsForm({
             />
           )}
         </Field>
+        <StartWithWindows granted={backgroundGranted} />
       </Section>
 
       <Section title={t("settings.send.title")} hint={t("settings.send.hint")}>

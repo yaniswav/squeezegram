@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::background::Background;
+use crate::background::autostart::AutostartError;
 use crate::entitlements::store::StoreError;
 use crate::entitlements::{self, EntitlementStatus, Entitlements, Feature, LicenseEntitlements};
 use crate::limit::{EffectiveLimit, LimitResolver};
@@ -1043,6 +1044,29 @@ pub fn app_quit(state: State<'_, AppState>) {
     let call = Call::new("app_quit");
     state.background.quit("confirmation");
     call.done(())
+}
+
+/// Whether the app starts with Windows (the entry exists). Stays true after the license is
+/// lost: the entry is left as it is, but it starts the app with its window (see
+/// `background::autostart`).
+#[tauri::command]
+pub fn autostart_status(state: State<'_, AppState>) -> bool {
+    Call::quiet("autostart_status").done(state.background.autostart_enabled())
+}
+
+/// Turns "start with Windows" on, or off. On needs the license (`FEATURE_NOT_LICENSED`);
+/// off is always allowed. Returns whether it is on.
+#[tauri::command]
+pub fn autostart_set(state: State<'_, AppState>, enabled: bool) -> CommandResult<bool> {
+    let call = Call::new("autostart_set").arg("enabled", enabled);
+    let result = state
+        .background
+        .set_autostart(enabled)
+        .map_err(|error| match error {
+            AutostartError::NotLicensed => CommandError::not_licensed(Feature::Background),
+            AutostartError::Io(_) => CommandError::io(),
+        });
+    call.finish(result)
 }
 
 /// `explorer.exe` from the Windows folder. A bare name would be looked up in the working

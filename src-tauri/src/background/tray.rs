@@ -16,10 +16,11 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, Tray
 use tauri::{AppHandle, Emitter, Manager, Wry};
 use tokio::sync::Notify;
 
+use super::autostart::{self, Autostart, AutostartError};
 use super::labels::Labels;
 use super::{
-    CloseBehavior, PENDING_GRACE, QUIT_REQUESTED, close_behavior, licensed_for_tray, queue_line,
-    tray_wanted,
+    CloseBehavior, PENDING_GRACE, QUIT_REQUESTED, START_VERDICT_TIMEOUT, StartVisibility,
+    close_behavior, licensed_for_tray, queue_line, start_visibility, tray_wanted,
 };
 use crate::MAIN_WINDOW;
 use crate::commands::AppState;
@@ -42,15 +43,29 @@ struct TrayParts {
     quit: MenuItem<Wry>,
 }
 
+/// Where the first display of the window stands.
+struct Start {
+    page_loaded: bool,
+    /// The window is shown as soon as the page has loaded (a normal start, or a hidden start
+    /// that turned out to have no tray).
+    show_when_loaded: bool,
+    /// Started hidden, and still waiting for the license verdict.
+    waiting: bool,
+    /// The verdict took too long.
+    expired: bool,
+}
+
 pub struct Background {
     app: AppHandle,
     queue: Orchestrator,
     settings: Arc<SettingsStore>,
     entitlements: Arc<dyn Entitlements>,
+    autostart: Arc<dyn Autostart>,
     wake: Notify,
     tray: Mutex<Option<TrayParts>>,
     /// Since when the license has been waiting for its account, if it is.
     pending_since: Mutex<Option<Instant>>,
+    start: Mutex<Start>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -71,15 +86,24 @@ impl Background {
         queue: Orchestrator,
         settings: Arc<SettingsStore>,
         entitlements: Arc<dyn Entitlements>,
+        autostart: Arc<dyn Autostart>,
+        hidden_start: bool,
     ) -> Arc<Self> {
         Arc::new(Self {
             app,
             queue,
             settings,
             entitlements,
+            autostart,
             wake: Notify::new(),
             tray: Mutex::new(None),
             pending_since: Mutex::new(None),
+            start: Mutex::new(Start {
+                page_loaded: false,
+                show_when_loaded: !hidden_start,
+                waiting: hidden_start,
+                expired: false,
+            }),
         })
     }
 
@@ -96,6 +120,14 @@ impl Background {
                 }
             }
         });
+        if lock(&self.start).waiting {
+            let this = self.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(START_VERDICT_TIMEOUT).await;
+                lock(&this.start).expired = true;
+                this.refresh();
+            });
+        }
         self.refresh();
     }
 
@@ -104,8 +136,31 @@ impl Background {
         self.wake.notify_one();
     }
 
+    /// The page has loaded: the window may be shown without a white flash.
+    pub fn page_loaded(&self) {
+        let show = {
+            let mut start = lock(&self.start);
+            start.page_loaded = true;
+            start.show_when_loaded
+        };
+        if show {
+            self.show_window("start");
+        }
+    }
+
     /// Brings the window up (tray click, menu, second launch of the app).
     pub fn reveal(&self, from: &'static str) {
+        {
+            let mut start = lock(&self.start);
+            if !start.page_loaded {
+                start.show_when_loaded = true;
+                return;
+            }
+        }
+        self.show_window(from);
+    }
+
+    fn show_window(&self, from: &'static str) {
         let Some(window) = self.app.get_webview_window(MAIN_WINDOW) else {
             return;
         };
@@ -148,6 +203,42 @@ impl Background {
 
     fn is_pending(&self) -> bool {
         self.entitlements.status().source == EntitlementSource::Pending
+    }
+
+    /// Whether the app starts with Windows (the entry exists), licensed or not.
+    pub fn autostart_enabled(&self) -> bool {
+        self.autostart.is_enabled()
+    }
+
+    /// Turns "start with Windows" on (licensed only) or off, and returns whether it is on.
+    pub fn set_autostart(&self, enabled: bool) -> Result<bool, AutostartError> {
+        let exe = std::env::current_exe().map_err(AutostartError::Io)?;
+        let result = autostart::set(
+            self.autostart.as_ref(),
+            self.entitlements.as_ref(),
+            &exe,
+            enabled,
+        );
+        match &result {
+            Ok(on) => tracing::info!(
+                event = "autostart_set",
+                enabled = *on,
+                "start with Windows changed"
+            ),
+            Err(AutostartError::NotLicensed) => {
+                tracing::info!(
+                    event = "autostart_set",
+                    enabled,
+                    refused = "not_licensed",
+                    "start with Windows refused"
+                )
+            }
+            Err(error) => {
+                tracing::warn!(event = "autostart_error", enabled, error = %error, "start with Windows not changed")
+            }
+        }
+        self.refresh();
+        result
     }
 
     /// Quit asked from the tray: at once when nothing is being worked on, else the window
@@ -204,7 +295,11 @@ impl Background {
 
         let mut tray = lock(&self.tray);
         let licensed = self.licensed(tray.is_some());
-        let wanted = tray_wanted(licensed, settings.background.close_action);
+        let wanted = tray_wanted(
+            licensed,
+            settings.background.close_action,
+            self.autostart.is_enabled(),
+        );
         if wanted && tray.is_none() {
             match self.build(&Labels::for_language(&settings.ui.language)) {
                 Ok(parts) => {
@@ -225,12 +320,15 @@ impl Background {
                 .get_webview_window(MAIN_WINDOW)
                 .is_some_and(|window| !window.is_visible().unwrap_or(true));
             if hidden {
-                self.reveal("tray_removed");
+                self.show_window("tray_removed");
             }
         }
         if let Some(parts) = tray.as_ref() {
             self.update(parts, &Labels::for_language(&settings.ui.language));
         }
+        let tray_exists = tray.is_some();
+        drop(tray);
+        self.settle_start(tray_exists, pending);
     }
 
     /// Remembers since when the license waits for its account, and wakes up when the grace
@@ -248,6 +346,34 @@ impl Background {
             }
             (false, true) => *since = None,
             _ => {}
+        }
+    }
+
+    /// A start with `--background` shows its window unless the tray is there to bring it back.
+    fn settle_start(&self, tray_exists: bool, pending: bool) {
+        let mut start = lock(&self.start);
+        if !start.waiting {
+            return;
+        }
+        match start_visibility(tray_exists, pending, start.expired) {
+            StartVisibility::Wait => {}
+            StartVisibility::Hide => {
+                start.waiting = false;
+                tracing::info!(
+                    event = "app_hidden",
+                    reason = "start",
+                    "started hidden in the tray"
+                );
+            }
+            StartVisibility::Show => {
+                start.waiting = false;
+                drop(start);
+                tracing::info!(
+                    event = "start_visible",
+                    "started with --background but no tray: showing the window"
+                );
+                self.reveal("start");
+            }
         }
     }
 
