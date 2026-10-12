@@ -1,64 +1,105 @@
 # squeezegram
 
-squeezegram is a Windows desktop app that sends local videos and photos to Telegram chats, groups and forum topics. When a video is over Telegram's upload limit (2,000 MiB, or 4,000 MiB with Premium), the app compresses it to just under the limit with the best encoder it finds on the machine: NVENC, Quick Sync or AMF on a GPU, otherwise a CPU encoder.
+squeezegram is a Windows app that sends videos and photos from your computer to Telegram chats, groups and forum topics, from your own Telegram account. When a video is over Telegram's upload limit, it first compresses it to just under that limit, using your graphics card when it can (NVENC, Quick Sync or AMF), otherwise the processor.
 
-It is built with Tauri 2 (Rust) and React. Telegram access goes through [TDLib](https://github.com/tdlib/td), and compression through FFmpeg running as a separate process.
+- The limit is 2,000 MiB (about 2 GB), or 4,000 MiB (about 4 GB) if your Telegram account has Telegram Premium. squeezegram reads which one applies from your account, and you can override it in Settings.
+- Files already under the limit are sent as they are, or repackaged without re-encoding when that is enough.
+- Uploads go through a persistent queue: one upload at a time, pause, cancel, reorder, and recovery after a crash. A file whose upload outcome is unknown after a crash is never resent automatically; you decide.
+- The core is free. An optional one-time purchase, squeezegram Premium, adds a few conveniences (see below).
 
-## Status
+Windows 10 or 11, x64 only.
 
-Alpha. There is no release and no installer yet; the only way to run it is to build it from source.
+## Download
 
-Implemented, with unit and integration tests:
+Get the latest version from the [Releases page](https://github.com/yaniswav/squeezegram/releases):
 
-- Persistent queue (SQLite) with one upload at a time, pause, cancel, reorder, and recovery after a crash. An item whose upload outcome is unknown is never resent automatically.
-- Media pipeline: `ffprobe` analysis, encoder detection by test encode, encoding to a size target with a corrective pass, remux when re-encoding is not needed, BLAKE3 content hash for duplicate detection.
-- FFmpeg setup: download of a pinned LGPL build with SHA-256 check, or use of an FFmpeg already on the machine.
-- A structured local log and a debug export with paths and identifiers masked.
+- **Installer** (`squeezegram-<version>-setup-x64.exe`): installs for the current user, no administrator rights needed, and updates itself (the app downloads a new version only when you press "Download and install").
+- **Portable zip** (`squeezegram-<version>-portable-x64.zip`): unzip anywhere and run `squeezegram.exe`. It does not update itself; it only shows a link to the release page when a newer version exists.
 
-In progress or missing:
+Each release lists the SHA-256 of both files in `SHA256SUMS.txt`. To check what you downloaded:
 
-- The TDLib transport is being integrated. The sign-in flow is tested against recorded TDLib responses only. Real sign-in, destination listing, uploads, FLOOD_WAIT handling and reconciliation are not verified end to end yet.
-- In a debug build the app uses a mock transport by default, so nothing reaches Telegram.
-- Update check and self-update are written but have never run against a real release (none is published yet).
-- Not written yet: watched folder, thumbnails. The release pipeline (`.github/workflows/release.yml`) is written but has never run.
-- Windows 10/11 x64 only.
+```powershell
+Get-FileHash .\squeezegram-<version>-setup-x64.exe -Algorithm SHA256
+```
 
-## Download and verify
+If the hash differs from the one in `SHA256SUMS.txt`, do not run the file.
 
-Release builds will be published on the [Releases page](https://github.com/yaniswav/squeezegram/releases): an installer (per-user, with automatic updates) and a portable zip (no automatic updates), each with its SHA-256 in `SHA256SUMS.txt`.
+### SmartScreen and antivirus
 
-These builds are not code-signed:
+The executable is not code-signed. Windows SmartScreen may show "Windows protected your PC": if you trust the file after checking its hash, choose "More info", then "Run anyway". Some antivirus programs may flag the executable or `tdjson.dll` (the Telegram library); unsigned software often triggers false positives. The source is public, so you can build it yourself (see the end of this page).
 
-- Windows SmartScreen may show "Windows protected your PC". If you trust the file after checking its hash, choose "More info", then "Run anyway".
-- Some antivirus programs may flag the executable or `tdjson.dll` (the Telegram library). Unsigned software often triggers false positives. The source is public, so you can build it yourself.
-- Check the hash of what you downloaded before running it, and compare it with `SHA256SUMS.txt`:
+## First launch
 
-  ```powershell
-  Get-FileHash .\squeezegram-<version>-setup-x64.exe -Algorithm SHA256
-  ```
+1. **ffmpeg.** squeezegram needs ffmpeg to compress. Press "Download ffmpeg (LGPL)": it downloads one pinned LGPL build from the BtbN FFmpeg-Builds release on GitHub, checks its SHA-256, and installs it. You can also point it at an ffmpeg you already have ("Use my own ffmpeg").
+2. **Sign in to Telegram** with a QR code (scan it from Telegram on your phone) or with your phone number.
+3. Add files, choose the destination chat or topic, and send.
 
-  If the hashes differ, do not run the file.
+## What it does
 
-The app downloads an LGPL build of ffmpeg the first time you start it.
+Free:
 
-## Requirements
+- Compression to just under the upload limit, with automatic encoder choice (graphics card first, processor as fallback).
+- Sending to chats, groups and forum topics, with caption templates (variables are listed in the app), thumbnails, and a minimum interval between sends set per destination.
+- Duplicate detection: a file already sent to a destination waits for your confirmation, with a link to the earlier message.
+- Removal of location and camera data (GPS position, camera serial numbers, editing history) from photos, and the recorded location of compliant MP4 videos, when they are sent without re-encoding. HEIC files are sent unchanged.
+- Proxy support (SOCKS5, HTTP, MTProto).
+- The option to use your own Telegram `api_id` (from <https://my.telegram.org>) instead of squeezegram's.
+- Automatic updates (installer) or a portable build.
+- Seven interface languages: English, plus French, Russian, Spanish, Arabic, Brazilian Portuguese and Indonesian. The six others are machine translations not yet reviewed by a native speaker, and are marked "beta" in the language list.
+
+### Free and Premium
+
+squeezegram Premium is a lifetime licence bought once in Telegram Stars from `@squeezegram_bot` on Telegram. The key is tied to your Telegram account and checked on your computer, with no network request. It is unrelated to Telegram Premium, which only raises the upload limit.
+
+| | Free | squeezegram Premium |
+| --- | --- | --- |
+| Compression and sending | yes | yes |
+| Caption templates, thumbnails, duplicate detection, metadata removal | yes | yes |
+| Proxy, own `api_id`, languages, updates | yes | yes |
+| Video codec (H.264 or HEVC), encoder speed, target size, maximum resolution, audio bitrate, per-file settings | automatic values | adjustable |
+| Send one batch to several chats or topics | one destination per batch | several |
+| Watched folders (new files wait in the queue for your approval, never sent automatically) | no | yes |
+| Background mode (notification-area icon, start with Windows) | no | yes |
+
+## Privacy
+
+squeezegram has no analytics or telemetry and no server of its own. Your files, settings, queue, Telegram session and logs stay on your computer, in `%LOCALAPPDATA%\squeezegram`.
+
+What leaves your computer:
+
+- **To Telegram**, through TDLib (Telegram's own client library): what you choose to send, meaning the file (compressed or as is, with location and camera data removed if that option is on), its caption and its destination, plus the normal traffic of a Telegram client. Nothing is sent that you did not queue.
+- **To GitHub**, to download ffmpeg on first setup.
+- **To GitHub**, to look for a newer version: at startup at most once every 24 hours (Settings, Updates, "Check automatically" turns this off) and when you press "Check now". It is a plain HTTPS request for `latest.json`; GitHub sees your IP address, as for any download. No identifier, Windows version or usage data is sent.
+- **To your proxy**, if you set one, which then carries all connections to Telegram.
+
+The Telegram session is stored in an encrypted TDLib database whose key is protected with Windows DPAPI. The local journal is kept for 7 days at most, never contains your phone number, codes, passwords, e-mail address or captions, and is exported only if you create a debug report yourself.
+
+To remove everything, tick "Delete app data" in the uninstaller: it also deletes `%LOCALAPPDATA%\squeezegram` (Telegram session, database, logs, settings, ffmpeg). It is kept during an update.
+
+### A warning about Telegram
+
+Sending messages to groups from a user account is subject to Telegram's terms. Repeated sends to groups where you lack permissions, or sending many files in a short time, can get an account limited or restricted by Telegram. squeezegram respects the waiting times Telegram asks for and offers a per-destination interval, but it cannot prevent a restriction. You use it at your own risk.
+
+## Build from source
+
+You do not need this to use squeezegram. Requirements:
 
 - Windows 10 or 11, x64
 - Node.js 22.12 or later (`.node-version`) and pnpm 10 (the exact version is pinned in `package.json`; `corepack enable` installs it)
-- Rust stable 1.90 or later with the MSVC toolchain (Visual Studio Build Tools, "Desktop development with C++")
+- Rust 1.90 or later with the MSVC toolchain (Visual Studio Build Tools, "Desktop development with C++"); CI uses 1.99.0
 - Microsoft Edge WebView2 Runtime (preinstalled on Windows 11)
-- For the TDLib transport: the Microsoft Visual C++ Redistributable (x64), which `tdjson.dll` needs
+- Microsoft Visual C++ Redistributable (x64), which `tdjson.dll` needs
 
-## Build and run
+### Build and run
 
 ```powershell
 pnpm install
 pnpm tauri dev
 ```
 
-This starts the app with the mock transport. To use the real Telegram transport:
+This starts the app with a mock transport that sends nothing to Telegram. To use the real Telegram transport:
 
-1. Get a `tdjson.dll` built from TDLib 1.8.68 (https://github.com/tdlib/td, commit `c15d3f5a5de6e3ba5839822c451152e5e18bb700`, Windows x64, OpenSSL 3.6.5 and zlib 1.3.2 statically linked). No prebuilt copy is published yet. The script checks the SHA-256 of the pinned build and copies the DLL to `%LOCALAPPDATA%\squeezegram\tdlib\bin`:
+1. Get the pinned `tdjson.dll` (TDLib 1.8.68, commit `c15d3f5a5de6e3ba5839822c451152e5e18bb700`, Windows x64, OpenSSL and zlib statically linked): either build it yourself from <https://github.com/tdlib/td>, or take the `tdjson.dll` asset of this repository's `tdjson-1.8.68` pre-release, which the release workflow also uses. Then install it. The script checks the SHA-256 of the pinned build and copies the DLL to `%LOCALAPPDATA%\squeezegram\tdlib\bin`; it never downloads anything:
 
    ```powershell
    pwsh -File scripts\install-tdjson.ps1 -FromFile C:\path\to\tdjson.dll
@@ -86,39 +127,19 @@ This starts the app with the mock transport. To use the real Telegram transport:
 
    Without `SQUEEZEGRAM_TRANSPORT`, a debug build uses `mock` and a release build uses `tdlib`.
 
-Checks (the CI workflow in `.github/workflows/build.yml` runs all of them; for the tests it runs `cargo test --locked --lib`):
+Checks (the CI workflow in `.github/workflows/build.yml` runs all of them; for the Rust tests it runs `cargo test --locked --lib`):
 
 ```powershell
 pnpm typecheck; pnpm lint; pnpm format:check
 cd src-tauri; cargo fmt --check; cargo clippy --locked -- -D warnings; cargo test
 ```
 
-## Privacy
-
-squeezegram collects no analytics or telemetry and has no server of its own. It makes three kinds of outgoing connections:
-
-- to Telegram's servers, through TDLib, when the Telegram transport is enabled;
-- to GitHub, to download FFmpeg from the pinned BtbN release on first setup;
-- to GitHub, to look for a newer version: at startup at most once every 24 hours (Settings > Updates > Check automatically turns this off) and when you press "Check now". The request is a plain HTTPS GET of `releases/latest/download/latest.json` carrying only the updater plugin's default headers (`Accept` and `User-Agent: tauri-plugin-updater/<plugin version>`; the endpoint has no version placeholder, so the app version is not sent), so GitHub sees your IP address as it would for any download. No identifier, Windows version or usage data is sent. The installed app downloads and installs an update only when you press "Download and install", after checking its signature against the public key in `src-tauri/tauri.conf.json`; the portable zip only shows a link to the release page.
-
-The Telegram session is stored locally in an encrypted TDLib database whose key is protected with Windows DPAPI. Logs stay on your machine; the debug export is a file you create and share yourself.
-
-Sending messages to groups through a user account is subject to Telegram's terms. Repeated sends to groups where you lack permissions can get an account restricted.
-
-## Antivirus warnings
-
-Builds are not code-signed. Windows SmartScreen and some antivirus products may warn about an unsigned executable or about `tdjson.dll`, and false positives are possible. Building from source lets you check what you run.
-
 ## License
 
-squeezegram is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, modify and share it for noncommercial purposes as defined in that license.
+squeezegram is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, modify and share it for noncommercial purposes as defined in that license. Commercial use requires a separate written agreement with the author: open an issue on this repository to ask.
 
 Third-party components keep their own licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Releases include the full notices as `THIRD-PARTY-NOTICES.txt`, next to the executable.
 
-### Commercial use
-
-Commercial use requires a separate written agreement with the author. To ask, open an issue on this repository.
-
 ## Contributing and security
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). The maintainer's internal design notes are not published in this repository.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
