@@ -15,8 +15,8 @@
 //! `settings.watch.stable_seconds` (two listings at least), it is not empty, its content is on
 //! the disk (a OneDrive placeholder would be downloaded by any read: it waits until the user
 //! or the sync client brings it), and it opens for reading while refusing writers, which fails
-//! as long as a program still holds it open for writing. Partial and temporary files (`.part`,
-//! `.crdownload`, `.tmp`, `~$…`), hidden and system files, folders, links and files that are not
+//! as long as a program still holds it open for writing. Partial and temporary files
+//! (`PARTIAL_SUFFIXES`, `~$…`), hidden and system files, folders, links and files that are not
 //! media (`queue::intake::is_media`) are never taken. Subfolders are not listed.
 //!
 //! **Which files.** Those present when watching starts are never taken: the first listing is a
@@ -64,8 +64,20 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(3);
 /// How long the exit waits for the thread, which may be stuck listing an unreachable share.
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Name endings of files another program is still downloading or writing.
-const PARTIAL_SUFFIXES: [&str; 3] = [".part", ".crdownload", ".tmp"];
+/// Name endings of files another program is still downloading or writing. Torrent clients and
+/// download managers allocate the full size at once and close the file between bursts, so
+/// neither a stable size nor the write probe tells such a file is done: only its name does
+/// (qBittorrent `.!qB`, Firefox and others `.part`, Chrome `.crdownload`, Safari `.download`,
+/// Opera `.opdownload`, curl and others `.partial`).
+const PARTIAL_SUFFIXES: [&str; 7] = [
+    ".part",
+    ".crdownload",
+    ".tmp",
+    ".!qb",
+    ".partial",
+    ".download",
+    ".opdownload",
+];
 
 const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
 const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
@@ -141,6 +153,10 @@ fn attributes(metadata: &fs::Metadata) -> u32 {
 
 /// Opens the file for reading while refusing to share it with a writer: Windows refuses the
 /// open (sharing violation) as long as another program holds it open for writing.
+///
+/// The handle lives a few microseconds, but meanwhile it is a lock: a writer that reopens the
+/// file for writing in that instant gets a sharing violation. The probe runs only on a file
+/// whose size has been stable for `stable_seconds`, once per poll, which makes that rare.
 fn readable_alone(path: &Path) -> io::Result<()> {
     let mut options = OpenOptions::new();
     options.read(true);

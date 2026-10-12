@@ -181,7 +181,16 @@ fn ignore_rules_follow_names_and_windows_attributes() {
         ignored(".clip.mp4", false, false, none),
         Some(Ignored::Hidden)
     );
-    for partial in ["clip.mp4.part", "clip.crdownload", "x.tmp", "~$clip.mp4"] {
+    for partial in [
+        "clip.mp4.part",
+        "clip.crdownload",
+        "x.tmp",
+        "~$clip.mp4",
+        "clip.mkv.!qB",
+        "clip.mp4.partial",
+        "clip.mp4.download",
+        "clip.mp4.opdownload",
+    ] {
         assert_eq!(
             ignored(partial, false, false, none),
             Some(Ignored::Partial),
