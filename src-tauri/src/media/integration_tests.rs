@@ -1025,8 +1025,11 @@ async fn an_elongated_png_sent_as_a_file_loses_its_text_and_exif_chunks() {
 }
 
 #[tokio::test]
-async fn a_compliant_mp4_with_a_location_is_remuxed_without_it() {
+async fn a_compliant_mp4_with_a_location_keeps_every_stream_and_loses_its_metadata() {
     let Some(mut env) = Env::new(50) else { return };
+    let subtitles = env.path("lines.srt");
+    std::fs::write(&subtitles, "1\n00:00:00,000 --> 00:00:01,000\nhello\n").unwrap();
+    // Two audio tracks, a subtitle track, a location and a camera serial in a stream tag.
     let src = env.path("walk.mp4");
     let encoder = h264_encoder(&env.ffmpeg);
     generate(
@@ -1040,7 +1043,21 @@ async fn a_compliant_mp4_with_a_location_is_remuxed_without_it() {
             "lavfi",
             "-i",
             "sine=frequency=440:sample_rate=48000",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=880:sample_rate=48000",
+            "-i",
+            subtitles.to_str().unwrap(),
             "-t",
+            "3",
+            "-map",
+            "0",
+            "-map",
+            "1",
+            "-map",
+            "2",
+            "-map",
             "3",
             "-c:v",
             encoder,
@@ -1048,10 +1065,14 @@ async fn a_compliant_mp4_with_a_location_is_remuxed_without_it() {
             "yuv420p",
             "-c:a",
             "aac",
-            "-movflags",
-            "+faststart",
+            "-c:s",
+            "mov_text",
             "-metadata",
             "location=+48.8584+002.2945/",
+            "-metadata:s:v",
+            "handler_name=FAKE-CAMERA-SN-0042",
+            "-movflags",
+            "+faststart",
             src.to_str().unwrap(),
         ],
     );
@@ -1059,36 +1080,51 @@ async fn a_compliant_mp4_with_a_location_is_remuxed_without_it() {
     let (_, probe, result) = env
         .run(&src, SendMode::Video, &CancellationToken::new())
         .await;
-    let plan = plan_of(&probe.unwrap());
+    let probe = probe.unwrap();
+    let plan = plan_of(&probe);
     assert_eq!(
         (plan.kind, plan.note.as_deref()),
-        (Kind::Remux, Some("private_tags"))
+        (Kind::Strip, Some(super::plan::PRIVATE_TAGS))
     );
+    assert_eq!(probe.treatment, Treatment::Remux);
     let output = PathBuf::from(result.unwrap().unwrap().output_path);
-    let info = env.ffprobe(&output).await;
-    assert!(!info.private_tags, "no location left");
-    assert_eq!(info.video.unwrap().codec, "h264");
-    let data = std::fs::read(&output).unwrap();
-    assert!(!super::metadata::tests::contains(&data, b"48.8584"));
-
-    // Without a location the same file is sent as it is.
-    let plain = env.path("plain.mp4");
-    generate(
-        &env.ffmpeg,
-        &[
-            "-i",
-            src.to_str().unwrap(),
-            "-c",
-            "copy",
-            "-map_metadata",
-            "-1",
-            "-movflags",
-            "+faststart",
-            plain.to_str().unwrap(),
-        ],
+    assert_eq!(output.file_name().unwrap(), "walk.mp4", "same name");
+    assert_eq!(
+        stream_kinds(&env.ffmpeg, &output),
+        stream_kinds(&env.ffmpeg, &src),
+        "every stream kept"
     );
+    assert_eq!(
+        stream_kinds(&env.ffmpeg, &output),
+        ["video", "audio", "audio", "subtitle"]
+    );
+    assert!(!env.ffprobe(&output).await.private_tags, "no location left");
+    let data = std::fs::read(&output).unwrap();
+    for secret in [b"48.8584".as_slice(), b"FAKE-CAMERA-SN-0042"] {
+        assert!(!super::metadata::tests::contains(&data, secret));
+    }
+
+    // Without metadata the same file is sent as it is.
+    let plain = env.path("plain.mp4");
+    std::fs::copy(&output, &plain).unwrap();
     let (_, probe, _) = env
         .run(&plain, SendMode::Video, &CancellationToken::new())
         .await;
     assert_eq!(probe.unwrap().treatment, Treatment::Skip);
+}
+
+/// `codec_type` of every stream, in order.
+fn stream_kinds(ffmpeg: &Path, path: &Path) -> Vec<String> {
+    let out = std::process::Command::new(ffmpeg.join("ffprobe.exe"))
+        .args(["-v", "error", "-show_streams", "-of", "json"])
+        .arg(path)
+        .output()
+        .expect("ffprobe starts");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    json["streams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|stream| stream["codec_type"].as_str().unwrap().to_owned())
+        .collect()
 }

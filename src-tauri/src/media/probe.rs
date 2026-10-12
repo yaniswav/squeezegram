@@ -84,8 +84,9 @@ pub struct MediaInfo {
     pub bit_rate: Option<u64>,
     pub video: Option<VideoInfo>,
     pub audio: Option<AudioInfo>,
-    /// The container names a place or a camera (`private_tag`); only this flag is kept, never
-    /// the values. Absent from items probed before it existed.
+    /// The file or one of its streams names a place or a camera (`private_tag`), or it has a
+    /// data track; only this flag is kept, never the values. Absent from items probed before
+    /// it existed.
     #[serde(default)]
     pub private_tags: bool,
 }
@@ -127,6 +128,8 @@ struct RawSideData {
 struct RawStream {
     index: u32,
     codec_type: Option<String>,
+    #[serde(default)]
+    tags: serde_json::Map<String, serde_json::Value>,
     codec_name: Option<String>,
     profile: Option<String>,
     pix_fmt: Option<String>,
@@ -235,7 +238,12 @@ pub fn parse(json: &str) -> Result<MediaInfo, serde_json::Error> {
             channels: s.channels,
             bit_rate: bits(&s.bit_rate),
         }),
-        private_tags: raw.format.tags.keys().any(|key| private_tag(key)),
+        // A data track (GoPro GPMF, timed metadata) may record the GPS track itself.
+        private_tags: raw.format.tags.keys().any(|key| private_tag(key))
+            || raw.streams.iter().any(|stream| {
+                stream.codec_type.as_deref() == Some("data")
+                    || stream.tags.keys().any(|key| private_tag(key))
+            }),
     })
 }
 
@@ -438,6 +446,20 @@ mod tests {
         assert_eq!(video.rotation, -90);
         assert_eq!(video.rotated_size(), (2160, 3840));
         assert!(!video.has_alpha());
+    }
+
+    #[test]
+    fn stream_tags_and_data_tracks_are_flagged_too() {
+        let gopro = r#"{"streams":[
+            {"index":0,"codec_type":"video","codec_name":"h264"},
+            {"index":1,"codec_type":"data","codec_tag_string":"gpmd"}],"format":{}}"#;
+        assert!(parse(gopro).unwrap().private_tags);
+        let camera = r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"h264",
+            "tags":{"com.android.model":"FakePhone"}}],"format":{}}"#;
+        assert!(parse(camera).unwrap().private_tags);
+        let plain = r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"h264",
+            "tags":{"language":"eng","handler_name":"VideoHandler"}}],"format":{}}"#;
+        assert!(!parse(plain).unwrap().private_tags);
     }
 
     #[test]

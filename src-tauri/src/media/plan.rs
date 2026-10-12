@@ -187,7 +187,8 @@ pub enum Kind {
     Skip,
     Photo,
     /// Sendable as it is, but carrying location or camera data: a copy without them, pixels
-    /// untouched (`metadata`). Images only; a video in that case is remuxed.
+    /// untouched: an image rewritten without its metadata (`metadata`), a video copied stream
+    /// for stream without any (`PRIVATE_TAGS`).
     Strip,
 }
 
@@ -450,27 +451,33 @@ fn plan_photo(video: &VideoInfo, input: &PlanInput<'_>) -> Result<Plan, PlanErro
 pub struct PrivateData {
     /// A JPEG, PNG or WebP (`metadata::sniff`), small enough to be read whole.
     pub image: bool,
-    /// The container names a place or a camera (`MediaInfo::private_tags`).
+    /// The file names a place or a camera, or carries a data track (`MediaInfo::private_tags`).
     pub video_tags: bool,
 }
 
-/// A `Skip` plan when the user removes location and camera data: an image becomes a stripped
-/// copy under its own name (the recipient sees the same file name), a video whose container
-/// carries such tags is remuxed (`-map_metadata -1`, streams copied). Any other plan, and any
-/// other file (HEIC, a video in document mode, which is not probed), is left as it is.
+/// `Plan::note` of a video sent as it is but for its metadata (`encode::strip`).
+pub const PRIVATE_TAGS: &str = "private_tags";
+
+/// A `Skip` plan when the user removes location and camera data: a stripped copy under the
+/// source's own name (the recipient sees the same file). An image is rewritten without its
+/// metadata segments; a video whose file carries such tags is copied stream for stream without
+/// any metadata (`PRIVATE_TAGS`). Any other plan, and any other file (HEIC, a video in
+/// document mode, which is not probed), is left as it is.
 pub fn without_private_data(mut plan: Plan, source: &Path, private: PrivateData) -> Plan {
     if plan.kind != Kind::Skip {
         return plan;
     }
-    if private.image {
-        plan.kind = Kind::Strip;
-        plan.output_name = source.file_name().map_or_else(
-            || plan.output_name.clone(),
-            |n| n.to_string_lossy().into_owned(),
-        );
-    } else if private.video_tags && plan.video_index.is_some() && !is_image(source) {
-        plan.kind = Kind::Remux;
-        plan.note = Some("private_tags".into());
+    let video = private.video_tags && plan.video_index.is_some() && !is_image(source);
+    if !private.image && !video {
+        return plan;
+    }
+    plan.kind = Kind::Strip;
+    plan.output_name = source.file_name().map_or_else(
+        || plan.output_name.clone(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    if video {
+        plan.note = Some(PRIVATE_TAGS.into());
     }
     plan
 }
@@ -920,14 +927,15 @@ mod tests {
         let skip = build_plan(None, &doc_video).unwrap();
         assert_eq!(without_private_data(skip.clone(), &clip, tags), skip);
 
-        // A compliant MP4 with a location is remuxed, without one it is sent as is.
+        // A compliant MP4 with a location is copied without it, without one it is sent as is.
         let compliant = info(video("h264", "High", "yuv420p"), Some("aac"), Some(10.0));
         let skip = build_plan(Some(&compliant), &input(&clip, MIB)).unwrap();
         assert_eq!(skip.kind, Kind::Skip);
-        let remux = without_private_data(skip.clone(), &clip, tags);
+        let copy = without_private_data(skip.clone(), &clip, tags);
         assert_eq!(
-            (remux.kind, remux.note.as_deref()),
-            (Kind::Remux, Some("private_tags"))
+            (copy.kind, copy.note.as_deref(), copy.output_name.as_str()),
+            (Kind::Strip, Some(PRIVATE_TAGS), "clip.mp4"),
+            "same streams, same name"
         );
         assert_eq!(
             without_private_data(skip.clone(), &clip, PrivateData::default()),

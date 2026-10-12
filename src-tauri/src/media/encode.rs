@@ -813,9 +813,46 @@ pub async fn strip(job: &Job<'_>) -> Result<Produced> {
     result
 }
 
+/// A video sent as it is but for its metadata, unlike a remux for Telegram: every stream is
+/// kept (all audio tracks, subtitles) and the chapters too (titles the author wrote, not
+/// where or with what the video was shot). Gone: the file's metadata (location, make, model),
+/// each stream's (creation time, a handler name a camera may fill with its model) and the
+/// data tracks, where action cameras record their GPS telemetry. The cost: a track's language
+/// label goes with its metadata.
+fn strip_video_args(job: &Job<'_>, part: &Path) -> Args {
+    common_start()
+        .arg("-i")
+        .arg(job.input)
+        .all(&["-map", "0", "-map", "-0:d", "-ignore_unknown", "-c", "copy"])
+        .all(&["-map_metadata", "-1", "-map_metadata:s", "-1"])
+        .all(&["-movflags", "+faststart", "-f", "mp4"])
+        .arg(part)
+}
+
 async fn strip_inner(job: &Job<'_>) -> Result<Produced> {
     let source_size = std::fs::metadata(job.input)?.len();
     prepare(job, source_size)?;
+    if job.plan.note.as_deref() == Some(plan::PRIVATE_TAGS) {
+        let part = job.part();
+        run_ffmpeg(
+            job,
+            "strip",
+            strip_video_args(job, &part),
+            job.plan.duration_s,
+            (0.0, 100.0),
+            None,
+        )
+        .await?;
+        let size = file_size(&part)?;
+        if size > job.plan.limit_bytes {
+            return Err(MediaError::failed(
+                "OUTPUT_TOO_LARGE",
+                format!("{size} bytes against a limit of {}", job.plan.limit_bytes),
+            ));
+        }
+        verify_duration(job, &part).await?;
+        return finish(job);
+    }
     let (input, part) = (job.input.to_path_buf(), job.part());
     let failed = |detail: String| MediaError::failed("METADATA_STRIP_FAILED", detail);
     tokio::task::spawn_blocking(move || -> Result<()> {
