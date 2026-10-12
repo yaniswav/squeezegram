@@ -364,6 +364,36 @@ export interface Settings {
   advanced_encoding: AdvancedEncoding
   /** `background`: takes effect only while the license grants the feature. */
   background: { close_action: CloseAction }
+  /** Changed only through `proxySet`: `settings_set` refuses this section. */
+  network: { proxy: ProxySettings | null }
+}
+
+/** `transport::proxy::ProxyKind`. */
+export type ProxyKind = "socks5" | "http" | "mtproto"
+
+/** A proxy as `settings.json` keeps it: everything but its secret. */
+export interface ProxySettings {
+  kind: ProxyKind
+  host: string
+  port: number
+  /** Empty for MTProto and for a proxy without authentication. */
+  username: string
+}
+
+/** `proxy_get` / `proxy_set`: the secret never comes back, only whether one is stored. */
+export interface ProxyView {
+  proxy: ProxySettings | null
+  has_secret: boolean
+}
+
+/** What `proxySet` and `proxyTest` take. `kind: null` is a direct connection. */
+export interface ProxyInput {
+  kind: ProxyKind | null
+  host: string
+  port: number
+  username: string
+  /** SOCKS5/HTTP password or MTProto secret; null keeps the stored one (same kind only). */
+  secret: string | null
 }
 
 /** Payload of `app://quit-requested`. */
@@ -980,6 +1010,13 @@ const historyEntryDecoder = d.object<HistoryEntry>({
   imported_from: d.nullable(d.string),
 })
 
+const proxySettingsDecoder = d.object<ProxySettings>({
+  kind: d.literals<ProxyKind>({ socks5: true, http: true, mtproto: true }),
+  host: d.string,
+  port: d.number,
+  username: d.string,
+})
+
 type LogLevelSetting = NonNullable<Settings["logging"]["level"]>
 
 const settingsDecoder = d.object<Settings>({
@@ -1043,6 +1080,14 @@ const settingsDecoder = d.object<Settings>({
   background: d.object<Settings["background"]>({
     close_action: d.literals<CloseAction>({ quit: true, tray: true }),
   }),
+  network: d.object<Settings["network"]>({
+    proxy: d.nullable(proxySettingsDecoder),
+  }),
+})
+
+const proxyViewDecoder = d.object<ProxyView>({
+  proxy: d.nullable(proxySettingsDecoder),
+  has_secret: d.boolean,
 })
 
 const sidecarStatusDecoder = d.object<SidecarStatus>({
@@ -1504,6 +1549,27 @@ export function settingsGet(): Promise<Settings> {
 
 export function settingsSet(patch: SettingsPatch): Promise<Settings> {
   return call("settings_set", settingsDecoder, { patch })
+}
+
+export function proxyGet(): Promise<ProxyView> {
+  return call("proxy_get", proxyViewDecoder)
+}
+
+/**
+ * Saves the proxy (its secret protected by Windows, never sent back) and applies it to
+ * Telegram at once. `PROXY_INVALID { field }` names the refused field.
+ */
+export function proxySet(input: ProxyInput): Promise<ProxyView> {
+  return call("proxy_set", proxyViewDecoder, { input })
+}
+
+/** Round trip to Telegram through this proxy; the proxy in use is not changed. */
+export function proxyTest(input: ProxyInput): Promise<{ latency_ms: number }> {
+  return call(
+    "proxy_test",
+    d.object<{ latency_ms: number }>({ latency_ms: d.number }),
+    { input },
+  )
 }
 
 export function historyQuery(filters?: HistoryFilter): Promise<HistoryEntry[]> {

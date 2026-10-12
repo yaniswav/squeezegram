@@ -1,4 +1,5 @@
 import {
+  Activity,
   Download,
   FolderOpen,
   KeyRound,
@@ -66,6 +67,9 @@ import {
   logOpenDir,
   logPath,
   pickFolder,
+  proxyGet,
+  proxySet,
+  proxyTest,
   sidecarsStatus,
   watchAdd,
   watchList,
@@ -77,6 +81,9 @@ import {
   type EntitlementStatus,
   type LimitStatus,
   type MaxResolution,
+  type ProxyInput,
+  type ProxyKind,
+  type ProxyView,
   type SendMode,
   type Settings,
   type SettingsPatch,
@@ -87,6 +94,7 @@ import {
   type WatchFolder,
 } from "@/lib/ipc"
 import { isThemePreference } from "@/lib/theme"
+import { cn } from "@/lib/utils"
 import { useAlerts } from "@/state/alerts"
 import { useAuth } from "@/state/auth"
 import { destinationName, useDestinations } from "@/state/destinations"
@@ -372,6 +380,7 @@ export function SettingsPage({ focusTitle }: { focusTitle: boolean }) {
           <GroupRiskSection
             acknowledged={settings.telegram.group_risk_acknowledged}
           />
+          <NetworkSection />
           <SettingsForm
             settings={settings}
             entitlements={entitlements}
@@ -1126,6 +1135,342 @@ function WatchedFolders({ entitlements }: { entitlements: EntitlementState }) {
           </div>
         </div>
       )}
+    </Section>
+  )
+}
+
+type ProxyChoice = "none" | ProxyKind
+
+const PROXY_CHOICES: readonly ProxyChoice[] = [
+  "none",
+  "socks5",
+  "http",
+  "mtproto",
+]
+
+/** The form keeps text; `secret` empty means "keep the saved one" when there is one. */
+interface ProxyDraft {
+  kind: ProxyChoice
+  host: string
+  port: string
+  username: string
+  secret: string
+  /** SOCKS5/HTTP: remove the saved password instead of keeping it. */
+  forgetSecret: boolean
+}
+
+function proxyDraft(view: ProxyView): ProxyDraft {
+  const proxy = view.proxy
+
+  return {
+    kind: proxy?.kind ?? "none",
+    host: proxy?.host ?? "",
+    port: proxy ? proxy.port.toString() : "",
+    username: proxy?.username ?? "",
+    secret: "",
+    forgetSecret: false,
+  }
+}
+
+/** First field the core would refuse, for what can be told here (same order as proxy.rs). */
+function proxyFieldError(
+  draft: ProxyDraft,
+  keepsSecret: boolean,
+): "host" | "port" | "secret" | null {
+  if (draft.kind === "none") return null
+  if (draft.host.trim() === "" || /[\s/]/.test(draft.host.trim())) return "host"
+  const port = Number(draft.port)
+
+  if (!/^\d+$/.test(draft.port.trim()) || port < 1 || port > 65535)
+    return "port"
+  if (draft.kind === "mtproto" && draft.secret.trim() === "" && !keepsSecret)
+    return "secret"
+
+  return null
+}
+
+/**
+ * Settings > Network: no proxy, SOCKS5, HTTP or MTProto, saved and applied at once through
+ * `proxy_*` (outside the settings form, which never carries the secret). The secret is sent
+ * once and never shown again; "Test" checks the proxy of the form without applying it.
+ */
+function NetworkSection() {
+  const { t, i18n } = useTranslation()
+  const ids = useId()
+  const [view, setView] = useState<ProxyView | null>(null)
+  const [draft, setDraft] = useState<ProxyDraft | null>(null)
+  const [busy, setBusy] = useState<"save" | "test" | null>(null)
+
+  const [outcome, setOutcome] = useState<
+    | { kind: "saved" }
+    | { kind: "tested"; ms: number }
+    | { kind: "failed"; report: ErrorReport }
+    | null
+  >(null)
+
+  useEffect(() => {
+    let stale = false
+
+    proxyGet().then(
+      (next) => {
+        if (stale) return
+        setView(next)
+        setDraft(proxyDraft(next))
+      },
+      (cause: unknown) => {
+        if (!stale) setOutcome({ kind: "failed", report: errorOf(cause) })
+      },
+    )
+
+    return () => {
+      stale = true
+    }
+  }, [])
+
+  if (!view || !draft)
+    return outcome?.kind === "failed" ? (
+      <Section title={t("settings.network.title")}>
+        <p role="status" className="text-sm text-destructive">
+          {errorMessage(t, outcome.report.code, outcome.report.params)}
+        </p>
+      </Section>
+    ) : null
+
+  // The saved secret only goes with the kind it was saved for (`proxy_from_input`).
+  const keepsSecret =
+    view.has_secret && view.proxy?.kind === draft.kind && !draft.forgetSecret
+
+  const fieldError = proxyFieldError(draft, keepsSecret)
+
+  function update<K extends keyof ProxyDraft>(key: K, value: ProxyDraft[K]) {
+    setOutcome(null)
+    setDraft((current) => (current ? { ...current, [key]: value } : current))
+  }
+
+  function input(current: ProxyDraft): ProxyInput {
+    const kind = current.kind === "none" ? null : current.kind
+    const secret = current.secret === "" ? null : current.secret
+
+    return {
+      kind,
+      host: current.host.trim(),
+      port: Number(current.port),
+      username: kind === "mtproto" ? "" : current.username,
+      secret: current.forgetSecret && secret === null ? "" : secret,
+    }
+  }
+
+  async function run(action: "save" | "test") {
+    if (!draft || fieldError) return
+    setBusy(action)
+    setOutcome(null)
+
+    try {
+      if (action === "test") {
+        const { latency_ms } = await proxyTest(input(draft))
+        setOutcome({ kind: "tested", ms: latency_ms })
+      } else {
+        const next = await proxySet(input(draft))
+        setView(next)
+        setDraft(proxyDraft(next))
+        setOutcome({ kind: "saved" })
+      }
+    } catch (cause) {
+      setOutcome({ kind: "failed", report: errorOf(cause) })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const fieldMessage = (field: "host" | "port" | "secret") =>
+    fieldError === field ? t(`errors.PROXY_INVALID_${field}`) : undefined
+
+  const credentials = draft.kind === "socks5" || draft.kind === "http"
+
+  return (
+    <Section
+      title={t("settings.network.title")}
+      hint={t("settings.network.hint")}
+    >
+      <Field id={`${ids}-kind`} label={t("settings.network.kind.label")}>
+        {(props) => (
+          <Choice
+            {...props}
+            value={draft.kind}
+            onChange={(value) => update("kind", value)}
+            options={PROXY_CHOICES.map(
+              (choice) =>
+                [choice, t(`settings.network.kind.${choice}`)] as const,
+            )}
+          />
+        )}
+      </Field>
+
+      {draft.kind !== "none" && (
+        <>
+          <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
+            <Field
+              id={`${ids}-host`}
+              label={t("settings.network.host")}
+              error={fieldMessage("host")}
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  dir="ltr"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={draft.host}
+                  onChange={(event) => update("host", event.target.value)}
+                />
+              )}
+            </Field>
+            <Field
+              id={`${ids}-port`}
+              label={t("settings.network.port")}
+              error={fieldMessage("port")}
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={draft.port}
+                  onChange={(event) => update("port", event.target.value)}
+                />
+              )}
+            </Field>
+          </div>
+
+          {credentials && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                id={`${ids}-username`}
+                label={t("settings.network.username")}
+              >
+                {(props) => (
+                  <Input
+                    {...props}
+                    dir="ltr"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={draft.username}
+                    onChange={(event) => update("username", event.target.value)}
+                  />
+                )}
+              </Field>
+              <Field
+                id={`${ids}-password`}
+                label={t("settings.network.password")}
+                hint={
+                  keepsSecret ? t("settings.network.secretSaved") : undefined
+                }
+              >
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="password"
+                    dir="ltr"
+                    autoComplete="new-password"
+                    value={draft.secret}
+                    onChange={(event) => update("secret", event.target.value)}
+                  />
+                )}
+              </Field>
+            </div>
+          )}
+          {credentials &&
+            view.has_secret &&
+            view.proxy?.kind === draft.kind &&
+            draft.secret === "" && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => update("forgetSecret", !draft.forgetSecret)}
+              >
+                {draft.forgetSecret
+                  ? t("settings.network.keepPassword")
+                  : t("settings.network.forgetPassword")}
+              </Button>
+            )}
+
+          {draft.kind === "mtproto" && (
+            <Field
+              id={`${ids}-secret`}
+              label={t("settings.network.secret")}
+              hint={
+                keepsSecret
+                  ? t("settings.network.secretSaved")
+                  : t("settings.network.secretHint")
+              }
+              error={fieldMessage("secret")}
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  type="password"
+                  dir="ltr"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={draft.secret}
+                  onChange={(event) => update("secret", event.target.value)}
+                />
+              )}
+            </Field>
+          )}
+          <p className="text-xs text-muted-foreground">
+            {t("settings.network.protected")}
+          </p>
+        </>
+      )}
+
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <p
+          role="status"
+          className={cn(
+            "me-auto text-sm empty:hidden",
+            outcome?.kind === "failed"
+              ? "text-destructive"
+              : "text-muted-foreground",
+          )}
+        >
+          {outcome?.kind === "saved" && t("settings.network.saved")}
+          {outcome?.kind === "tested" &&
+            t("settings.network.testOk", {
+              ms: formatNumber(outcome.ms, i18n.language),
+            })}
+          {outcome?.kind === "failed" &&
+            errorMessage(t, outcome.report.code, outcome.report.params)}
+        </p>
+        {draft.kind !== "none" && (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!isDesktop() || busy !== null || fieldError !== null}
+            onClick={() => void run("test")}
+          >
+            <Activity data-icon="inline-start" />
+            {busy === "test"
+              ? t("settings.network.testing")
+              : t("settings.network.test")}
+          </Button>
+        )}
+        <Button
+          type="button"
+          disabled={
+            !isDesktop() ||
+            busy !== null ||
+            (draft.kind !== "none" && fieldError !== null)
+          }
+          onClick={() => void run("save")}
+        >
+          <Save data-icon="inline-start" />
+          {busy === "save"
+            ? t("settings.network.applying")
+            : t("settings.network.apply")}
+        </Button>
+      </div>
     </Section>
   )
 }

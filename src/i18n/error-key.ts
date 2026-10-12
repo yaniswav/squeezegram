@@ -9,6 +9,7 @@ const VARIANT_PARAM: Readonly<Record<string, string>> = {
   FFMPEG_FAILED: "cause",
   ENCODER_FALLBACK: "cause",
   TG_NOT_CONFIGURED: "problem",
+  PROXY_INVALID: "field",
 }
 
 /** Codes that inform (the work went on) rather than report an error. */

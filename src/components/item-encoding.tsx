@@ -390,7 +390,7 @@ function EncodingPanel({
 }
 
 function estimateText(
-  t: ReturnType<typeof useTranslation>["t"],
+  t: TFunction,
   language: string,
   estimate: EncodeEstimate | "loading" | "failed" | null,
 ): string {

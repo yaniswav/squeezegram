@@ -111,3 +111,21 @@ test("the fallback notice is information, failures are errors", () => {
   assert.equal(isInfoCode("CODEC_FALLBACK"), true)
   assert.equal(isInfoCode("FFMPEG_FAILED"), false)
 })
+
+test("a refused proxy names its field, every field the core can name has a sentence", () => {
+  // `transport::proxy::ProxyField` and the `kind` of `proxy_test`.
+  for (const field of [
+    "kind",
+    "host",
+    "port",
+    "username",
+    "password",
+    "secret",
+  ])
+    assert.equal(
+      messageKey("PROXY_INVALID", { field }, has),
+      `PROXY_INVALID_${field}`,
+    )
+  assert.equal(messageKey("PROXY_INVALID", {}, has), "PROXY_INVALID")
+  assert.deepEqual(placeholders(errors.TG_PROXY_FAILED), ["message"])
+})
