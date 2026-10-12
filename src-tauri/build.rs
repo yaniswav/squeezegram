@@ -1,10 +1,12 @@
 //! Build script: Tauri's, plus the product's Telegram identity.
 //!
 //! `SQUEEZEGRAM_TG_API_ID` and `SQUEEZEGRAM_TG_API_HASH` come from the environment (CI secret)
-//! or, failing that, from `../.env` (never committed). They reach the code through
-//! `cargo:rustc-env`, read with `option_env!`. Their values are never printed: no
-//! `cargo:warning`, no message. Absent values are not an error: the TDLib transport then
-//! refuses to start (`TG_NOT_CONFIGURED`).
+//! or, failing that, from `../.env` (never committed). The code reads them with `option_env!`.
+//! A value already in the environment reaches rustc by inheritance, so this script does not
+//! repeat it: Cargo copies a build script's stdout into the build log when the script fails,
+//! and that log is public in CI. Only a value read from `.env` (local builds) is passed with
+//! `cargo:rustc-env`. Absent values are not an error: the TDLib transport then refuses to
+//! start (`TG_NOT_CONFIGURED`).
 
 use std::path::Path;
 
@@ -22,8 +24,11 @@ fn inject_telegram_identity() {
     let manifest = std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default();
     let dotenv_text = std::fs::read_to_string(Path::new(&manifest).join("..").join(".env")).ok();
     for key in IDENTITY_KEYS {
-        let from_env = std::env::var(key).ok();
-        if let Some(value) = dotenv::resolve(key, from_env.as_deref(), dotenv_text.as_deref()) {
+        if std::env::var(key).is_ok_and(|value| !value.trim().is_empty()) {
+            // rustc inherits the variable: printing it would only expose it in a failure log.
+            continue;
+        }
+        if let Some(value) = dotenv::resolve(key, None, dotenv_text.as_deref()) {
             // Instruction to Cargo (stored in target/, given to rustc), not a message.
             println!("cargo:rustc-env={key}={value}");
         }
