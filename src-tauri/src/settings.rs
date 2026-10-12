@@ -170,6 +170,9 @@ pub struct ApiOverride {
 pub struct Telegram {
     pub api_override: Option<ApiOverride>,
     pub device_name: Option<String>,
+    /// The user read the warning about sending to groups and channels (F33) and accepted it
+    /// once. Only the interface reads it: the core never blocks a send on it.
+    pub group_risk_acknowledged: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -465,7 +468,7 @@ mod tests {
               "limit": { "premium": null, "custom_mb": null, "margin_percent": 3.0 },
               "encoding": { "mode": "auto", "prefer": "gpu", "audio_kbps": 128, "video_codec": "h264" },
               "send": { "pause_min_s": 5, "pause_max_s": 12, "watchdog_s": 120, "caption_template": "" },
-              "telegram": { "api_override": null, "device_name": null },
+              "telegram": { "api_override": null, "device_name": null, "group_risk_acknowledged": false },
               "temp": { "dir": null, "min_free_gb": 5 },
               "ffmpeg": { "custom_dir": null },
               "ui": { "theme": "system", "language": "en" },
@@ -707,6 +710,35 @@ mod tests {
             "{name} - {resolution}"
         );
         assert_eq!(reloaded.get().send.watchdog_s, 120, "untouched fields kept");
+    }
+
+    #[test]
+    fn the_group_risk_acknowledgement_is_persisted_and_old_files_read_it_as_not_given() {
+        let dir = TestDir::new("settings-group-risk");
+        let path = dir.path().join(FILE_NAME);
+        // A file from before the warning existed: the telegram section has no such field.
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old["telegram"]
+            .as_object_mut()
+            .unwrap()
+            .remove("group_risk_acknowledged");
+        std::fs::write(&path, old.to_string()).unwrap();
+        let store = SettingsStore::load(path.clone()).unwrap();
+        assert!(!store.get().telegram.group_risk_acknowledged);
+
+        store
+            .set(&json!({ "telegram": { "group_risk_acknowledged": true } }))
+            .unwrap();
+        let reloaded = SettingsStore::load(path).unwrap();
+        assert!(reloaded.get().telegram.group_risk_acknowledged);
+        assert_eq!(reloaded.get().telegram.device_name, None, "others kept");
+        assert_eq!(
+            store
+                .set(&json!({ "telegram": { "group_risk_acknowledged": "yes" } }))
+                .unwrap_err()
+                .code(),
+            "SETTINGS_INVALID"
+        );
     }
 
     #[test]

@@ -15,6 +15,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog"
 import { CodecNote } from "@/components/codec-note"
 import { DestinationField } from "@/components/destination-field"
 import { FfmpegFinder } from "@/components/ffmpeg-finder"
+import { GroupRiskGuidance } from "@/components/group-risk"
 import { PageHeader } from "@/components/page-header"
 import { PurchaseButton } from "@/components/purchase-button"
 import { Badge } from "@/components/ui/badge"
@@ -327,6 +328,9 @@ export function SettingsPage({ focusTitle }: { focusTitle: boolean }) {
         <>
           <LicenseSection status={entitlements} onChange={setEntitlements} />
           <WatchedFolders entitlements={entitlements} />
+          <GroupRiskSection
+            acknowledged={settings.telegram.group_risk_acknowledged}
+          />
           <SettingsForm settings={settings} entitlements={entitlements} />
         </>
       )}
@@ -390,6 +394,26 @@ function StartWithWindows({ granted }: { granted: boolean }) {
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * The warning shown before the first send to a group, kept readable here (F33). There is no
+ * Help page: Settings is where the app explains itself.
+ */
+function GroupRiskSection({ acknowledged }: { acknowledged: boolean }) {
+  const { t } = useTranslation()
+
+  return (
+    <Section title={t("settings.groupRisk.title")} hint={t("groupRisk.intro")}>
+      <GroupRiskGuidance />
+      <p className="text-sm text-muted-foreground">
+        {t("settings.groupRisk.scope")}{" "}
+        {acknowledged
+          ? t("settings.groupRisk.acknowledged")
+          : t("settings.groupRisk.pending")}
+      </p>
+    </Section>
   )
 }
 

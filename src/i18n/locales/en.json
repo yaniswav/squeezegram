@@ -659,6 +659,12 @@
         "hint": "squeezegram starts when you sign in to Windows and stays hidden in the notification area. This applies right away; there is nothing to save.",
         "inactive": "Starting hidden needs Premium. The startup entry is still there, so Windows starts squeezegram with its window showing. Turn this off to remove the entry."
       }
+    },
+    "groupRisk": {
+      "title": "Sending to groups and channels",
+      "scope": "This notice never applies to Saved Messages or private chats.",
+      "acknowledged": "You have already accepted it.",
+      "pending": "It will be shown once, before your first send to a group or channel."
     }
   },
   "update": {
@@ -823,5 +829,17 @@
     "title": "Quit squeezegram?",
     "body": "A file is being compressed or sent. If you quit now, it is interrupted. A file that was being sent is marked Unconfirmed, so you can check next time whether it arrived.",
     "confirm": "Quit"
+  },
+  "groupRisk": {
+    "title": "Before you send to a group or channel",
+    "intro": "Sending files again and again to groups or channels where you don't have the right permissions can get your Telegram account restricted.",
+    "practice": {
+      "title": "Good practice",
+      "permissions": "Only send to groups and channels where you are allowed to post.",
+      "slowMode": "Respect slow mode and the pauses between sends; don't shorten them to go faster.",
+      "spam": "Don't spam: avoid sending large batches of files to the same group."
+    },
+    "promise": "squeezegram follows Telegram's rules and has no workaround for its limits: it can't promise your account won't be restricted.",
+    "confirm": "I understand, continue"
   }
 }

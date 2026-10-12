@@ -42,6 +42,7 @@ import {
   type CheckTarget,
 } from "@/hooks/use-destination-check"
 import { useCaptionPreview } from "@/hooks/use-caption-preview"
+import { useGroupRiskGate } from "@/hooks/use-group-risk-gate"
 import { useEntitlementStatus } from "@/hooks/use-entitlement-status"
 import { useAlerts } from "@/state/alerts"
 import { useAuth } from "@/state/auth"
@@ -70,6 +71,7 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
   const { pushError } = useAlerts()
   const destinations = useDestinations()
   const { refresh } = useQueue()
+  const { guard, dialog } = useGroupRiskGate()
   const ids = useId()
   /** The user's choice; "" until they pick one. */
   const [destinationId, setDestinationId] = useState("")
@@ -165,8 +167,14 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
     return check.phase === "done" && !check.check.allowed
   })
 
-  async function submit() {
+  // Before the first send to a group or channel the user reads the risk once (F33); Saved
+  // Messages and private chats go straight through.
+  function submit() {
     if (batch.length === 0) return
+    guard(batch, () => void send())
+  }
+
+  async function send() {
     setBusy(true)
 
     try {
@@ -465,7 +473,7 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
               </div>
 
               <div className="flex justify-end">
-                <Button disabled={!canSubmit} onClick={() => void submit()}>
+                <Button disabled={!canSubmit} onClick={submit}>
                   <Plus data-icon="inline-start" />
                   {t("add.submit", { count: paths.length })}
                 </Button>
@@ -474,6 +482,7 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
           )}
         </AnimatePresence>
       </CardContent>
+      {dialog}
     </Card>
   )
 }

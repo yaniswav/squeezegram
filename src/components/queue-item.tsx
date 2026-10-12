@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { useGroupRiskGate } from "@/hooks/use-group-risk-gate"
 import { useNow } from "@/hooks/use-now"
 import { errorMessage } from "@/i18n/errors"
 import {
@@ -94,6 +95,7 @@ export function QueueItem({
   const { pushError } = useAlerts()
   const { refresh } = useQueue()
   const { byId } = useDestinations()
+  const { guard, dialog: groupRiskDialog } = useGroupRiskGate()
   const [confirm, setConfirm] = useState<Confirm>(null)
   const [busy, setBusy] = useState(false)
 
@@ -233,7 +235,13 @@ export function QueueItem({
           item={item}
           progress={progress}
           busy={busy}
-          onPromote={() => void run(() => queuePromote([item.id]))}
+          // A watched file is promoted to a send: the group warning applies here too.
+          onPromote={() =>
+            guard(
+              destination ? [destination] : [],
+              () => void run(() => queuePromote([item.id])),
+            )
+          }
           onConfirm={setConfirm}
           onRetry={() => void run(() => queueRetry(item.id))}
           onMarkSent={(messageId) =>
@@ -279,7 +287,12 @@ export function QueueItem({
         description={t("queue.item.duplicate.dialogBody", { name })}
         confirmLabel={t("queue.item.duplicate.dialogConfirm")}
         cancelLabel={t("common.cancel")}
-        onConfirm={() => void run(() => queuePromote([item.id]))}
+        onConfirm={() =>
+          guard(
+            destination ? [destination] : [],
+            () => void run(() => queuePromote([item.id])),
+          )
+        }
       />
       <ConfirmDialog
         open={confirm === "resend"}
@@ -290,6 +303,7 @@ export function QueueItem({
         cancelLabel={t("common.cancel")}
         onConfirm={() => void run(() => itemResolveUnknown(item.id, "retry"))}
       />
+      {groupRiskDialog}
     </motion.li>
   )
 }

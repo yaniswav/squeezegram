@@ -345,6 +345,8 @@ export interface Settings {
   telegram: {
     api_override: { api_id: number } | null
     device_name: string | null
+    /** The warning about sending to groups and channels was accepted (F33). */
+    group_risk_acknowledged: boolean
   }
   temp: { dir: string | null; min_free_gb: number }
   ffmpeg: { custom_dir: string | null }
@@ -991,6 +993,7 @@ const settingsDecoder = d.object<Settings>({
       }),
     ),
     device_name: d.nullable(d.string),
+    group_risk_acknowledged: d.boolean,
   }),
   temp: d.object<Settings["temp"]>({
     dir: d.nullable(d.string),

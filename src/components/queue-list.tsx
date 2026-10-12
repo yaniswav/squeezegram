@@ -14,16 +14,20 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { useFlash } from "@/hooks/use-flash"
+import { useGroupRiskGate } from "@/hooks/use-group-risk-gate"
 import { queuePause, queueReorder, queueStart } from "@/lib/ipc"
 import { isFinished, isProcessable } from "@/lib/queue-state"
 import { cn } from "@/lib/utils"
 import { useAlerts } from "@/state/alerts"
+import { useDestinations } from "@/state/destinations"
 import { useQueue } from "@/state/queue"
 
 export function QueueList() {
   const { t } = useTranslation()
   const { pushError } = useAlerts()
   const { status, items, progress, running, refresh } = useQueue()
+  const { byId } = useDestinations()
+  const { guard, dialog: groupRiskDialog } = useGroupRiskGate()
   const [showFinished, setShowFinished] = useState(false)
   const [toggling, setToggling] = useState(false)
   const [cleared, setCleared] = useFlash()
@@ -33,6 +37,17 @@ export function QueueList() {
   const finished = items.filter((item) => isFinished(item.state))
   // `running` only says the orchestrator is armed; nothing runs without a processable item.
   const busy = items.some((item) => isProcessable(item.state))
+
+  // Files queued before the warning existed (or by a watched folder) start here: the
+  // notice also comes before the queue is armed for a group.
+  function toggle() {
+    if (running) return void toggleRunning()
+    const targets = items
+      .filter((item) => isProcessable(item.state))
+      .flatMap((item) => byId.get(item.destination_id) ?? [])
+
+    guard(targets, () => void toggleRunning())
+  }
 
   async function toggleRunning() {
     setToggling(true)
@@ -82,7 +97,7 @@ export function QueueList() {
           <Button
             variant={!running ? "default" : busy ? "outline" : "secondary"}
             disabled={toggling || status !== "ready" || running === null}
-            onClick={() => void toggleRunning()}
+            onClick={toggle}
           >
             {running ? (
               <Pause data-icon="inline-start" />
@@ -172,6 +187,7 @@ export function QueueList() {
           )}
         </div>
       )}
+      {groupRiskDialog}
     </Card>
   )
 }
