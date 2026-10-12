@@ -9,6 +9,7 @@
 //!   child processes with a Job Object (`media::procs`)
 //! - `sidecars`: ffmpeg/ffprobe resolution and download, path of the bundled `tdjson.dll`
 //! - `watch`: watched folders (polling, file size stability, `pending_review` only)
+//! - `session_end`: the clean shutdown when Windows logs off or shuts down
 //! - `background`: close to the tray, the tray icon and its menu (paid feature `background`)
 //! - `settings`: versioned settings
 //! - `limit`: the effective upload limit (settings, else the signed-in account)
@@ -24,6 +25,7 @@ pub mod limit;
 pub mod logging;
 pub mod media;
 pub mod queue;
+mod session_end;
 pub mod settings;
 pub mod sidecars;
 pub mod transport;
@@ -343,6 +345,8 @@ pub fn run() {
             let background = state.background.clone();
             app.manage(state);
             background.spawn();
+            #[cfg(windows)]
+            session_end::install(app.handle());
             tracing::info!(event = "setup_done", "core ready");
             Ok(())
         })

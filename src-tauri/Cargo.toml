@@ -74,4 +74,7 @@ windows = { version = "0.62", features = [
   "Win32_System_Registry",
   "Win32_System_JobObjects",
   "Win32_System_Threading",
+  # Window subclass that closes cleanly when Windows ends the session (`session_end`).
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
 ] }
