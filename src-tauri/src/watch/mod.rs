@@ -159,17 +159,23 @@ struct Waiting {
     modified: Option<SystemTime>,
     /// Since when `size` and `modified` have not changed.
     since: Instant,
+    /// Complete, but the queue refused it (journaled once); retried at every poll.
+    refused: bool,
 }
 
 /// A complete file, to queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
+    /// Name in the folder, handed back to `Tracker::taken` or `Tracker::refused`.
+    pub name: String,
     pub path: PathBuf,
     pub size: u64,
     /// Seconds since the Unix epoch, as `items.source_mtime`.
     pub modified_s: i64,
     /// From the first listing that showed it.
     pub waited: Duration,
+    /// The queue refused it at an earlier poll.
+    pub retry: bool,
 }
 
 /// What the listings of one folder have shown.
@@ -256,6 +262,7 @@ impl Tracker {
                 size,
                 modified,
                 since: now,
+                refused: false,
             };
             // A new file is compared from the next listing on.
             let Some(waiting) = self.waiting.get_mut(&name) else {
@@ -273,18 +280,33 @@ impl Tracker {
             if readable_alone(&path).is_err() {
                 continue;
             }
-            self.waiting.remove(&name);
-            self.known.insert(name);
+            // Stays waiting until the queue has it (`taken`): a refused insert is tried again.
+            let retry = waiting.refused;
             found.push(Found {
+                name,
                 path,
                 size,
                 modified_s: modified
                     .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
                     .map_or(0, |age| age.as_secs() as i64),
                 waited,
+                retry,
             });
         }
         Ok(found)
+    }
+
+    /// The queue has the file (added, or already there): never taken again under this name.
+    fn taken(&mut self, name: &str) {
+        self.waiting.remove(name);
+        self.known.insert(name.to_owned());
+    }
+
+    /// The queue refused the file (database busy, destination gone): tried at the next poll.
+    fn refused(&mut self, name: &str) {
+        if let Some(waiting) = self.waiting.get_mut(name) {
+            waiting.refused = true;
+        }
     }
 }
 
@@ -357,7 +379,12 @@ impl Engine {
                         );
                     }
                     for file in found {
-                        queue_file(&self.queue, folder, file);
+                        let name = file.name.clone();
+                        if queue_file(&self.queue, folder, file) {
+                            tracker.taken(&name);
+                        } else {
+                            tracker.refused(&name);
+                        }
                     }
                 }
                 Err(error) => {
@@ -378,9 +405,10 @@ impl Engine {
     }
 }
 
-fn queue_file(queue: &Orchestrator, folder: &WatchFolder, file: Found) {
+/// Whether the queue has the file now (added, or already there).
+fn queue_file(queue: &Orchestrator, folder: &WatchFolder, file: Found) -> bool {
     let Some(destination_id) = folder.destination_id else {
-        return;
+        return false;
     };
     let path = file.path.to_string_lossy().into_owned();
     let added = queue
@@ -407,6 +435,7 @@ fn queue_file(queue: &Orchestrator, folder: &WatchFolder, file: Found) {
             path = path.as_str(),
             size = file.size,
             dur_ms = file.waited.as_millis() as u64,
+            retried = file.retry,
             "file from a watched folder waits for approval"
         ),
         Ok(None) => tracing::info!(
@@ -417,7 +446,8 @@ fn queue_file(queue: &Orchestrator, folder: &WatchFolder, file: Found) {
             reason = "already_queued",
             "file from a watched folder already in the queue"
         ),
-        Err(error) => tracing::warn!(
+        // Once per file: it is tried again at every poll until the queue takes it.
+        Err(ref error) if !file.retry => tracing::warn!(
             event = "watch_file_skipped",
             destination_id,
             folder_id = folder.id,
@@ -425,9 +455,11 @@ fn queue_file(queue: &Orchestrator, folder: &WatchFolder, file: Found) {
             reason = "queue_error",
             error_code = error.code(),
             error = %error,
-            "file from a watched folder not queued"
+            "file from a watched folder not queued yet, tried again at the next poll"
         ),
+        Err(_) => {}
     }
+    added.is_ok()
 }
 
 enum Signal {

@@ -80,55 +80,41 @@ fn watched_items(queue: &Orchestrator) -> Vec<String> {
         .collect()
 }
 
+/// One listing; what it found is handed to the queue (as `Engine::poll` does when it succeeds).
+fn take(tracker: &mut Tracker, dir: &Path, now: Instant, stable: Duration) -> Vec<Found> {
+    let found = tracker.scan(1, dir, now, stable).unwrap();
+    for file in &found {
+        tracker.taken(&file.name);
+    }
+    found
+}
+
 #[test]
 fn a_file_is_taken_once_its_size_has_been_stable_long_enough() {
     let dir = TestDir::new("watch-stable");
     let mut tracker = Tracker::default();
     let t0 = Instant::now();
-    assert!(tracker.scan(1, dir.path(), t0, STABLE).unwrap().is_empty());
+    assert!(take(&mut tracker, dir.path(), t0, STABLE).is_empty());
 
     let path = dir.path().join("clip.mp4");
     std::fs::write(&path, b"first part").unwrap();
+    assert!(take(&mut tracker, dir.path(), t0 + secs(1), STABLE).is_empty());
     assert!(
-        tracker
-            .scan(1, dir.path(), t0 + secs(1), STABLE)
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        tracker
-            .scan(1, dir.path(), t0 + secs(8), STABLE)
-            .unwrap()
-            .is_empty(),
+        take(&mut tracker, dir.path(), t0 + secs(8), STABLE).is_empty(),
         "7 s stable is not enough"
     );
 
     // Still growing: the wait starts over from the poll that saw the change.
     std::fs::write(&path, b"first part, then more").unwrap();
-    assert!(
-        tracker
-            .scan(1, dir.path(), t0 + secs(12), STABLE)
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        tracker
-            .scan(1, dir.path(), t0 + secs(21), STABLE)
-            .unwrap()
-            .is_empty()
-    );
-    let found = tracker.scan(1, dir.path(), t0 + secs(22), STABLE).unwrap();
+    assert!(take(&mut tracker, dir.path(), t0 + secs(12), STABLE).is_empty());
+    assert!(take(&mut tracker, dir.path(), t0 + secs(21), STABLE).is_empty());
+    let found = take(&mut tracker, dir.path(), t0 + secs(22), STABLE);
     assert_eq!(names(&found), ["clip.mp4"]);
     assert_eq!(found[0].size, 21);
     assert_eq!(found[0].waited, secs(10));
 
     // Taken once.
-    assert!(
-        tracker
-            .scan(1, dir.path(), t0 + secs(40), STABLE)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(take(&mut tracker, dir.path(), t0 + secs(40), STABLE).is_empty());
 }
 
 #[test]
@@ -136,18 +122,11 @@ fn even_with_no_wait_a_file_needs_a_second_listing_and_some_content() {
     let dir = TestDir::new("watch-zero");
     let mut tracker = Tracker::default();
     let t0 = Instant::now();
-    tracker.scan(1, dir.path(), t0, Duration::ZERO).unwrap();
+    take(&mut tracker, dir.path(), t0, Duration::ZERO);
     std::fs::write(dir.path().join("a.mp4"), b"x").unwrap();
     std::fs::write(dir.path().join("empty.mp4"), b"").unwrap();
-    assert!(
-        tracker
-            .scan(1, dir.path(), t0, Duration::ZERO)
-            .unwrap()
-            .is_empty()
-    );
-    let found = tracker
-        .scan(1, dir.path(), t0 + secs(3), Duration::ZERO)
-        .unwrap();
+    assert!(take(&mut tracker, dir.path(), t0, Duration::ZERO).is_empty());
+    let found = take(&mut tracker, dir.path(), t0 + secs(3), Duration::ZERO);
     assert_eq!(names(&found), ["a.mp4"], "an empty file is never complete");
 }
 
@@ -156,7 +135,7 @@ fn partial_hidden_and_unsupported_files_are_never_taken() {
     let dir = TestDir::new("watch-ignored");
     let mut tracker = Tracker::default();
     let t0 = Instant::now();
-    tracker.scan(1, dir.path(), t0, STABLE).unwrap();
+    take(&mut tracker, dir.path(), t0, STABLE);
     for name in [
         "a.mp4.part",
         "b.mp4.crdownload",
@@ -169,14 +148,14 @@ fn partial_hidden_and_unsupported_files_are_never_taken() {
         std::fs::write(dir.path().join(name), b"content").unwrap();
     }
     std::fs::create_dir(dir.path().join("folder.mp4")).unwrap();
-    tracker.scan(1, dir.path(), t0 + secs(1), STABLE).unwrap();
-    let found = tracker.scan(1, dir.path(), t0 + secs(60), STABLE).unwrap();
+    take(&mut tracker, dir.path(), t0 + secs(1), STABLE);
+    let found = take(&mut tracker, dir.path(), t0 + secs(60), STABLE);
     assert_eq!(names(&found), ["keep.MKV"]);
 
     // A download that completes is renamed: a new name, taken once stable.
     std::fs::rename(dir.path().join("a.mp4.part"), dir.path().join("a.mp4")).unwrap();
-    tracker.scan(1, dir.path(), t0 + secs(61), STABLE).unwrap();
-    let found = tracker.scan(1, dir.path(), t0 + secs(71), STABLE).unwrap();
+    take(&mut tracker, dir.path(), t0 + secs(61), STABLE);
+    let found = take(&mut tracker, dir.path(), t0 + secs(71), STABLE);
     assert_eq!(names(&found), ["a.mp4"]);
 }
 
@@ -237,21 +216,18 @@ fn a_file_still_open_for_writing_waits_until_it_is_closed() {
     let dir = TestDir::new("watch-writer");
     let mut tracker = Tracker::default();
     let t0 = Instant::now();
-    tracker.scan(1, dir.path(), t0, STABLE).unwrap();
+    take(&mut tracker, dir.path(), t0, STABLE);
     // A recorder that has paused: the size does not move, the handle is still open.
     let mut writer = std::fs::File::create(dir.path().join("rec.mkv")).unwrap();
     writer.write_all(b"frames").unwrap();
     writer.flush().unwrap();
-    tracker.scan(1, dir.path(), t0 + secs(1), STABLE).unwrap();
+    take(&mut tracker, dir.path(), t0 + secs(1), STABLE);
     assert!(
-        tracker
-            .scan(1, dir.path(), t0 + secs(30), STABLE)
-            .unwrap()
-            .is_empty(),
+        take(&mut tracker, dir.path(), t0 + secs(30), STABLE).is_empty(),
         "stable but still open for writing"
     );
     drop(writer);
-    let found = tracker.scan(1, dir.path(), t0 + secs(33), STABLE).unwrap();
+    let found = take(&mut tracker, dir.path(), t0 + secs(33), STABLE);
     assert_eq!(names(&found), ["rec.mkv"]);
 }
 
@@ -261,18 +237,18 @@ fn files_present_at_the_start_are_left_alone() {
     std::fs::write(dir.path().join("old.mp4"), b"old").unwrap();
     let mut tracker = Tracker::default();
     let t0 = Instant::now();
-    tracker.scan(1, dir.path(), t0, STABLE).unwrap();
+    take(&mut tracker, dir.path(), t0, STABLE);
     std::fs::write(dir.path().join("new.mp4"), b"new").unwrap();
-    tracker.scan(1, dir.path(), t0 + secs(1), STABLE).unwrap();
-    let found = tracker.scan(1, dir.path(), t0 + secs(20), STABLE).unwrap();
+    take(&mut tracker, dir.path(), t0 + secs(1), STABLE);
+    let found = take(&mut tracker, dir.path(), t0 + secs(20), STABLE);
     assert_eq!(names(&found), ["new.mp4"]);
 
     // Removed then back under the same name: a new file.
     std::fs::remove_file(dir.path().join("old.mp4")).unwrap();
-    tracker.scan(1, dir.path(), t0 + secs(21), STABLE).unwrap();
+    take(&mut tracker, dir.path(), t0 + secs(21), STABLE);
     std::fs::write(dir.path().join("old.mp4"), b"again").unwrap();
-    tracker.scan(1, dir.path(), t0 + secs(22), STABLE).unwrap();
-    let found = tracker.scan(1, dir.path(), t0 + secs(40), STABLE).unwrap();
+    take(&mut tracker, dir.path(), t0 + secs(22), STABLE);
+    let found = take(&mut tracker, dir.path(), t0 + secs(40), STABLE);
     assert_eq!(names(&found), ["old.mp4"]);
 }
 
@@ -530,6 +506,60 @@ fn a_path_already_in_the_queue_is_not_queued_twice() {
     engine.poll(t0 + secs(20), STABLE);
     assert_eq!(queue.list().unwrap().len(), 1);
     assert!(watched_items(&queue).is_empty());
+}
+
+#[test]
+fn a_file_the_queue_refuses_is_tried_again() {
+    let dir = TestDir::new("watch-refused");
+    let watched = dir.path().join("in");
+    std::fs::create_dir(&watched).unwrap();
+    let mut store = open_store(&dir);
+    let destination_id = first_destination(&store);
+    let folder = store
+        .add_watch_folder(&watched.to_string_lossy(), destination_id, None)
+        .unwrap();
+    // A folder whose destination is gone: every insert is refused.
+    store
+        .conn()
+        .execute_batch("PRAGMA foreign_keys = OFF")
+        .unwrap();
+    store
+        .conn()
+        .execute(
+            "UPDATE watch_folders SET destination_id = 999 WHERE id = ?1",
+            [folder.id],
+        )
+        .unwrap();
+    let queue = orchestrator(store);
+    let switch = Arc::new(Switch::default());
+    switch.set(true);
+    let mut engine = Engine::new(queue.clone(), switch);
+    let t0 = Instant::now();
+    engine.poll(t0, STABLE);
+    std::fs::write(watched.join("a.mp4"), b"1").unwrap();
+    engine.poll(t0 + secs(3), STABLE);
+    engine.poll(t0 + secs(15), STABLE);
+    engine.poll(t0 + secs(18), STABLE);
+    assert!(watched_items(&queue).is_empty());
+    let tracker = &engine.trackers[&folder.id];
+    assert!(tracker.waiting["a.mp4"].refused, "still waiting, not known");
+
+    // The user points the folder at a destination again: the file goes in.
+    queue
+        .with_store(|store| {
+            store.update_watch_folder(
+                folder.id,
+                &crate::queue::store::WatchFolderPatch {
+                    destination_id: Some(destination_id),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    engine.poll(t0 + secs(21), STABLE);
+    assert_eq!(watched_items(&queue), ["a.mp4"]);
+    engine.poll(t0 + secs(24), STABLE);
+    assert_eq!(watched_items(&queue), ["a.mp4"], "taken once");
 }
 
 #[test]
