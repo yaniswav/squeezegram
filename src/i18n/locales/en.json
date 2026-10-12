@@ -162,7 +162,8 @@
   "drop": {
     "overlay": "Drop to add to the queue",
     "hint": "Drop videos and photos anywhere in this window, or",
-    "browse": "browse files…"
+    "browse": "browse files…",
+    "browseFolder": "or add a folder…"
   },
   "add": {
     "title": "Add files",

@@ -164,7 +164,8 @@
   "drop": {
     "overlay": "Déposez pour ajouter à la file d'attente",
     "hint": "Déposez des vidéos et des photos n'importe où dans cette fenêtre, ou",
-    "browse": "parcourez les fichiers…"
+    "browse": "parcourez les fichiers…",
+    "browseFolder": "or add a folder…"
   },
   "add": {
     "title": "Ajouter des fichiers",

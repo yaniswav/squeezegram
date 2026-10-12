@@ -19,7 +19,13 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { mostRecent } from "@/lib/destination-groups"
 import { fileName } from "@/lib/format"
-import { isDesktop, pickFiles, queueAdd, type SendMode } from "@/lib/ipc"
+import {
+  isDesktop,
+  pickFiles,
+  pickFolder,
+  queueAdd,
+  type SendMode,
+} from "@/lib/ipc"
 import { useDestinationCheck } from "@/hooks/use-destination-check"
 import { useAlerts } from "@/state/alerts"
 import { useDestinations } from "@/state/destinations"
@@ -54,6 +60,17 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
     if (picked.length > 0) {
       setAdded(null)
       onPathsChange([...new Set([...paths, ...picked])])
+    }
+  }
+
+  // The core walks the folder when the paths are queued (queue/intake.rs): the panel only
+  // holds its path, like a dropped folder.
+  async function browseFolder() {
+    const picked = await pickFolder()
+
+    if (picked) {
+      setAdded(null)
+      onPathsChange([...new Set([...paths, picked])])
     }
   }
 
@@ -125,6 +142,14 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
             onClick={() => void browse()}
           >
             {t("drop.browse")}
+          </Button>
+          <Button
+            variant="link"
+            className="h-auto p-0"
+            disabled={!isDesktop()}
+            onClick={() => void browseFolder()}
+          >
+            {t("drop.browseFolder")}
           </Button>
         </div>
 

@@ -164,7 +164,8 @@
   "drop": {
     "overlay": "Suelte para añadir a la cola",
     "hint": "Suelte vídeos y fotos en cualquier parte de esta ventana, o",
-    "browse": "explorar archivos…"
+    "browse": "explorar archivos…",
+    "browseFolder": "or add a folder…"
   },
   "add": {
     "title": "Añadir archivos",

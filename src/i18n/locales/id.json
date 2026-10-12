@@ -160,7 +160,8 @@
   "drop": {
     "overlay": "Lepaskan untuk menambahkan ke antrean",
     "hint": "Lepaskan video dan foto di mana saja di jendela ini, atau",
-    "browse": "telusuri berkas…"
+    "browse": "telusuri berkas…",
+    "browseFolder": "or add a folder…"
   },
   "add": {
     "title": "Tambah berkas",
