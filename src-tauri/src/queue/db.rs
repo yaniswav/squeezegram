@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::{QueueError, Result};
 
 /// Migrations in order: entry `i` brings the schema to version `i + 1`.
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
@@ -132,6 +132,15 @@ UPDATE destinations SET last_used_at = (SELECT MAX(at) FROM (
 UPDATE destinations SET use_count = 1 WHERE last_used_at IS NOT NULL;
 ";
 
+/// v4: send mode of a watched folder (`watch::`), chosen when the folder is added.
+/// - `send_mode`: `video` | `document` | `photo`; NULL = the destination's default mode, read
+///   when a file is found (as `queue_add` without a mode).
+///
+/// No backfill: no version before this one wrote `watch_folders`.
+const SCHEMA_V4: &str = "
+ALTER TABLE watch_folders ADD COLUMN send_mode TEXT;
+";
+
 /// `%APPDATA%\squeezegram\squeezegram.db`.
 pub fn default_path() -> Result<PathBuf> {
     let app_data = std::env::var_os("APPDATA").ok_or(QueueError::NoAppData)?;
@@ -225,7 +234,7 @@ mod tests {
     #[test]
     fn fresh_database_gets_the_latest_schema() {
         let conn = open_in_memory().unwrap();
-        assert_eq!(schema_version(&conn).unwrap(), 3);
+        assert_eq!(schema_version(&conn).unwrap(), 4);
         assert_eq!(
             tables(&conn),
             [
@@ -415,7 +424,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let conn = open(&path).unwrap();
-        assert_eq!(schema_version(&conn).unwrap(), 3);
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
         let mut stmt = conn
             .prepare(
                 "SELECT id, last_used_at, use_count, alias, favorite, archived, folders
@@ -465,7 +474,50 @@ mod tests {
         // Reopening does not migrate again.
         drop(stmt);
         drop(conn);
-        assert_eq!(schema_version(&open(&path).unwrap()).unwrap(), 3);
+        assert_eq!(
+            schema_version(&open(&path).unwrap()).unwrap(),
+            SCHEMA_VERSION
+        );
+    }
+
+    /// A v3 database moves to v4 in place: a watched folder keeps its row, its destination and
+    /// its flags, and gets `send_mode = NULL` (the destination's default mode).
+    #[test]
+    fn v3_database_migrates_to_v4() {
+        let dir = TestDir::new("db-v3-v4");
+        let path = dir.path().join("squeezegram.db");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for sql in [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3] {
+                tx.execute_batch(sql).unwrap();
+            }
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '3')",
+                [],
+            )
+            .unwrap();
+            tx.execute_batch(
+                "INSERT INTO destinations (id, peer_kind, peer_id, title)
+                 VALUES (1, 'user', 7, 'Saved Messages');
+                 INSERT INTO watch_folders (id, path, destination_id, enabled)
+                 VALUES (1, 'C:\\Videos\\OBS', 1, 0);",
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let conn = open(&path).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), 4);
+        let row: (String, Option<i64>, bool, Option<String>) = conn
+            .query_row(
+                "SELECT path, destination_id, enabled, send_mode FROM watch_folders WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (r"C:\Videos\OBS".to_owned(), Some(1), false, None));
+        drop(conn);
+        assert_eq!(schema_version(&open(&path).unwrap()).unwrap(), 4);
     }
 
     #[test]

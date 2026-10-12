@@ -321,6 +321,16 @@ impl Orchestrator {
         Ok(ids)
     }
 
+    /// A file found in a watched folder, held in `pending_review` until the user approves it
+    /// (`Store::add_watched_item`). The loop is not woken: the item cannot run yet.
+    pub fn add_watched(&self, item: &NewItem) -> Result<Option<i64>> {
+        let id = self.with_store(|store| store.add_watched_item(item))?;
+        if let Some(id) = id {
+            self.emit_changed(&[id]);
+        }
+        Ok(id)
+    }
+
     pub fn list(&self) -> Result<Vec<Item>> {
         self.with_store(|store| store.list_items())
     }

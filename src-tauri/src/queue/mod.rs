@@ -26,6 +26,8 @@ pub enum QueueError {
     ItemNotFound(i64),
     #[error("destination {0} not found")]
     DestinationNotFound(i64),
+    #[error("watched folder {0} not found")]
+    WatchFolderNotFound(i64),
     #[error("item {item_id}: illegal transition {from} -> {to}")]
     IllegalTransition {
         item_id: i64,
@@ -53,6 +55,7 @@ impl QueueError {
             QueueError::Io(_) | QueueError::NoAppData => "IO_ERROR",
             QueueError::ItemNotFound(_) => "ITEM_NOT_FOUND",
             QueueError::DestinationNotFound(_) => "DESTINATION_NOT_FOUND",
+            QueueError::WatchFolderNotFound(_) => "WATCH_FOLDER_NOT_FOUND",
             QueueError::IllegalTransition { .. } => "ILLEGAL_TRANSITION",
             QueueError::ItemStarted(_) => "ITEM_STARTED",
             QueueError::FileUnreadable(_) => "FILE_UNREADABLE",

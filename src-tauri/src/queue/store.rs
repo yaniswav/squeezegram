@@ -12,6 +12,10 @@ use super::{QueueError, Result, State, db, now_iso};
 use crate::transport::ChatFolder;
 
 pub const HOLD_DUPLICATE: &str = "duplicate";
+/// `hold_reason` of a file found in a watched folder: it waits for the user's approval (N4).
+pub const HOLD_WATCH: &str = "watch_pending";
+/// `origin` of an item found in a watched folder (`manual` for `queue_add`).
+pub const ORIGIN_WATCH: &str = "watch";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -201,6 +205,56 @@ pub struct DestinationPatch {
     pub favorite: Option<bool>,
     pub min_interval_s: Option<i64>,
     pub default_mode: Option<SendMode>,
+}
+
+/// A watched folder (`watch_folders`). Its files are queued in `pending_review` only.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WatchFolder {
+    pub id: i64,
+    pub path: String,
+    /// Required by `watch_add`; NULL only in a row written by hand.
+    pub destination_id: Option<i64>,
+    pub enabled: bool,
+    /// `None`: the destination's default mode when a file is found (schema v4).
+    pub send_mode: Option<SendMode>,
+}
+
+/// `watch_update` patch. `send_mode`: absent = unchanged, `null` = the destination's default.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WatchFolderPatch {
+    pub enabled: Option<bool>,
+    pub destination_id: Option<i64>,
+    #[serde(default, deserialize_with = "present_or_null")]
+    pub send_mode: Option<Option<SendMode>>,
+}
+
+const WATCH_FOLDER_COLUMNS: &str = "id, path, destination_id, enabled, send_mode";
+
+fn watch_folder_from_row(row: &Row<'_>) -> rusqlite::Result<WatchFolder> {
+    let mode: Option<String> = row.get(4)?;
+    Ok(WatchFolder {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        destination_id: row.get(2)?,
+        enabled: row.get(3)?,
+        send_mode: mode
+            .map(|mode| SendMode::parse(&mode))
+            .transpose()
+            .map_err(|e| invalid(4, e))?,
+    })
+}
+
+fn destination_exists(conn: &Connection, id: i64) -> Result<()> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM destinations WHERE id = ?1)",
+        [id],
+        |row| row.get(0),
+    )?;
+    if exists {
+        Ok(())
+    } else {
+        Err(QueueError::DestinationNotFound(id))
+    }
 }
 
 /// Tells a field set to `null` (`Some(None)`) from an absent one (`None`, via `default`).
@@ -750,6 +804,52 @@ impl Store {
         Ok(())
     }
 
+    /// A file found in a watched folder: appended in `pending_review` (`hold_reason =
+    /// 'watch_pending'`, `origin = 'watch'`), never in `ready`, so only `promote` lets it run
+    /// (N4). The destination is not marked as used: the user did not choose it for this file.
+    /// Returns `None`, adding nothing, when the same path already waits or runs in the queue
+    /// (added by hand, or found before and not finished).
+    pub fn add_watched_item(&mut self, item: &NewItem) -> Result<Option<i64>> {
+        let tx = self.conn.transaction()?;
+        destination_exists(&tx, item.destination_id)?;
+        let key = path_key(&item.source_path);
+        let queued: Vec<String> = {
+            let mut stmt =
+                tx.prepare("SELECT source_path FROM items WHERE state NOT IN (?1, ?2)")?;
+            let rows = stmt.query_map(
+                params![State::Sent.as_str(), State::Cancelled.as_str()],
+                |row| row.get(0),
+            )?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        if queued.iter().any(|path| path_key(path) == key) {
+            return Ok(None);
+        }
+        let now = now_iso();
+        tx.execute(
+            "INSERT INTO items (position, source_path, source_size, source_mtime,
+                                destination_id, send_mode, caption, state, hold_reason, origin,
+                                created_at, updated_at)
+             VALUES ((SELECT COALESCE(MAX(position), 0) + 1 FROM items), ?1, ?2, ?3, ?4, ?5,
+                     ?6, ?7, ?8, ?9, ?10, ?10)",
+            params![
+                item.source_path,
+                item.source_size,
+                item.source_mtime,
+                item.destination_id,
+                item.send_mode.as_str(),
+                item.caption,
+                State::PendingReview.as_str(),
+                HOLD_WATCH,
+                ORIGIN_WATCH,
+                now
+            ],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok(Some(id))
+    }
+
     /// Puts `ids` first, in that order; the other items keep their relative order after them.
     /// Returns the ids whose position changed.
     pub fn reorder(&mut self, ids: &[i64]) -> Result<Vec<i64>> {
@@ -1150,6 +1250,100 @@ impl Store {
             }))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    // --- watched folders ---
+
+    pub fn list_watch_folders(&self) -> Result<Vec<WatchFolder>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {WATCH_FOLDER_COLUMNS} FROM watch_folders ORDER BY id"
+        ))?;
+        let rows = stmt.query_map([], watch_folder_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn get_watch_folder(&self, id: i64) -> Result<WatchFolder> {
+        self.conn
+            .query_row(
+                &format!("SELECT {WATCH_FOLDER_COLUMNS} FROM watch_folders WHERE id = ?1"),
+                [id],
+                watch_folder_from_row,
+            )
+            .optional()?
+            .ok_or(QueueError::WatchFolderNotFound(id))
+    }
+
+    /// Watches `path`, enabled. A folder already watched under the same path (compared as
+    /// Windows does, case-insensitively) is returned as it is, not added twice.
+    pub fn add_watch_folder(
+        &mut self,
+        path: &str,
+        destination_id: i64,
+        send_mode: Option<SendMode>,
+    ) -> Result<WatchFolder> {
+        destination_exists(&self.conn, destination_id)?;
+        let key = path_key(path);
+        if let Some(existing) = self
+            .list_watch_folders()?
+            .into_iter()
+            .find(|folder| path_key(&folder.path) == key)
+        {
+            return Ok(existing);
+        }
+        self.conn.execute(
+            "INSERT INTO watch_folders (path, destination_id, enabled, send_mode)
+             VALUES (?1, ?2, 1, ?3)",
+            params![path, destination_id, send_mode.map(SendMode::as_str)],
+        )?;
+        self.get_watch_folder(self.conn.last_insert_rowid())
+    }
+
+    pub fn update_watch_folder(
+        &mut self,
+        id: i64,
+        patch: &WatchFolderPatch,
+    ) -> Result<WatchFolder> {
+        let tx = self.conn.transaction()?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM watch_folders WHERE id = ?1)",
+            [id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(QueueError::WatchFolderNotFound(id));
+        }
+        if let Some(enabled) = patch.enabled {
+            tx.execute(
+                "UPDATE watch_folders SET enabled = ?1 WHERE id = ?2",
+                params![enabled, id],
+            )?;
+        }
+        if let Some(destination_id) = patch.destination_id {
+            destination_exists(&tx, destination_id)?;
+            tx.execute(
+                "UPDATE watch_folders SET destination_id = ?1 WHERE id = ?2",
+                params![destination_id, id],
+            )?;
+        }
+        if let Some(mode) = patch.send_mode {
+            tx.execute(
+                "UPDATE watch_folders SET send_mode = ?1 WHERE id = ?2",
+                params![mode.map(SendMode::as_str), id],
+            )?;
+        }
+        tx.commit()?;
+        self.get_watch_folder(id)
+    }
+
+    /// Stops watching; the items already found stay in the queue.
+    pub fn remove_watch_folder(&mut self, id: i64) -> Result<()> {
+        match self
+            .conn
+            .execute("DELETE FROM watch_folders WHERE id = ?1", [id])?
+        {
+            0 => Err(QueueError::WatchFolderNotFound(id)),
+            _ => Ok(()),
+        }
     }
 
     pub fn deltas(&self, ids: &[i64]) -> Result<Vec<ItemDelta>> {
@@ -1959,5 +2153,67 @@ mod tests {
             })
             .unwrap();
         assert_eq!(limited.len(), 1);
+    }
+
+    #[test]
+    fn watch_folders_are_added_once_patched_and_removed() {
+        let mut store = memory_store();
+        let destination_id = first_destination(&store);
+        assert!(matches!(
+            store.add_watch_folder(r"C:\In", 999, None),
+            Err(QueueError::DestinationNotFound(999))
+        ));
+        let folder = store
+            .add_watch_folder(r"C:\In", destination_id, Some(SendMode::Document))
+            .unwrap();
+        assert!(folder.enabled);
+        assert_eq!(folder.send_mode, Some(SendMode::Document));
+        // The same folder spelt differently is the same folder, unchanged.
+        let again = store
+            .add_watch_folder("c:/in", destination_id, None)
+            .unwrap();
+        assert_eq!(again, folder);
+        assert_eq!(store.list_watch_folders().unwrap().len(), 1);
+
+        let patch: WatchFolderPatch = serde_json::from_str(r#"{"enabled": false}"#).unwrap();
+        let updated = store.update_watch_folder(folder.id, &patch).unwrap();
+        assert!(!updated.enabled);
+        assert_eq!(updated.send_mode, Some(SendMode::Document), "absent: kept");
+        let patch: WatchFolderPatch = serde_json::from_str(r#"{"send_mode": null}"#).unwrap();
+        let updated = store.update_watch_folder(folder.id, &patch).unwrap();
+        assert_eq!(updated.send_mode, None, "null: the destination's default");
+
+        store.remove_watch_folder(folder.id).unwrap();
+        assert!(matches!(
+            store.remove_watch_folder(folder.id),
+            Err(QueueError::WatchFolderNotFound(_))
+        ));
+        assert!(matches!(
+            store.update_watch_folder(folder.id, &WatchFolderPatch::default()),
+            Err(QueueError::WatchFolderNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn a_watched_file_waits_for_approval_and_is_not_queued_twice() {
+        let mut store = memory_store();
+        let destination_id = first_destination(&store);
+        let item = NewItem {
+            source_path: r"C:\In.mp4".into(),
+            source_size: 3,
+            source_mtime: 1,
+            destination_id,
+            send_mode: SendMode::Video,
+            caption: String::new(),
+        };
+        let id = store.add_watched_item(&item).unwrap().unwrap();
+        let held = store.get_item(id).unwrap();
+        assert_eq!(held.state, State::PendingReview);
+        assert_eq!(held.hold_reason.as_deref(), Some(HOLD_WATCH));
+        assert_eq!(held.origin, ORIGIN_WATCH);
+        assert_eq!(store.add_watched_item(&item).unwrap(), None);
+        // Once the first one is gone (cancelled), the path may come again.
+        store.cancel(id).unwrap();
+        assert!(store.add_watched_item(&item).unwrap().is_some());
     }
 }
