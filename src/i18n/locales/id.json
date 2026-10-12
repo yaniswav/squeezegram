@@ -41,19 +41,19 @@
     "ITEM_STARTED": "Item ini sudah mulai diproses dan tidak dapat diubah lagi.",
     "ILLEGAL_TRANSITION": "Tindakan ini tidak mungkin dilakukan pada status item saat ini.",
     "DESTINATION_NOT_FOUND": "Tujuan ini sudah tidak ada.",
-    "WATCH_FOLDER_NOT_FOUND": "This watched folder no longer exists.",
+    "WATCH_FOLDER_NOT_FOUND": "Folder yang dipantau ini sudah tidak ada.",
     "FILE_UNREADABLE": "Berkas tidak dapat dibaca atau bukan berkas biasa.",
     "FFMPEG_MISSING": "ffmpeg belum terpasang, atau folder ffmpeg kustom tidak berisi ffmpeg.exe dan ffprobe.exe.",
     "FFMPEG_ENCODER_UNAVAILABLE": "Tidak ada encoder video yang lolos uji di komputer ini.",
     "FFMPEG_FAILED": "ffmpeg gagal memproses berkas ini.",
     "FFMPEG_FAILED_fallback_failed": "Encoder GPU ({{encoder}}) berhenti setelah {{duration}} (kode keluar {{exitCode}}), dan encoder CPU ({{fallback}}) juga gagal. Coba lagi berkas ini. Jika gagal lagi, atur Settings › Encoding › Encoder ke “Prosesor dulu”.",
     "FFMPEG_FAILED_no_cpu_encoder": "Encoder GPU ({{encoder}}) berhenti setelah {{duration}} tanpa selesai (kode keluar {{exitCode}}), dan tidak ada encoder CPU yang berfungsi dengan ffmpeg ini sebagai pengganti. Coba lagi, sebaiknya saat tidak ada game atau perekaman layar yang memakai kartu grafis, atau gunakan ffmpeg yang menyertakan libx264.",
-    "FFMPEG_FAILED_hevc_gpu_only": "The GPU encoder ({{encoder}}) stopped after {{duration}} without finishing (exit code {{exitCode}}). HEVC can only be encoded by the graphics card, so no CPU encoder can take over. Retry, ideally while no game or screen recording uses the graphics card, or switch to H.264 in the advanced encoding settings.",
+    "FFMPEG_FAILED_hevc_gpu_only": "Encoder GPU ({{encoder}}) berhenti setelah {{duration}} tanpa selesai (kode keluar {{exitCode}}). HEVC hanya bisa dienkode oleh kartu grafis, sehingga tidak ada encoder CPU yang bisa mengambil alih. Coba lagi, sebaiknya saat tidak ada game atau perekaman layar yang memakai kartu grafis, atau beralih ke H.264 di pengaturan encoding lanjutan.",
     "ENCODER_FALLBACK": "Encoder GPU ({{from}}) melaporkan kesalahan setelah {{duration}}. squeezegram beralih ke encoder CPU ({{to}}) dan terus memakainya sampai aplikasi dimulai ulang.",
     "ENCODER_FALLBACK_silent": "Encoder GPU ({{from}}) berhenti tanpa pesan kesalahan (setelah {{duration}}). squeezegram beralih ke encoder CPU ({{to}}) dan terus memakainya sampai aplikasi dimulai ulang.",
-    "CODEC_FALLBACK": "HEVC is not available on this computer, so this file was compressed as H.264 instead.",
+    "CODEC_FALLBACK": "HEVC tidak tersedia di komputer ini, sehingga berkas ini dikompresi sebagai H.264.",
     "OUTPUT_TOO_LARGE": "Berkas ini tidak dapat masuk di bawah batas unggah, bahkan setelah dikompresi.",
-    "CAPTION_TOO_LONG": "This caption is too long: {{length}} characters, and Telegram allows {{max}}. Shorten it and retry; nothing was sent.",
+    "CAPTION_TOO_LONG": "Keterangan ini terlalu panjang: {{length}} karakter, sedangkan Telegram mengizinkan {{max}}. Perpendek lalu coba lagi; tidak ada yang dikirim.",
     "DISK_SPACE": "Ruang kosong di folder sementara tidak cukup.",
     "DUPLICATE": "Sudah pernah dikirim ke tujuan ini.",
     "SIDECAR_CHECKSUM": "ffmpeg yang diunduh tidak cocok dengan checksum yang diharapkan, sehingga tidak dipasang.",
@@ -63,7 +63,7 @@
     "SIDECAR_INVALID": "Folder ini tidak berisi ffmpeg dan ffprobe yang berfungsi, sehingga tidak digunakan.",
     "UPDATE_FAILED": "Pembaruan gagal.",
     "UPDATE_CHECK_FAILED": "Pemeriksaan pembaruan gagal. Periksa koneksi, lalu coba lagi.",
-    "UPDATE_NOT_PUBLISHED": "No update information is available yet. Try again later.",
+    "UPDATE_NOT_PUBLISHED": "Belum ada informasi pembaruan. Coba lagi nanti.",
     "UPDATE_DOWNLOAD_FAILED": "Pembaruan tidak dapat diunduh. Periksa koneksi, lalu coba lagi.",
     "UPDATE_SIGNATURE_INVALID": "Pembaruan yang diunduh tidak lolos pemeriksaan tanda tangannya, sehingga tidak dipasang.",
     "UPDATE_INSTALL_FAILED": "Pembaruan tidak dapat dipasang. Versi Anda saat ini tidak berubah.",
@@ -81,21 +81,21 @@
     "TG_UPLOAD_FAILED": "Telegram melaporkan bahwa unggahan gagal.",
     "TG_LIB_MISSING": "Pustaka Telegram (tdjson.dll) hilang atau rusak.",
     "TG_NOT_CONFIGURED": "Build ini tidak memiliki identitas API Telegram (api_id dan api_hash) yang valid, sehingga tidak dapat terhubung ke Telegram.",
-    "TG_NOT_CONFIGURED_override_api_hash_unavailable": "Your own api_hash can't be read on this Windows account (saved by another user or computer, or damaged), so squeezegram can't connect to Telegram. Enter it again in Settings, or remove your own api_id to use squeezegram's.",
-    "TG_TRANSPORT_BUSY": "Telegram is starting or signing out. Try again in a moment.",
+    "TG_NOT_CONFIGURED_override_api_hash_unavailable": "api_hash Anda sendiri tidak dapat dibaca di akun Windows ini (disimpan oleh pengguna atau komputer lain, atau rusak), sehingga squeezegram tidak dapat terhubung ke Telegram. Masukkan lagi di Pengaturan, atau hapus api_id Anda sendiri untuk memakai milik squeezegram.",
+    "TG_TRANSPORT_BUSY": "Telegram sedang dimulai atau sedang keluar. Coba lagi sebentar lagi.",
     "TG_NOT_IMPLEMENTED": "Fitur Telegram ini belum tersedia di versi ini.",
-    "TG_PROXY_FAILED": "The proxy did not work: {{message}}",
-    "TG_PROXY_SECRET_UNAVAILABLE": "The saved proxy password or secret can't be read on this Windows account, so squeezegram does not connect to Telegram. Enter it again in Settings > Network.",
-    "PROXY_INVALID": "This proxy setting is not valid.",
-    "PROXY_INVALID_kind": "Choose a proxy type first.",
-    "PROXY_INVALID_host": "Enter the server as a name (proxy.example.com) or an IP address, without http:// or a port.",
-    "PROXY_INVALID_port": "The port must be a whole number from 1 to 65535.",
-    "PROXY_INVALID_username": "The user name is too long or contains a line break.",
-    "PROXY_INVALID_password": "The password is too long or contains a line break.",
-    "PROXY_INVALID_secret": "This MTProto secret is not valid. Copy it exactly as given with the proxy (hexadecimal or base64url).",
-    "PROXY_TEST_UNAVAILABLE": "Telegram is not running, so this proxy can't be tested on its own. Apply it: squeezegram then starts through it, and Test works again.",
-    "METADATA_STRIP_FAILED": "The location and camera data of this file couldn't be removed (the file looks damaged), so it was not sent. To send it as it is, turn off \"Remove location and camera data\" in Settings.",
-    "LINK_REFUSED": "Only links to Telegram messages (https://t.me/…) can be opened.",
+    "TG_PROXY_FAILED": "Proksi tidak berfungsi: {{message}}",
+    "TG_PROXY_SECRET_UNAVAILABLE": "Kata sandi atau secret proksi yang tersimpan tidak dapat dibaca di akun Windows ini, sehingga squeezegram tidak terhubung ke Telegram. Masukkan lagi di Pengaturan > Jaringan.",
+    "PROXY_INVALID": "Pengaturan proksi ini tidak valid.",
+    "PROXY_INVALID_kind": "Pilih jenis proksi terlebih dahulu.",
+    "PROXY_INVALID_host": "Masukkan server sebagai nama (proxy.example.com) atau alamat IP, tanpa http:// atau port.",
+    "PROXY_INVALID_port": "Port harus berupa bilangan bulat dari 1 sampai 65535.",
+    "PROXY_INVALID_username": "Nama pengguna terlalu panjang atau mengandung baris baru.",
+    "PROXY_INVALID_password": "Kata sandi terlalu panjang atau mengandung baris baru.",
+    "PROXY_INVALID_secret": "Secret MTProto ini tidak valid. Salin persis seperti yang diberikan bersama proksi (heksadesimal atau base64url).",
+    "PROXY_TEST_UNAVAILABLE": "Telegram tidak berjalan, sehingga proksi ini tidak dapat diuji sendiri. Terapkan dulu: squeezegram kemudian mulai melalui proksi tersebut, dan Uji kembali berfungsi.",
+    "METADATA_STRIP_FAILED": "Data lokasi dan kamera pada berkas ini tidak dapat dihapus (berkas tampaknya rusak), sehingga tidak dikirim. Untuk mengirimnya apa adanya, nonaktifkan “Hapus data lokasi dan kamera” di Pengaturan.",
+    "LINK_REFUSED": "Hanya tautan ke pesan Telegram (https://t.me/…) yang dapat dibuka.",
     "CANCELLED": "Dibatalkan.",
     "FILES_SKIPPED_other": "{{count}} berkas yang bukan video atau foto dilewati di folder ini.",
     "TG_REJECTED": "Telegram menolak permintaan: {{message}} (kode {{tgCode}}).",
@@ -111,7 +111,7 @@
     "LIC_BAD_SIGNATURE": "Lisensi ini gagal pemeriksaan tanda tangannya. Salin ulang dari pesan bot tanpa mengubah apa pun.",
     "LIC_WRONG_ACCOUNT": "Lisensi ini milik akun Telegram lain. Masuk dengan akun tempat lisensi ini dibeli.",
     "LIC_NO_ACCOUNT": "Masuk ke Telegram untuk memeriksa lisensi ini.",
-    "FEATURE_NOT_LICENSED": "This feature is included with squeezegram Premium. Add a license in Settings, then try again."
+    "FEATURE_NOT_LICENSED": "Fitur ini termasuk dalam squeezegram Premium. Tambahkan lisensi di Pengaturan, lalu coba lagi."
   },
   "sidecars": {
     "missingTitle": "ffmpeg diperlukan untuk mengompresi video",
@@ -180,7 +180,7 @@
     "overlay": "Lepaskan untuk menambahkan ke antrean",
     "hint": "Lepaskan video dan foto di mana saja di jendela ini, atau",
     "browse": "telusuri berkas…",
-    "browseFolder": "or add a folder…"
+    "browseFolder": "atau tambahkan folder…"
   },
   "add": {
     "title": "Tambah berkas",
@@ -195,12 +195,12 @@
       "unavailableBody": "Inti aplikasi tidak dapat menampilkan daftar tujuan, sehingga berkas tidak dapat diantrekan.",
       "empty": "Belum ada tujuan. Masuk ke Telegram, lalu muat ulang daftar.",
       "loadError": "Tujuan tidak dapat dimuat.",
-      "extraLabel": "Destination {{number}}",
-      "removeExtra": "Remove destination {{number}}",
-      "extraEmpty": "Choose a destination for this slot, or remove it.",
-      "addAnother": "Add another destination",
+      "extraLabel": "Tujuan {{number}}",
+      "removeExtra": "Hapus tujuan {{number}}",
+      "extraEmpty": "Pilih tujuan untuk slot ini, atau hapus slot ini.",
+      "addAnother": "Tambahkan tujuan lain",
       "premium": "Premium",
-      "multiLocked": "Sending one batch to several chats or topics is included with squeezegram Premium.",
+      "multiLocked": "Mengirim satu kelompok ke beberapa chat atau topik termasuk dalam squeezegram Premium.",
       "check": {
         "checking": "Memeriksa izin…",
         "ok": "Anda dapat mengirim ke sini.",
@@ -219,32 +219,32 @@
     },
     "submit_other": "Tambahkan {{count}} berkas ke antrean",
     "added_other": "{{count}} berkas ditambahkan ke antrean.",
-    "addedEach_other": "{{count}} files added to the queue for each of {{destinations}} destinations."
+    "addedEach_other": "{{count}} berkas ditambahkan ke antrean untuk masing-masing dari {{destinations}} tujuan."
   },
   "caption": {
     "help": {
-      "summary": "Variables you can use",
-      "escape": "Write {{open}} or {{close}} for a literal brace. A name that is not in this list stays as written."
+      "summary": "Variabel yang dapat Anda gunakan",
+      "escape": "Tulis {{open}} atau {{close}} untuk kurung kurawal harfiah. Nama yang tidak ada dalam daftar ini tetap ditulis apa adanya."
     },
     "var": {
-      "name": "File name without extension",
-      "file": "File name with extension",
-      "ext": "Extension, without the dot",
-      "duration": "Duration (m:ss or h:mm:ss)",
-      "original_size": "Size before compression",
-      "final_size": "Size of the file that is sent",
-      "saving": "Percent saved by compression (empty if not compressed)",
-      "resolution": "Width x height, e.g. 1920x1080 (empty for documents)",
-      "date": "Send date, yyyy-mm-dd",
-      "index": "Position of the file in its batch",
-      "count": "Number of files in the batch"
+      "name": "Nama berkas tanpa ekstensi",
+      "file": "Nama berkas dengan ekstensi",
+      "ext": "Ekstensi, tanpa titik",
+      "duration": "Durasi (m:ss atau h:mm:ss)",
+      "original_size": "Ukuran sebelum kompresi",
+      "final_size": "Ukuran berkas yang dikirim",
+      "saving": "Persen yang dihemat oleh kompresi (kosong jika tidak dikompresi)",
+      "resolution": "Lebar x tinggi, misalnya 1920x1080 (kosong untuk dokumen)",
+      "date": "Tanggal kirim, yyyy-mm-dd",
+      "index": "Posisi berkas dalam kelompoknya",
+      "count": "Jumlah berkas dalam kelompok"
     },
     "preview": {
-      "label": "Preview for the first file",
-      "estimated": "Duration, resolution and the sizes after compression are estimates until the file is encoded."
+      "label": "Pratinjau untuk berkas pertama",
+      "estimated": "Durasi, resolusi, dan ukuran setelah kompresi bersifat perkiraan sampai berkas selesai dienkode."
     },
-    "counter": "{{length}} / {{max}} characters",
-    "tooLong": "Telegram refuses longer captions: the files would fail instead of being sent."
+    "counter": "{{length}} / {{max}} karakter",
+    "tooLong": "Telegram menolak keterangan yang lebih panjang: berkas akan gagal, bukan terkirim."
   },
   "queue": {
     "start": "Mulai",
@@ -299,7 +299,7 @@
       "remux": "Hanya remux",
       "remux_audio": "Remux, audio dikonversi",
       "photo": "Konversi foto",
-      "strip": "Ready as is, location removed"
+      "strip": "Siap apa adanya, lokasi dihapus"
     },
     "step": {
       "prepare": "Siapkan",
@@ -333,29 +333,29 @@
         "save": "Simpan keterangan"
       },
       "encoding": {
-        "open": "Encoding options",
-        "intro": "These choices replace the settings for this file only. You can change them until the file starts.",
-        "inactive": "This file has custom choices, but they are ignored without Premium.",
-        "locked": "Choose the codec, resolution and size of a single file with squeezegram Premium.",
-        "apply": "Apply to this file",
-        "reset": "Use the settings",
-        "fillLimit": "fills the limit",
-        "summary": "Custom encoding: {{codec}}, {{resolution}}, {{size}}",
+        "open": "Opsi encoding",
+        "intro": "Pilihan ini menggantikan pengaturan hanya untuk berkas ini. Anda masih dapat mengubahnya sampai berkas mulai diproses.",
+        "inactive": "Berkas ini memiliki pilihan kustom, tetapi diabaikan tanpa Premium.",
+        "locked": "Pilih codec, resolusi, dan ukuran untuk satu berkas dengan squeezegram Premium.",
+        "apply": "Terapkan ke berkas ini",
+        "reset": "Gunakan pengaturan",
+        "fillLimit": "mengisi batas",
+        "summary": "Encoding kustom: {{codec}}, {{resolution}}, {{size}}",
         "estimate": {
-          "loading": "Estimating the size…",
-          "failed": "The size cannot be estimated right now.",
-          "encode": "Estimated size: about {{size}} (limit {{limit}}).",
-          "as_is": "Sent as it is or repackaged, without re-encoding: about {{size}}.",
-          "photo": "No estimate for a photo.",
-          "too_small": "This size is too small for the length of this video.",
-          "unknown": "No estimate: the length of this video is unknown.",
-          "fallback": "HEVC is not available on this computer: this file will be H.264."
+          "loading": "Memperkirakan ukuran…",
+          "failed": "Ukuran tidak dapat diperkirakan saat ini.",
+          "encode": "Perkiraan ukuran: sekitar {{size}} (batas {{limit}}).",
+          "as_is": "Dikirim apa adanya atau dikemas ulang tanpa enkode ulang: sekitar {{size}}.",
+          "photo": "Tidak ada perkiraan untuk foto.",
+          "too_small": "Ukuran ini terlalu kecil untuk durasi video ini.",
+          "unknown": "Tidak ada perkiraan: durasi video ini tidak diketahui.",
+          "fallback": "HEVC tidak tersedia di komputer ini: berkas ini akan menjadi H.264."
         }
       },
       "duplicate": {
         "body": "Berkas ini sudah pernah dikirim ke tujuan ini. Berkas menunggu sampai Anda mengonfirmasi.",
-        "sentTo": "Already sent to {{destination}} on {{date}}.",
-        "open": "Open the message",
+        "sentTo": "Sudah dikirim ke {{destination}} pada {{date}}.",
+        "open": "Buka pesan",
         "confirm": "Tetap kirim",
         "dialogTitle": "Kirim berkas ini lagi?",
         "dialogBody": "{{name}} sudah pernah dikirim ke tujuan ini. Mengirimnya lagi akan memposting pesan duplikat.",
@@ -370,8 +370,8 @@
         "countdown": "Coba lagi dalam {{duration}}"
       },
       "interval": {
-        "body": "Waiting for this chat's minimum interval between sends. It goes out at {{time}}; other files go meanwhile.",
-        "countdown": "Sends in {{duration}}"
+        "body": "Menunggu jeda minimum antar-pengiriman untuk chat ini. Berkas dikirim pada {{time}}; berkas lain tetap diproses sementara itu.",
+        "countdown": "Dikirim dalam {{duration}}"
       },
       "unknown": {
         "body": "Aplikasi berhenti saat berkas ini sedang diunggah. Berkas mungkin sudah sampai ke Telegram atau belum.",
@@ -537,73 +537,73 @@
         "automatic": "{{kbps}} kbit/s (otomatis)"
       },
       "codec": {
-        "label": "Video codec",
-        "hint": "HEVC keeps more detail at the same size, but it needs a graphics card that can encode it, and some Telegram apps do not play it inline. It only applies to a file that gets re-encoded.",
-        "h264": "H.264 (automatic)",
+        "label": "Codec video",
+        "hint": "HEVC mempertahankan lebih banyak detail pada ukuran yang sama, tetapi membutuhkan kartu grafis yang dapat mengenkodenya, dan beberapa aplikasi Telegram tidak memutarnya secara inline. Hanya berlaku untuk berkas yang dienkode ulang.",
+        "h264": "H.264 (otomatis)",
         "hevc": "HEVC (H.265)"
       },
       "preset": {
-        "label": "Encoder speed",
-        "hint": "Faster finishes sooner; higher quality takes longer for a better picture at the same size. Encoders without a speed setting ignore this.",
-        "faster": "Faster",
-        "balanced": "Balanced (automatic)",
-        "quality": "Higher quality"
+        "label": "Kecepatan encoder",
+        "hint": "Lebih cepat selesai lebih dulu; kualitas lebih tinggi membutuhkan waktu lebih lama untuk gambar yang lebih baik pada ukuran yang sama. Encoder tanpa pengaturan kecepatan mengabaikan ini.",
+        "faster": "Lebih cepat",
+        "balanced": "Seimbang (otomatis)",
+        "quality": "Kualitas lebih tinggi"
       },
       "target": {
-        "label": "Output size",
-        "hint": "Fill the upload limit, or aim for a smaller file. A file never goes over the limit.",
-        "limit": "Fill the upload limit (automatic)",
-        "custom": "Custom size",
-        "mb": "Target size (MB)",
-        "error": "Enter a whole number of MB from 1 to 4000."
+        "label": "Ukuran keluaran",
+        "hint": "Isi batas unggah, atau targetkan berkas yang lebih kecil. Berkas tidak pernah melebihi batas.",
+        "limit": "Isi batas unggah (otomatis)",
+        "custom": "Ukuran kustom",
+        "mb": "Ukuran target (MB)",
+        "error": "Masukkan bilangan bulat MB dari 1 sampai 4000."
       }
     },
     "watch": {
-      "title": "Watched folders",
-      "hint": "New photos and videos that appear in these folders are added to the queue as pending, including those that arrived while squeezegram was closed. Nothing is sent until you approve each one. Files already in a folder when you add it are left alone.",
-      "locked": "Included with squeezegram Premium. Folders listed here stay saved, but none is watched until then.",
-      "empty": "No folder is watched yet.",
-      "folder": "Folder to watch",
-      "noFolder": "No folder chosen",
-      "choose": "Choose a folder",
-      "add": "Watch this folder",
-      "summary": "To {{destination}}, as {{mode}}",
-      "noDestination": "no destination",
-      "toggle": "Watch {{path}}",
-      "remove": "Stop watching {{path}}",
+      "title": "Folder yang dipantau",
+      "hint": "Foto dan video baru yang muncul di folder ini ditambahkan ke antrean sebagai menunggu, termasuk yang tiba saat squeezegram tertutup. Tidak ada yang dikirim sampai Anda menyetujui masing-masing. Berkas yang sudah ada di folder saat Anda menambahkannya dibiarkan begitu saja.",
+      "locked": "Termasuk dalam squeezegram Premium. Folder yang tercantum di sini tetap tersimpan, tetapi tidak ada yang dipantau sampai saat itu.",
+      "empty": "Belum ada folder yang dipantau.",
+      "folder": "Folder yang akan dipantau",
+      "noFolder": "Belum ada folder dipilih",
+      "choose": "Pilih folder",
+      "add": "Pantau folder ini",
+      "summary": "Ke {{destination}}, sebagai {{mode}}",
+      "noDestination": "tanpa tujuan",
+      "toggle": "Pantau {{path}}",
+      "remove": "Berhenti memantau {{path}}",
       "status": {
-        "active": "Watching: new files wait in the queue for your approval.",
-        "paused": "Paused: new files are not added.",
-        "locked": "Not watched without Premium.",
-        "unreadable": "Can't be read: the folder was moved, renamed or deleted, or its drive is offline. Choose it again or remove it."
+        "active": "Memantau: berkas baru menunggu di antrean untuk persetujuan Anda.",
+        "paused": "Dijeda: berkas baru tidak ditambahkan.",
+        "locked": "Tidak dipantau tanpa Premium.",
+        "unreadable": "Tidak dapat dibaca: folder dipindahkan, diganti namanya, atau dihapus, atau drive-nya sedang offline. Pilih lagi atau hapus folder ini."
       }
     },
     "network": {
-      "title": "Network",
-      "hint": "Use a proxy if Telegram is blocked or slow where you are. Every connection to Telegram then goes through it.",
+      "title": "Jaringan",
+      "hint": "Gunakan proksi jika Telegram diblokir atau lambat di tempat Anda. Setiap koneksi ke Telegram kemudian melalui proksi tersebut.",
       "kind": {
-        "label": "Proxy",
-        "none": "No proxy (direct connection)",
+        "label": "Proksi",
+        "none": "Tanpa proksi (koneksi langsung)",
         "socks5": "SOCKS5",
         "http": "HTTP",
         "mtproto": "MTProto"
       },
       "host": "Server",
       "port": "Port",
-      "username": "User name (optional)",
-      "password": "Password (optional)",
+      "username": "Nama pengguna (opsional)",
+      "password": "Kata sandi (opsional)",
       "secret": "Secret",
-      "secretHint": "As given with the proxy, in hexadecimal or base64url.",
-      "secretSaved": "Saved. Leave empty to keep it.",
-      "forgetPassword": "Remove the saved password",
-      "keepPassword": "Keep the saved password",
-      "protected": "The password or secret is stored encrypted for your Windows account and is never shown again.",
-      "test": "Test",
-      "testing": "Testing…",
-      "testOk": "The proxy works: Telegram answered in {{ms}} ms.",
-      "apply": "Apply",
-      "applying": "Applying…",
-      "saved": "Saved and applied."
+      "secretHint": "Sebagaimana diberikan bersama proksi, dalam heksadesimal atau base64url.",
+      "secretSaved": "Tersimpan. Kosongkan untuk mempertahankannya.",
+      "forgetPassword": "Hapus kata sandi yang tersimpan",
+      "keepPassword": "Pertahankan kata sandi yang tersimpan",
+      "protected": "Kata sandi atau secret disimpan terenkripsi untuk akun Windows Anda dan tidak pernah ditampilkan lagi.",
+      "test": "Uji",
+      "testing": "Menguji…",
+      "testOk": "Proksi berfungsi: Telegram merespons dalam {{ms}} ms.",
+      "apply": "Terapkan",
+      "applying": "Menerapkan…",
+      "saved": "Tersimpan dan diterapkan."
     },
     "send": {
       "title": "Jeda antar pengiriman",
@@ -616,50 +616,50 @@
     "telegram": {
       "title": "Telegram",
       "device": {
-        "label": "Device name",
-        "hint": "Shown in Telegram under Settings > Devices. Leave it empty to use the name shown here. squeezegram gives it to Telegram when it starts: a new name applies after a restart, and Telegram may keep showing the previous one for a session already signed in until you sign in again.",
-        "error": "Use at most 64 characters, on a single line."
+        "label": "Nama perangkat",
+        "hint": "Ditampilkan di Telegram pada Pengaturan > Perangkat. Kosongkan untuk memakai nama yang ditampilkan di sini. squeezegram memberikannya ke Telegram saat dimulai: nama baru berlaku setelah dimulai ulang, dan Telegram mungkin masih menampilkan nama sebelumnya untuk sesi yang sudah masuk sampai Anda masuk lagi.",
+        "error": "Gunakan paling banyak 64 karakter, dalam satu baris."
       }
     },
     "apiIdentity": {
-      "title": "Advanced: your own API identity",
-      "hint": "squeezegram connects to Telegram with its own api_id. If you created one at my.telegram.org, you can use it instead.",
-      "warning": "Each identity keeps its own Telegram session on this computer. With your own api_id you sign in again the first time; going back to squeezegram's identity finds its session again. The change applies after squeezegram restarts.",
-      "busy": "Telegram is starting or signing out: wait a moment before changing the identity.",
-      "product": "squeezegram's own identity is in use.",
-      "saved": "Your api_id {{apiId}} is saved, with its api_hash (stored encrypted for your Windows account, never shown again).",
-      "hashMissing": "Your api_id {{apiId}} is saved, but its api_hash can't be read on this Windows account. Enter both again, or remove them.",
-      "restart": "Restart squeezegram to use this change.",
-      "use": "Use my own api_id",
-      "replace": "Replace",
-      "save": "Save",
-      "saving": "Saving…",
+      "title": "Lanjutan: identitas API Anda sendiri",
+      "hint": "squeezegram terhubung ke Telegram dengan api_id-nya sendiri. Jika Anda membuatnya di my.telegram.org, Anda dapat memakainya sebagai gantinya.",
+      "warning": "Setiap identitas menyimpan sesi Telegram sendiri di komputer ini. Dengan api_id Anda sendiri, Anda masuk lagi pada pertama kali; kembali ke identitas squeezegram akan menemukan sesinya lagi. Perubahan berlaku setelah squeezegram dimulai ulang.",
+      "busy": "Telegram sedang dimulai atau sedang keluar: tunggu sebentar sebelum mengubah identitas.",
+      "product": "Identitas squeezegram sendiri sedang digunakan.",
+      "saved": "api_id {{apiId}} Anda tersimpan, beserta api_hash-nya (disimpan terenkripsi untuk akun Windows Anda, dan tidak pernah ditampilkan lagi).",
+      "hashMissing": "api_id {{apiId}} Anda tersimpan, tetapi api_hash-nya tidak dapat dibaca di akun Windows ini. Masukkan keduanya lagi, atau hapus.",
+      "restart": "Mulai ulang squeezegram untuk menggunakan perubahan ini.",
+      "use": "Gunakan api_id saya sendiri",
+      "replace": "Ganti",
+      "save": "Simpan",
+      "saving": "Menyimpan…",
       "apiId": {
         "label": "api_id",
-        "error": "Enter the api_id as a whole number, as shown on my.telegram.org."
+        "error": "Masukkan api_id sebagai bilangan bulat, seperti yang ditampilkan di my.telegram.org."
       },
       "apiHash": {
         "label": "api_hash",
-        "hint": "32 characters, digits and letters a to f. Stored encrypted for your Windows account and never shown again.",
-        "error": "The api_hash has 32 characters, digits and letters a to f."
+        "hint": "32 karakter, angka dan huruf a sampai f. Disimpan terenkripsi untuk akun Windows Anda dan tidak pernah ditampilkan lagi.",
+        "error": "api_hash harus terdiri dari 32 karakter, angka dan huruf a sampai f."
       },
       "remove": {
-        "button": "Remove",
-        "title": "Go back to squeezegram's identity?",
-        "body": "Your api_id and api_hash are deleted from this computer. After the restart, squeezegram's identity and its session are used again.",
-        "confirm": "Remove"
+        "button": "Hapus",
+        "title": "Kembali ke identitas squeezegram?",
+        "body": "api_id dan api_hash Anda dihapus dari komputer ini. Setelah dimulai ulang, identitas squeezegram dan sesinya digunakan kembali.",
+        "confirm": "Hapus"
       }
     },
     "caption": {
-      "title": "Default caption",
-      "hint": "Prefills the caption when you add files. Leave it empty for no caption.",
-      "label": "Caption template"
+      "title": "Keterangan default",
+      "hint": "Mengisi keterangan lebih dulu saat Anda menambahkan berkas. Kosongkan untuk tanpa keterangan.",
+      "label": "Templat keterangan"
     },
     "privacy": {
-      "title": "Privacy",
+      "title": "Privasi",
       "strip": {
-        "label": "Remove location and camera data from photos",
-        "hint": "Photos sent without re-encoding (as files, for example) go out without their GPS position, camera serial numbers or editing history; their pixels and orientation are kept. Compliant MP4 videos lose their recorded location the same way. HEIC files are sent unchanged."
+        "label": "Hapus data lokasi dan kamera dari foto",
+        "hint": "Foto yang dikirim tanpa enkode ulang (misalnya sebagai berkas) dikirim tanpa posisi GPS, nomor seri kamera, atau riwayat pengeditan; piksel dan orientasinya tetap dipertahankan. Video MP4 yang sesuai standar juga kehilangan lokasi yang direkam dengan cara yang sama. Berkas HEIC dikirim tanpa perubahan."
       }
     },
     "temp": {
@@ -723,26 +723,26 @@
       "neverChecked": "Belum pernah diperiksa."
     },
     "background": {
-      "title": "Background",
+      "title": "Latar belakang",
       "premium": "Premium",
-      "locked": "Included with squeezegram Premium. Until then, closing the window quits the app.",
+      "locked": "Termasuk dalam squeezegram Premium. Sampai saat itu, menutup jendela akan mengeluarkan aplikasi.",
       "close": {
-        "label": "When I close the window",
-        "hint": "While it keeps running, the queue and the watched folders go on working. Right-click the icon in the notification area to pause the queue or quit.",
-        "quit": "Quit squeezegram",
-        "tray": "Keep running in the notification area"
+        "label": "Saat saya menutup jendela",
+        "hint": "Selama tetap berjalan, antrean dan folder yang dipantau terus bekerja. Klik kanan ikon di area notifikasi untuk menjeda antrean atau keluar.",
+        "quit": "Keluar dari squeezegram",
+        "tray": "Tetap berjalan di area notifikasi"
       },
       "autostart": {
-        "label": "Start with Windows",
-        "hint": "squeezegram starts when you sign in to Windows and stays hidden in the notification area. This applies right away; there is nothing to save.",
-        "inactive": "Starting hidden needs Premium. The startup entry is still there, so Windows starts squeezegram with its window showing. Turn this off to remove the entry."
+        "label": "Mulai bersama Windows",
+        "hint": "squeezegram dimulai saat Anda masuk ke Windows dan tetap tersembunyi di area notifikasi. Ini langsung berlaku; tidak ada yang perlu disimpan.",
+        "inactive": "Memulai secara tersembunyi membutuhkan Premium. Entri startup tetap ada, sehingga Windows memulai squeezegram dengan jendelanya terlihat. Nonaktifkan ini untuk menghapus entri."
       }
     },
     "groupRisk": {
-      "title": "Sending to groups and channels",
-      "scope": "This notice never applies to Saved Messages or private chats.",
-      "acknowledged": "You have already accepted it.",
-      "pending": "It will be shown once, before your first send to a group or channel."
+      "title": "Mengirim ke grup dan kanal",
+      "scope": "Pemberitahuan ini tidak pernah berlaku untuk Pesan Tersimpan atau chat pribadi.",
+      "acknowledged": "Anda sudah menyetujuinya.",
+      "pending": "Akan ditampilkan sekali, sebelum pengiriman pertama Anda ke grup atau kanal."
     }
   },
   "update": {
@@ -826,14 +826,14 @@
     "favorite": "Tambahkan {{name}} ke favorit",
     "unfavorite": "Hapus {{name}} dari favorit",
     "favorites": "Favorit",
-    "edit": "Name and send interval of {{name}}",
+    "edit": "Nama dan jeda pengiriman {{name}}",
     "renameLabel": "Nama lokal",
     "renameHint": "Hanya ditampilkan di squeezegram. Kosongkan untuk memakai nama Telegram.",
     "interval": {
-      "label": "Minimum time between two sends (minutes)",
-      "hint": "Empty or 0: no minimum. Files for this chat wait until this much time has passed since the last one sent there; files for other chats go meanwhile.",
-      "error": "Enter a whole number of minutes, from 0 to 10080 (one week).",
-      "summary": "At least {{duration}} between two sends to this chat."
+      "label": "Waktu minimum antara dua pengiriman (menit)",
+      "hint": "Kosong atau 0: tanpa minimum. Berkas untuk chat ini menunggu sampai waktu ini berlalu sejak pengiriman terakhir ke sana; berkas untuk chat lain tetap diproses sementara itu.",
+      "error": "Masukkan bilangan bulat menit, dari 0 sampai 10080 (satu minggu).",
+      "summary": "Minimal {{duration}} antara dua pengiriman ke chat ini."
     },
     "save": "Simpan",
     "unnamed": "Chat tanpa nama",
@@ -891,36 +891,36 @@
     "unnamedHide": "Sembunyikan"
   },
   "codec": {
-    "hevcWarning": "HEVC files may not play inline in every Telegram app. Choose H.264 if the people you send to use older apps.",
+    "hevcWarning": "Berkas HEVC mungkin tidak dapat diputar secara inline di setiap aplikasi Telegram. Pilih H.264 jika orang yang Anda kirimi menggunakan aplikasi lama.",
     "unavailable": {
-      "no_hevc_encoder": "HEVC is unavailable: none of the graphics card encoders (NVENC, Quick Sync, AMF) of the ffmpeg in use works for HEVC on this computer. Choose an ffmpeg that has one in Settings.",
-      "ffmpeg_unavailable": "HEVC cannot be checked because ffmpeg is not available."
+      "no_hevc_encoder": "HEVC tidak tersedia: tidak ada encoder kartu grafis (NVENC, Quick Sync, AMF) dari ffmpeg yang digunakan yang berfungsi untuk HEVC di komputer ini. Pilih ffmpeg yang memilikinya di Pengaturan.",
+      "ffmpeg_unavailable": "HEVC tidak dapat diperiksa karena ffmpeg tidak tersedia."
     }
   },
   "tray": {
-    "open": "Open squeezegram",
-    "pause": "Pause the queue",
-    "resume": "Resume the queue",
-    "quit": "Quit",
-    "idle": "squeezegram: idle",
-    "working": "squeezegram: {{count}} in queue",
-    "paused": "squeezegram: paused, {{count}} in queue"
+    "open": "Buka squeezegram",
+    "pause": "Jeda antrean",
+    "resume": "Lanjutkan antrean",
+    "quit": "Keluar",
+    "idle": "squeezegram: diam",
+    "working": "squeezegram: {{count}} dalam antrean",
+    "paused": "squeezegram: dijeda, {{count}} dalam antrean"
   },
   "quit": {
-    "title": "Quit squeezegram?",
-    "body": "A file is being compressed or sent. If you quit now, it is interrupted. A file that was being sent is marked Unconfirmed, so you can check next time whether it arrived.",
-    "confirm": "Quit"
+    "title": "Keluar dari squeezegram?",
+    "body": "Sebuah berkas sedang dikompresi atau dikirim. Jika Anda keluar sekarang, prosesnya terhenti. Berkas yang sedang dikirim ditandai Belum terkonfirmasi, sehingga Anda dapat memeriksa lain kali apakah berkas itu sudah sampai.",
+    "confirm": "Keluar"
   },
   "groupRisk": {
-    "title": "Before you send to a group or channel",
-    "intro": "Sending files again and again to groups or channels where you don't have the right permissions can get your Telegram account restricted.",
+    "title": "Sebelum mengirim ke grup atau kanal",
+    "intro": "Mengirim berkas berulang kali ke grup atau kanal tempat Anda tidak memiliki izin yang tepat dapat membuat akun Telegram Anda dibatasi.",
     "practice": {
-      "title": "Good practice",
-      "permissions": "Only send to groups and channels where you are allowed to post.",
-      "slowMode": "Respect slow mode and the pauses between sends; don't shorten them to go faster.",
-      "spam": "Don't spam: avoid sending large batches of files to the same group."
+      "title": "Praktik yang baik",
+      "permissions": "Hanya kirim ke grup dan kanal tempat Anda diizinkan memposting.",
+      "slowMode": "Patuhi mode lambat dan jeda antar-pengiriman; jangan memperpendeknya agar lebih cepat.",
+      "spam": "Jangan melakukan spam: hindari mengirim kelompok besar berkas ke grup yang sama."
     },
-    "promise": "squeezegram follows Telegram's rules and has no workaround for its limits: it can't promise your account won't be restricted.",
-    "confirm": "I understand, continue"
+    "promise": "squeezegram mengikuti aturan Telegram dan tidak memiliki cara untuk melewati batasannya: aplikasi tidak dapat menjamin akun Anda tidak akan dibatasi.",
+    "confirm": "Saya mengerti, lanjutkan"
   }
 }

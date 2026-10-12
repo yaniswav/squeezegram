@@ -106,6 +106,7 @@ const KEPT_TERMS = [
 // Unit symbols a language writes its own way (French: octet, not byte).
 const LOCAL_TERMS: Record<string, Record<string, string>> = {
   fr: { MB: "Mo" },
+  ru: { MB: "МБ" },
 }
 
 const en = flatten(load("en"))

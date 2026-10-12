@@ -41,19 +41,19 @@
     "ITEM_STARTED": "Обработка этого элемента уже началась, его больше нельзя изменить.",
     "ILLEGAL_TRANSITION": "Это действие невозможно в текущем состоянии элемента.",
     "DESTINATION_NOT_FOUND": "Этот получатель больше не существует.",
-    "WATCH_FOLDER_NOT_FOUND": "This watched folder no longer exists.",
+    "WATCH_FOLDER_NOT_FOUND": "Эта отслеживаемая папка больше не существует.",
     "FILE_UNREADABLE": "Файл не удаётся прочитать или это не обычный файл.",
     "FFMPEG_MISSING": "ffmpeg не установлен или в пользовательской папке ffmpeg нет файлов ffmpeg.exe и ffprobe.exe.",
     "FFMPEG_ENCODER_UNAVAILABLE": "Ни один видеокодировщик не прошёл проверку на этом компьютере.",
     "FFMPEG_FAILED": "ffmpeg завершился с ошибкой при обработке этого файла.",
     "FFMPEG_FAILED_fallback_failed": "Графический кодировщик ({{encoder}}) остановился через {{duration}} (код выхода {{exitCode}}), а процессорный кодировщик ({{fallback}}) тоже не справился. Повторите попытку для этого файла. Если ошибка повторится, в разделе Настройки › Кодирование › Кодировщик выберите «Сначала процессор».",
     "FFMPEG_FAILED_no_cpu_encoder": "Графический кодировщик ({{encoder}}) остановился через {{duration}}, не завершив работу (код выхода {{exitCode}}), и ни один процессорный кодировщик с этим ffmpeg не может его заменить. Повторите попытку, желательно когда игра или запись экрана не использует видеокарту, или используйте сборку ffmpeg с libx264.",
-    "FFMPEG_FAILED_hevc_gpu_only": "The GPU encoder ({{encoder}}) stopped after {{duration}} without finishing (exit code {{exitCode}}). HEVC can only be encoded by the graphics card, so no CPU encoder can take over. Retry, ideally while no game or screen recording uses the graphics card, or switch to H.264 in the advanced encoding settings.",
+    "FFMPEG_FAILED_hevc_gpu_only": "Графический кодировщик ({{encoder}}) остановился через {{duration}}, не завершив работу (код выхода {{exitCode}}). HEVC кодируется только видеокартой, поэтому процессорный кодировщик не может её заменить. Повторите попытку, желательно когда игра или запись экрана не использует видеокарту, или переключитесь на H.264 в расширенных настройках кодирования.",
     "ENCODER_FALLBACK": "Графический кодировщик ({{from}}) сообщил об ошибке через {{duration}}. squeezegram переключился на процессорный кодировщик ({{to}}) и будет использовать его до перезапуска приложения.",
     "ENCODER_FALLBACK_silent": "Графический кодировщик ({{from}}) остановился без сообщения об ошибке (через {{duration}}). squeezegram переключился на процессорный кодировщик ({{to}}) и будет использовать его до перезапуска приложения.",
-    "CODEC_FALLBACK": "HEVC is not available on this computer, so this file was compressed as H.264 instead.",
+    "CODEC_FALLBACK": "HEVC недоступен на этом компьютере, поэтому этот файл сжат в H.264.",
     "OUTPUT_TOO_LARGE": "Этот файл не удаётся уместить в лимит загрузки даже после сжатия.",
-    "CAPTION_TOO_LONG": "This caption is too long: {{length}} characters, and Telegram allows {{max}}. Shorten it and retry; nothing was sent.",
+    "CAPTION_TOO_LONG": "Подпись слишком длинная: {{length}} символов, а Telegram допускает {{max}}. Сократите её и повторите попытку; ничего не отправлено.",
     "DISK_SPACE": "Недостаточно свободного места во временной папке.",
     "DUPLICATE": "Уже отправлено этому получателю.",
     "SIDECAR_CHECKSUM": "Загруженный ffmpeg не совпадает с ожидаемой контрольной суммой, поэтому он не установлен.",
@@ -63,7 +63,7 @@
     "SIDECAR_INVALID": "В этой папке нет работающих ffmpeg и ffprobe, поэтому она не используется.",
     "UPDATE_FAILED": "Не удалось обновить приложение.",
     "UPDATE_CHECK_FAILED": "Не удалось проверить наличие обновлений. Проверьте подключение и повторите попытку.",
-    "UPDATE_NOT_PUBLISHED": "No update information is available yet. Try again later.",
+    "UPDATE_NOT_PUBLISHED": "Сведений об обновлении пока нет. Попробуйте позже.",
     "UPDATE_DOWNLOAD_FAILED": "Не удалось загрузить обновление. Проверьте подключение и повторите попытку.",
     "UPDATE_SIGNATURE_INVALID": "Загруженное обновление не прошло проверку подписи, поэтому оно не установлено.",
     "UPDATE_INSTALL_FAILED": "Не удалось установить обновление. Текущая версия не изменена.",
@@ -81,21 +81,21 @@
     "TG_UPLOAD_FAILED": "Telegram сообщил, что загрузка не удалась.",
     "TG_LIB_MISSING": "Библиотека Telegram (tdjson.dll) отсутствует или повреждена.",
     "TG_NOT_CONFIGURED": "В этой сборке нет действительных данных API Telegram (api_id и api_hash), поэтому подключиться к Telegram невозможно.",
-    "TG_NOT_CONFIGURED_override_api_hash_unavailable": "Your own api_hash can't be read on this Windows account (saved by another user or computer, or damaged), so squeezegram can't connect to Telegram. Enter it again in Settings, or remove your own api_id to use squeezegram's.",
-    "TG_TRANSPORT_BUSY": "Telegram is starting or signing out. Try again in a moment.",
+    "TG_NOT_CONFIGURED_override_api_hash_unavailable": "Ваш собственный api_hash не удаётся прочитать в этой учётной записи Windows (он сохранён другим пользователем или на другом компьютере либо повреждён), поэтому squeezegram не может подключиться к Telegram. Введите его заново в настройках или удалите свой api_id, чтобы использовать api_id squeezegram.",
+    "TG_TRANSPORT_BUSY": "Telegram запускается или выполняет выход. Повторите попытку через минуту.",
     "TG_NOT_IMPLEMENTED": "Эта функция Telegram пока недоступна в этой версии.",
-    "TG_PROXY_FAILED": "The proxy did not work: {{message}}",
-    "TG_PROXY_SECRET_UNAVAILABLE": "The saved proxy password or secret can't be read on this Windows account, so squeezegram does not connect to Telegram. Enter it again in Settings > Network.",
-    "PROXY_INVALID": "This proxy setting is not valid.",
-    "PROXY_INVALID_kind": "Choose a proxy type first.",
-    "PROXY_INVALID_host": "Enter the server as a name (proxy.example.com) or an IP address, without http:// or a port.",
-    "PROXY_INVALID_port": "The port must be a whole number from 1 to 65535.",
-    "PROXY_INVALID_username": "The user name is too long or contains a line break.",
-    "PROXY_INVALID_password": "The password is too long or contains a line break.",
-    "PROXY_INVALID_secret": "This MTProto secret is not valid. Copy it exactly as given with the proxy (hexadecimal or base64url).",
-    "PROXY_TEST_UNAVAILABLE": "Telegram is not running, so this proxy can't be tested on its own. Apply it: squeezegram then starts through it, and Test works again.",
-    "METADATA_STRIP_FAILED": "The location and camera data of this file couldn't be removed (the file looks damaged), so it was not sent. To send it as it is, turn off \"Remove location and camera data\" in Settings.",
-    "LINK_REFUSED": "Only links to Telegram messages (https://t.me/…) can be opened.",
+    "TG_PROXY_FAILED": "Прокси не работает: {{message}}",
+    "TG_PROXY_SECRET_UNAVAILABLE": "Сохранённый пароль или секрет прокси не удаётся прочитать в этой учётной записи Windows, поэтому squeezegram не подключается к Telegram. Введите его заново в разделе Настройки › Сеть.",
+    "PROXY_INVALID": "Этот параметр прокси недопустим.",
+    "PROXY_INVALID_kind": "Сначала выберите тип прокси.",
+    "PROXY_INVALID_host": "Укажите сервер именем (proxy.example.com) или IP-адресом, без http:// и порта.",
+    "PROXY_INVALID_port": "Порт должен быть целым числом от 1 до 65535.",
+    "PROXY_INVALID_username": "Имя пользователя слишком длинное или содержит перенос строки.",
+    "PROXY_INVALID_password": "Пароль слишком длинный или содержит перенос строки.",
+    "PROXY_INVALID_secret": "Этот секрет MTProto недействителен. Скопируйте его точно в том виде, в каком он дан вместе с прокси (шестнадцатеричный или base64url).",
+    "PROXY_TEST_UNAVAILABLE": "Telegram не запущен, поэтому этот прокси нельзя проверить отдельно. Примените его: squeezegram тогда запустится через него, и «Проверить» снова заработает.",
+    "METADATA_STRIP_FAILED": "Не удалось удалить данные о местоположении и камере этого файла (похоже, он повреждён), поэтому он не отправлен. Чтобы отправить его как есть, отключите в настройках параметр «Удалять из фото данные о местоположении и камере».",
+    "LINK_REFUSED": "Можно открывать только ссылки на сообщения Telegram (https://t.me/…).",
     "CANCELLED": "Отменено.",
     "FILES_SKIPPED_one": "{{count}} файл, который не является видео или фото, пропущен в этой папке.",
     "FILES_SKIPPED_few": "{{count}} файла, которые не являются видео или фото, пропущено в этой папке.",
@@ -114,7 +114,7 @@
     "LIC_BAD_SIGNATURE": "Эта лицензия не прошла проверку подписи. Скопируйте её из сообщения бота заново, ничего не меняя.",
     "LIC_WRONG_ACCOUNT": "Эта лицензия принадлежит другому аккаунту Telegram. Войдите в аккаунт, для которого её купили.",
     "LIC_NO_ACCOUNT": "Войдите в Telegram, чтобы проверить эту лицензию.",
-    "FEATURE_NOT_LICENSED": "This feature is included with squeezegram Premium. Add a license in Settings, then try again."
+    "FEATURE_NOT_LICENSED": "Эта функция входит в squeezegram Premium. Добавьте лицензию в настройках и повторите попытку."
   },
   "sidecars": {
     "missingTitle": "Для сжатия видео нужен ffmpeg",
@@ -186,7 +186,7 @@
     "overlay": "Отпустите, чтобы добавить в очередь",
     "hint": "Перетащите видео и фото в любое место этого окна или",
     "browse": "выберите файлы…",
-    "browseFolder": "or add a folder…"
+    "browseFolder": "или добавьте папку…"
   },
   "add": {
     "title": "Добавление файлов",
@@ -207,12 +207,12 @@
       "unavailableBody": "Ядру не удалось получить список получателей, поэтому файлы нельзя поставить в очередь.",
       "empty": "Получателей пока нет. Войдите в Telegram и обновите список.",
       "loadError": "Не удалось загрузить получателей.",
-      "extraLabel": "Destination {{number}}",
-      "removeExtra": "Remove destination {{number}}",
-      "extraEmpty": "Choose a destination for this slot, or remove it.",
-      "addAnother": "Add another destination",
+      "extraLabel": "Получатель №{{number}}",
+      "removeExtra": "Удалить получателя №{{number}}",
+      "extraEmpty": "Выберите получателя для этого места или удалите его.",
+      "addAnother": "Добавить ещё одного получателя",
       "premium": "Premium",
-      "multiLocked": "Sending one batch to several chats or topics is included with squeezegram Premium.",
+      "multiLocked": "Отправка одной партии в несколько чатов или тем входит в squeezegram Premium.",
       "check": {
         "checking": "Проверка прав…",
         "ok": "Отправка сюда доступна.",
@@ -237,35 +237,35 @@
     "added_few": "{{count}} файла добавлено в очередь.",
     "added_many": "{{count}} файлов добавлено в очередь.",
     "added_other": "{{count}} файла добавлено в очередь.",
-    "addedEach_one": "{{count}} file added to the queue for each of {{destinations}} destinations.",
-    "addedEach_few": "{{count}} files added to the queue for each of {{destinations}} destinations.",
-    "addedEach_many": "{{count}} files added to the queue for each of {{destinations}} destinations.",
-    "addedEach_other": "{{count}} files added to the queue for each of {{destinations}} destinations."
+    "addedEach_one": "{{count}} файл добавлен в очередь для каждого из получателей ({{destinations}}).",
+    "addedEach_few": "{{count}} файла добавлено в очередь для каждого из получателей ({{destinations}}).",
+    "addedEach_many": "{{count}} файлов добавлено в очередь для каждого из получателей ({{destinations}}).",
+    "addedEach_other": "{{count}} файла добавлено в очередь для каждого из получателей ({{destinations}})."
   },
   "caption": {
     "help": {
-      "summary": "Variables you can use",
-      "escape": "Write {{open}} or {{close}} for a literal brace. A name that is not in this list stays as written."
+      "summary": "Доступные переменные",
+      "escape": "Чтобы вывести фигурную скобку как есть, напишите {{open}} или {{close}}. Имя, которого нет в этом списке, остаётся как написано."
     },
     "var": {
-      "name": "File name without extension",
-      "file": "File name with extension",
-      "ext": "Extension, without the dot",
-      "duration": "Duration (m:ss or h:mm:ss)",
-      "original_size": "Size before compression",
-      "final_size": "Size of the file that is sent",
-      "saving": "Percent saved by compression (empty if not compressed)",
-      "resolution": "Width x height, e.g. 1920x1080 (empty for documents)",
-      "date": "Send date, yyyy-mm-dd",
-      "index": "Position of the file in its batch",
-      "count": "Number of files in the batch"
+      "name": "Имя файла без расширения",
+      "file": "Имя файла с расширением",
+      "ext": "Расширение без точки",
+      "duration": "Длительность (м:сс или ч:мм:сс)",
+      "original_size": "Размер до сжатия",
+      "final_size": "Размер отправляемого файла",
+      "saving": "Процент, сэкономленный сжатием (пусто, если файл не сжимался)",
+      "resolution": "Ширина x высота, например 1920x1080 (пусто для файлов)",
+      "date": "Дата отправки, гггг-мм-дд",
+      "index": "Номер файла в партии",
+      "count": "Количество файлов в партии"
     },
     "preview": {
-      "label": "Preview for the first file",
-      "estimated": "Duration, resolution and the sizes after compression are estimates until the file is encoded."
+      "label": "Предпросмотр первого файла",
+      "estimated": "Длительность, разрешение и размеры после сжатия — приблизительные, пока файл не закодирован."
     },
-    "counter": "{{length}} / {{max}} characters",
-    "tooLong": "Telegram refuses longer captions: the files would fail instead of being sent."
+    "counter": "{{length}} / {{max}} символов",
+    "tooLong": "Telegram не принимает слишком длинные подписи: файлы не отправятся, а завершатся ошибкой."
   },
   "queue": {
     "start": "Запустить",
@@ -338,7 +338,7 @@
       "remux": "Только перепаковка",
       "remux_audio": "Перепаковка, аудио преобразуется",
       "photo": "Преобразование фото",
-      "strip": "Ready as is, location removed"
+      "strip": "Готов как есть, местоположение удалено"
     },
     "step": {
       "prepare": "Подготовка",
@@ -372,29 +372,29 @@
         "save": "Сохранить подпись"
       },
       "encoding": {
-        "open": "Encoding options",
-        "intro": "These choices replace the settings for this file only. You can change them until the file starts.",
-        "inactive": "This file has custom choices, but they are ignored without Premium.",
-        "locked": "Choose the codec, resolution and size of a single file with squeezegram Premium.",
-        "apply": "Apply to this file",
-        "reset": "Use the settings",
-        "fillLimit": "fills the limit",
-        "summary": "Custom encoding: {{codec}}, {{resolution}}, {{size}}",
+        "open": "Параметры кодирования",
+        "intro": "Эти параметры заменяют настройки только для этого файла. Их можно менять, пока файл не начал обрабатываться.",
+        "inactive": "Для этого файла заданы свои параметры, но без Premium они не применяются.",
+        "locked": "Выбор кодека, разрешения и размера отдельного файла доступен в squeezegram Premium.",
+        "apply": "Применить к этому файлу",
+        "reset": "Использовать настройки",
+        "fillLimit": "заполняет лимит",
+        "summary": "Свои параметры: {{codec}}, {{resolution}}, {{size}}",
         "estimate": {
-          "loading": "Estimating the size…",
-          "failed": "The size cannot be estimated right now.",
-          "encode": "Estimated size: about {{size}} (limit {{limit}}).",
-          "as_is": "Sent as it is or repackaged, without re-encoding: about {{size}}.",
-          "photo": "No estimate for a photo.",
-          "too_small": "This size is too small for the length of this video.",
-          "unknown": "No estimate: the length of this video is unknown.",
-          "fallback": "HEVC is not available on this computer: this file will be H.264."
+          "loading": "Оценка размера…",
+          "failed": "Сейчас размер нельзя оценить.",
+          "encode": "Ожидаемый размер: около {{size}} (лимит {{limit}}).",
+          "as_is": "Отправится как есть или перепакуется без перекодирования: около {{size}}.",
+          "photo": "Оценки для фото нет.",
+          "too_small": "Этот размер слишком мал для длительности этого видео.",
+          "unknown": "Оценки нет: длительность этого видео неизвестна.",
+          "fallback": "HEVC недоступен на этом компьютере: этот файл будет в H.264."
         }
       },
       "duplicate": {
         "body": "Этот файл уже отправлялся этому получателю. Он ждёт, пока вы подтвердите отправку.",
-        "sentTo": "Already sent to {{destination}} on {{date}}.",
-        "open": "Open the message",
+        "sentTo": "Уже отправлено получателю {{destination}}, {{date}}.",
+        "open": "Открыть сообщение",
         "confirm": "Всё равно отправить",
         "dialogTitle": "Отправить этот файл снова?",
         "dialogBody": "{{name}} уже отправлялся этому получателю. Повторная отправка создаст дубликат сообщения.",
@@ -409,8 +409,8 @@
         "countdown": "Повтор через {{duration}}"
       },
       "interval": {
-        "body": "Waiting for this chat's minimum interval between sends. It goes out at {{time}}; other files go meanwhile.",
-        "countdown": "Sends in {{duration}}"
+        "body": "Ожидание минимального интервала между отправками в этот чат. Файл уйдёт в {{time}}; тем временем отправляются другие файлы.",
+        "countdown": "Отправка через {{duration}}"
       },
       "unknown": {
         "body": "Приложение остановилось во время отправки этого файла. Он мог дойти до Telegram, а мог и не дойти.",
@@ -525,10 +525,10 @@
       "premium": {
         "label": "Telegram Premium",
         "auto": "Определять по аккаунту",
-        "yes": "Premium (4000 MB)",
-        "no": "Не Premium (2000 MB)",
-        "hint": "«Определять по аккаунту» использует лимит вошедшего аккаунта Telegram: 4000 MB с Premium, 2000 MB без Premium или если вход не выполнен. Пользовательский лимит имеет приоритет.",
-        "current": "Применяется сейчас: {{mb}} MB, {{source}}.",
+        "yes": "Premium (4000 МБ)",
+        "no": "Не Premium (2000 МБ)",
+        "hint": "«Определять по аккаунту» использует лимит вошедшего аккаунта Telegram: 4000 МБ с Premium, 2000 МБ без Premium или если вход не выполнен. Пользовательский лимит имеет приоритет.",
+        "current": "Применяется сейчас: {{mb}} МБ, {{source}}.",
         "currentUnavailable": "Не удалось прочитать лимит, который применяется сейчас.",
         "source": {
           "custom": "из пользовательского лимита",
@@ -540,9 +540,9 @@
         }
       },
       "custom": {
-        "label": "Пользовательский лимит (MB)",
+        "label": "Пользовательский лимит (МБ)",
         "hint": "Заменяет лимит Premium. Оставьте поле пустым, чтобы использовать его.",
-        "error": "Введите целое число MB больше 0."
+        "error": "Введите целое число МБ больше 0."
       },
       "margin": {
         "label": "Запас безопасности (%)",
@@ -575,77 +575,77 @@
       "audio": {
         "label": "Битрейт аудио",
         "hint": "Более высокий битрейт звучит лучше, но забирает место у картинки под лимитом загрузки.",
-        "value": "{{kbps}} kbit/s",
+        "value": "{{kbps}} кбит/с",
         "automatic": "{{kbps}} kbit/s (автоматически)"
       },
       "codec": {
-        "label": "Video codec",
-        "hint": "HEVC keeps more detail at the same size, but it needs a graphics card that can encode it, and some Telegram apps do not play it inline. It only applies to a file that gets re-encoded.",
-        "h264": "H.264 (automatic)",
+        "label": "Видеокодек",
+        "hint": "HEVC сохраняет больше деталей при том же размере, но ему нужна видеокарта, которая умеет его кодировать, а некоторые приложения Telegram не воспроизводят его в чате. Применяется только к файлу, который перекодируется.",
+        "h264": "H.264 (автоматически)",
         "hevc": "HEVC (H.265)"
       },
       "preset": {
-        "label": "Encoder speed",
-        "hint": "Faster finishes sooner; higher quality takes longer for a better picture at the same size. Encoders without a speed setting ignore this.",
-        "faster": "Faster",
-        "balanced": "Balanced (automatic)",
-        "quality": "Higher quality"
+        "label": "Скорость кодирования",
+        "hint": "Быстрее — значит, готово раньше; высокое качество занимает больше времени, зато картинка лучше при том же размере. Кодировщики без настройки скорости это игнорируют.",
+        "faster": "Быстрее",
+        "balanced": "Сбалансированная (автоматически)",
+        "quality": "Высокое качество"
       },
       "target": {
-        "label": "Output size",
-        "hint": "Fill the upload limit, or aim for a smaller file. A file never goes over the limit.",
-        "limit": "Fill the upload limit (automatic)",
-        "custom": "Custom size",
-        "mb": "Target size (MB)",
-        "error": "Enter a whole number of MB from 1 to 4000."
+        "label": "Размер на выходе",
+        "hint": "Заполнить лимит загрузки или сделать файл меньше. Файл никогда не превышает лимит.",
+        "limit": "Заполнить лимит загрузки (автоматически)",
+        "custom": "Свой размер",
+        "mb": "Целевой размер (МБ)",
+        "error": "Введите целое число МБ от 1 до 4000."
       }
     },
     "watch": {
-      "title": "Watched folders",
-      "hint": "New photos and videos that appear in these folders are added to the queue as pending, including those that arrived while squeezegram was closed. Nothing is sent until you approve each one. Files already in a folder when you add it are left alone.",
-      "locked": "Included with squeezegram Premium. Folders listed here stay saved, but none is watched until then.",
-      "empty": "No folder is watched yet.",
-      "folder": "Folder to watch",
-      "noFolder": "No folder chosen",
-      "choose": "Choose a folder",
-      "add": "Watch this folder",
-      "summary": "To {{destination}}, as {{mode}}",
-      "noDestination": "no destination",
-      "toggle": "Watch {{path}}",
-      "remove": "Stop watching {{path}}",
+      "title": "Отслеживаемые папки",
+      "hint": "Новые фото и видео, которые появляются в этих папках, добавляются в очередь как ожидающие, в том числе появившиеся, пока squeezegram был закрыт. Ничего не отправляется, пока вы не одобрите каждый файл. Файлы, которые уже были в папке на момент её добавления, не трогаются.",
+      "locked": "Входит в squeezegram Premium. Папки из этого списка сохраняются, но до этого ни одна не отслеживается.",
+      "empty": "Пока ни одна папка не отслеживается.",
+      "folder": "Папка для отслеживания",
+      "noFolder": "Папка не выбрана",
+      "choose": "Выберите папку",
+      "add": "Отслеживать эту папку",
+      "summary": "Получатель: {{destination}}, отправка как {{mode}}",
+      "noDestination": "нет получателя",
+      "toggle": "Отслеживать {{path}}",
+      "remove": "Прекратить отслеживание {{path}}",
       "status": {
-        "active": "Watching: new files wait in the queue for your approval.",
-        "paused": "Paused: new files are not added.",
-        "locked": "Not watched without Premium.",
-        "unreadable": "Can't be read: the folder was moved, renamed or deleted, or its drive is offline. Choose it again or remove it."
+        "active": "Отслеживается: новые файлы ждут в очереди вашего одобрения.",
+        "paused": "Приостановлено: новые файлы не добавляются.",
+        "locked": "Без Premium не отслеживается.",
+        "unreadable": "Не удаётся прочитать: папку переместили, переименовали или удалили, либо её диск не в сети. Выберите её заново или удалите."
       }
     },
     "network": {
-      "title": "Network",
-      "hint": "Use a proxy if Telegram is blocked or slow where you are. Every connection to Telegram then goes through it.",
+      "title": "Сеть",
+      "hint": "Используйте прокси, если Telegram заблокирован или работает медленно в вашем регионе. Тогда каждое подключение к Telegram идёт через него.",
       "kind": {
-        "label": "Proxy",
-        "none": "No proxy (direct connection)",
+        "label": "Прокси",
+        "none": "Без прокси (прямое подключение)",
         "socks5": "SOCKS5",
         "http": "HTTP",
         "mtproto": "MTProto"
       },
-      "host": "Server",
-      "port": "Port",
-      "username": "User name (optional)",
-      "password": "Password (optional)",
-      "secret": "Secret",
-      "secretHint": "As given with the proxy, in hexadecimal or base64url.",
-      "secretSaved": "Saved. Leave empty to keep it.",
-      "forgetPassword": "Remove the saved password",
-      "keepPassword": "Keep the saved password",
-      "protected": "The password or secret is stored encrypted for your Windows account and is never shown again.",
-      "test": "Test",
-      "testing": "Testing…",
-      "testOk": "The proxy works: Telegram answered in {{ms}} ms.",
-      "apply": "Apply",
-      "applying": "Applying…",
-      "saved": "Saved and applied."
+      "host": "Сервер",
+      "port": "Порт",
+      "username": "Имя пользователя (необязательно)",
+      "password": "Пароль (необязательно)",
+      "secret": "Секрет",
+      "secretHint": "Как дано вместе с прокси: в шестнадцатеричном виде или base64url.",
+      "secretSaved": "Сохранён. Оставьте поле пустым, чтобы не менять.",
+      "forgetPassword": "Удалить сохранённый пароль",
+      "keepPassword": "Оставить сохранённый пароль",
+      "protected": "Пароль или секрет хранятся в зашифрованном виде для вашей учётной записи Windows и больше не показываются.",
+      "test": "Проверить",
+      "testing": "Проверка…",
+      "testOk": "Прокси работает: Telegram ответил за {{ms}} мс.",
+      "apply": "Применить",
+      "applying": "Применение…",
+      "saved": "Сохранено и применено."
     },
     "send": {
       "title": "Паузы между отправками",
@@ -658,50 +658,50 @@
     "telegram": {
       "title": "Telegram",
       "device": {
-        "label": "Device name",
-        "hint": "Shown in Telegram under Settings > Devices. Leave it empty to use the name shown here. squeezegram gives it to Telegram when it starts: a new name applies after a restart, and Telegram may keep showing the previous one for a session already signed in until you sign in again.",
-        "error": "Use at most 64 characters, on a single line."
+        "label": "Имя устройства",
+        "hint": "Отображается в Telegram в разделе Настройки › Устройства. Оставьте поле пустым, чтобы использовать имя, показанное здесь. squeezegram передаёт его Telegram при запуске: новое имя применяется после перезапуска, а Telegram может ещё некоторое время показывать прежнее имя для уже открытого сеанса, пока вы не войдёте снова.",
+        "error": "Не больше 64 символов, в одну строку."
       }
     },
     "apiIdentity": {
-      "title": "Advanced: your own API identity",
-      "hint": "squeezegram connects to Telegram with its own api_id. If you created one at my.telegram.org, you can use it instead.",
-      "warning": "Each identity keeps its own Telegram session on this computer. With your own api_id you sign in again the first time; going back to squeezegram's identity finds its session again. The change applies after squeezegram restarts.",
-      "busy": "Telegram is starting or signing out: wait a moment before changing the identity.",
-      "product": "squeezegram's own identity is in use.",
-      "saved": "Your api_id {{apiId}} is saved, with its api_hash (stored encrypted for your Windows account, never shown again).",
-      "hashMissing": "Your api_id {{apiId}} is saved, but its api_hash can't be read on this Windows account. Enter both again, or remove them.",
-      "restart": "Restart squeezegram to use this change.",
-      "use": "Use my own api_id",
-      "replace": "Replace",
-      "save": "Save",
-      "saving": "Saving…",
+      "title": "Дополнительно: свои данные API",
+      "hint": "squeezegram подключается к Telegram со своим api_id. Если вы создали api_id на my.telegram.org, можно использовать его.",
+      "warning": "Каждые данные API хранят свой сеанс Telegram на этом компьютере. С собственным api_id при первом входе придётся войти заново; при возврате к данным squeezegram его сеанс восстанавливается. Изменение применяется после перезапуска squeezegram.",
+      "busy": "Telegram запускается или выполняет выход: подождите немного, прежде чем менять данные API.",
+      "product": "Используются данные API самого squeezegram.",
+      "saved": "Ваш api_id {{apiId}} сохранён вместе с api_hash (хранится в зашифрованном виде для вашей учётной записи Windows и больше не показывается).",
+      "hashMissing": "Ваш api_id {{apiId}} сохранён, но его api_hash не удаётся прочитать в этой учётной записи Windows. Введите оба значения заново или удалите их.",
+      "restart": "Перезапустите squeezegram, чтобы применить изменение.",
+      "use": "Использовать свой api_id",
+      "replace": "Заменить",
+      "save": "Сохранить",
+      "saving": "Сохранение…",
       "apiId": {
         "label": "api_id",
-        "error": "Enter the api_id as a whole number, as shown on my.telegram.org."
+        "error": "Введите api_id целым числом, как показано на my.telegram.org."
       },
       "apiHash": {
         "label": "api_hash",
-        "hint": "32 characters, digits and letters a to f. Stored encrypted for your Windows account and never shown again.",
-        "error": "The api_hash has 32 characters, digits and letters a to f."
+        "hint": "32 символа: цифры и буквы от a до f. Хранится в зашифрованном виде для вашей учётной записи Windows и больше не показывается.",
+        "error": "api_hash должен содержать 32 символа: цифры и буквы от a до f."
       },
       "remove": {
-        "button": "Remove",
-        "title": "Go back to squeezegram's identity?",
-        "body": "Your api_id and api_hash are deleted from this computer. After the restart, squeezegram's identity and its session are used again.",
-        "confirm": "Remove"
+        "button": "Удалить",
+        "title": "Вернуться к данным squeezegram?",
+        "body": "Ваши api_id и api_hash будут удалены с этого компьютера. После перезапуска снова используются данные squeezegram и его сеанс.",
+        "confirm": "Удалить"
       }
     },
     "caption": {
-      "title": "Default caption",
-      "hint": "Prefills the caption when you add files. Leave it empty for no caption.",
-      "label": "Caption template"
+      "title": "Подпись по умолчанию",
+      "hint": "Подставляется в подпись при добавлении файлов. Оставьте пустым, если подпись не нужна.",
+      "label": "Шаблон подписи"
     },
     "privacy": {
-      "title": "Privacy",
+      "title": "Конфиденциальность",
       "strip": {
-        "label": "Remove location and camera data from photos",
-        "hint": "Photos sent without re-encoding (as files, for example) go out without their GPS position, camera serial numbers or editing history; their pixels and orientation are kept. Compliant MP4 videos lose their recorded location the same way. HEIC files are sent unchanged."
+        "label": "Удалять из фото данные о местоположении и камере",
+        "hint": "Фото, отправляемые без перекодирования (например, как файлы), уходят без GPS-координат, серийных номеров камеры и истории правок; пиксели и ориентация сохраняются. Видео MP4 в совместимом формате так же теряют записанное местоположение. Файлы HEIC отправляются без изменений."
       }
     },
     "temp": {
@@ -710,9 +710,9 @@
       "default": "Папка по умолчанию",
       "choose": "Выбрать…",
       "useDefault": "Использовать по умолчанию",
-      "minFree": "Минимум свободного места (GB)",
+      "minFree": "Минимум свободного места (ГБ)",
       "minFreeHint": "Сжатие не начинается, если свободного места меньше.",
-      "errorInteger": "Введите целое число GB, 0 или больше."
+      "errorInteger": "Введите целое число ГБ, 0 или больше."
     },
     "ffmpeg": {
       "title": "ffmpeg",
@@ -765,26 +765,26 @@
       "neverChecked": "Ещё не проверялось."
     },
     "background": {
-      "title": "Background",
+      "title": "Фоновый режим",
       "premium": "Premium",
-      "locked": "Included with squeezegram Premium. Until then, closing the window quits the app.",
+      "locked": "Входит в squeezegram Premium. До этого закрытие окна завершает приложение.",
       "close": {
-        "label": "When I close the window",
-        "hint": "While it keeps running, the queue and the watched folders go on working. Right-click the icon in the notification area to pause the queue or quit.",
-        "quit": "Quit squeezegram",
-        "tray": "Keep running in the notification area"
+        "label": "Когда я закрываю окно",
+        "hint": "Пока приложение работает в фоне, очередь и отслеживаемые папки продолжают работать. Щёлкните правой кнопкой значок в области уведомлений, чтобы приостановить очередь или выйти.",
+        "quit": "Выйти из squeezegram",
+        "tray": "Продолжать работу в области уведомлений"
       },
       "autostart": {
-        "label": "Start with Windows",
-        "hint": "squeezegram starts when you sign in to Windows and stays hidden in the notification area. This applies right away; there is nothing to save.",
-        "inactive": "Starting hidden needs Premium. The startup entry is still there, so Windows starts squeezegram with its window showing. Turn this off to remove the entry."
+        "label": "Запускать вместе с Windows",
+        "hint": "squeezegram запускается при входе в Windows и остаётся скрытым в области уведомлений. Настройка применяется сразу, сохранять ничего не нужно.",
+        "inactive": "Запуск в скрытом режиме требует Premium. Запись автозапуска всё равно остаётся, поэтому Windows запускает squeezegram с видимым окном. Выключите эту настройку, чтобы удалить запись."
       }
     },
     "groupRisk": {
-      "title": "Sending to groups and channels",
-      "scope": "This notice never applies to Saved Messages or private chats.",
-      "acknowledged": "You have already accepted it.",
-      "pending": "It will be shown once, before your first send to a group or channel."
+      "title": "Отправка в группы и каналы",
+      "scope": "Это уведомление никогда не относится к «Избранному» и личным чатам.",
+      "acknowledged": "Вы уже приняли это.",
+      "pending": "Оно будет показано один раз, перед первой отправкой в группу или канал."
     }
   },
   "update": {
@@ -871,14 +871,14 @@
     "favorite": "Закрепить {{name}}",
     "unfavorite": "Открепить {{name}}",
     "favorites": "Закреплённые",
-    "edit": "Name and send interval of {{name}}",
+    "edit": "Название и интервал отправки для {{name}}",
     "renameLabel": "Локальное имя",
     "renameHint": "Показывается только в squeezegram. Оставьте поле пустым, чтобы использовать имя из Telegram.",
     "interval": {
-      "label": "Minimum time between two sends (minutes)",
-      "hint": "Empty or 0: no minimum. Files for this chat wait until this much time has passed since the last one sent there; files for other chats go meanwhile.",
-      "error": "Enter a whole number of minutes, from 0 to 10080 (one week).",
-      "summary": "At least {{duration}} between two sends to this chat."
+      "label": "Минимальное время между двумя отправками (минуты)",
+      "hint": "Пусто или 0: без ограничения. Файлы для этого чата ждут, пока не пройдёт это время с последней отправки туда; файлы для других чатов тем временем уходят.",
+      "error": "Введите целое число минут от 0 до 10080 (одна неделя).",
+      "summary": "Не меньше {{duration}} между двумя отправками в этот чат."
     },
     "save": "Сохранить",
     "unnamed": "Чат без названия",
@@ -942,36 +942,36 @@
     "unnamedHide": "Скрыть их"
   },
   "codec": {
-    "hevcWarning": "HEVC files may not play inline in every Telegram app. Choose H.264 if the people you send to use older apps.",
+    "hevcWarning": "Файлы HEVC могут не воспроизводиться в чате в каждом приложении Telegram. Выберите H.264, если у получателей старые приложения.",
     "unavailable": {
-      "no_hevc_encoder": "HEVC is unavailable: none of the graphics card encoders (NVENC, Quick Sync, AMF) of the ffmpeg in use works for HEVC on this computer. Choose an ffmpeg that has one in Settings.",
-      "ffmpeg_unavailable": "HEVC cannot be checked because ffmpeg is not available."
+      "no_hevc_encoder": "HEVC недоступен: ни один видеокодировщик видеокарты (NVENC, Quick Sync, AMF) используемого ffmpeg не работает с HEVC на этом компьютере. Выберите в настройках ffmpeg, в котором такой кодировщик есть.",
+      "ffmpeg_unavailable": "HEVC нельзя проверить: ffmpeg недоступен."
     }
   },
   "tray": {
-    "open": "Open squeezegram",
-    "pause": "Pause the queue",
-    "resume": "Resume the queue",
-    "quit": "Quit",
-    "idle": "squeezegram: idle",
-    "working": "squeezegram: {{count}} in queue",
-    "paused": "squeezegram: paused, {{count}} in queue"
+    "open": "Открыть squeezegram",
+    "pause": "Приостановить очередь",
+    "resume": "Продолжить очередь",
+    "quit": "Выход",
+    "idle": "squeezegram: ожидание",
+    "working": "squeezegram: в очереди {{count}}",
+    "paused": "squeezegram: пауза, в очереди {{count}}"
   },
   "quit": {
-    "title": "Quit squeezegram?",
-    "body": "A file is being compressed or sent. If you quit now, it is interrupted. A file that was being sent is marked Unconfirmed, so you can check next time whether it arrived.",
-    "confirm": "Quit"
+    "title": "Выйти из squeezegram?",
+    "body": "Файл сжимается или отправляется. Если выйти сейчас, эта работа прервётся. Файл, который отправлялся, будет помечен «Требует проверки», чтобы при следующем запуске вы могли проверить, дошёл ли он.",
+    "confirm": "Выйти"
   },
   "groupRisk": {
-    "title": "Before you send to a group or channel",
-    "intro": "Sending files again and again to groups or channels where you don't have the right permissions can get your Telegram account restricted.",
+    "title": "Перед отправкой в группу или канал",
+    "intro": "Многократная отправка файлов в группы или каналы, где у вас нет нужных прав, может привести к ограничению вашего аккаунта Telegram.",
     "practice": {
-      "title": "Good practice",
-      "permissions": "Only send to groups and channels where you are allowed to post.",
-      "slowMode": "Respect slow mode and the pauses between sends; don't shorten them to go faster.",
-      "spam": "Don't spam: avoid sending large batches of files to the same group."
+      "title": "Правила хорошей практики",
+      "permissions": "Отправляйте только в те группы и каналы, где вам разрешено писать.",
+      "slowMode": "Соблюдайте медленный режим и паузы между отправками; не сокращайте их ради скорости.",
+      "spam": "Не спамьте: не отправляйте большие пачки файлов в одну и ту же группу."
     },
-    "promise": "squeezegram follows Telegram's rules and has no workaround for its limits: it can't promise your account won't be restricted.",
-    "confirm": "I understand, continue"
+    "promise": "squeezegram следует правилам Telegram и не обходит его ограничения: он не может гарантировать, что ваш аккаунт не будет ограничен.",
+    "confirm": "Я понимаю, продолжить"
   }
 }

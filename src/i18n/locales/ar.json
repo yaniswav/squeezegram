@@ -41,19 +41,19 @@
     "ITEM_STARTED": "بدأت معالجة هذا العنصر بالفعل، ولم يعد ممكنًا تغييره.",
     "ILLEGAL_TRANSITION": "هذا الإجراء غير ممكن في الحالة الحالية للعنصر.",
     "DESTINATION_NOT_FOUND": "لم تعد هذه الوجهة موجودة.",
-    "WATCH_FOLDER_NOT_FOUND": "This watched folder no longer exists.",
+    "WATCH_FOLDER_NOT_FOUND": "لم يعد هذا المجلد المراقَب موجودًا.",
     "FILE_UNREADABLE": "تعذّرت قراءة الملف، أو أنه ليس ملفًا عاديًا.",
     "FFMPEG_MISSING": "ffmpeg غير مثبّت، أو أن مجلد ffmpeg المخصص لا يحتوي على ffmpeg.exe وffprobe.exe.",
     "FFMPEG_ENCODER_UNAVAILABLE": "لم يجتز أي مرمِّز فيديو الاختبار على هذا الكمبيوتر.",
     "FFMPEG_FAILED": "فشل ffmpeg أثناء معالجة هذا الملف.",
     "FFMPEG_FAILED_fallback_failed": "توقف المرمِّز عبر بطاقة الرسوميات ({{encoder}}) بعد {{duration}} (رمز الخروج {{exitCode}})، وفشل أيضًا المرمِّز عبر المعالج ({{fallback}}). أعد المحاولة لهذا الملف. إذا فشلت مجددًا، فاضبط Settings › Encoding › Encoder على “المعالج أولاً”.",
     "FFMPEG_FAILED_no_cpu_encoder": "توقف المرمِّز عبر بطاقة الرسوميات ({{encoder}}) بعد {{duration}} دون أن ينتهي (رمز الخروج {{exitCode}})، ولا يوجد مرمِّز عبر المعالج يعمل مع ffmpeg هذا ليحل محله. أعد المحاولة، ويفضَّل ألا تكون أي لعبة أو تسجيل شاشة تستخدم بطاقة الرسوميات في الوقت نفسه، أو استخدم ffmpeg يتضمن libx264.",
-    "FFMPEG_FAILED_hevc_gpu_only": "The GPU encoder ({{encoder}}) stopped after {{duration}} without finishing (exit code {{exitCode}}). HEVC can only be encoded by the graphics card, so no CPU encoder can take over. Retry, ideally while no game or screen recording uses the graphics card, or switch to H.264 in the advanced encoding settings.",
+    "FFMPEG_FAILED_hevc_gpu_only": "توقف مرمِّز بطاقة الرسوميات ({{encoder}}) بعد {{duration}} دون أن ينتهي (رمز الخروج {{exitCode}}). لا يمكن ترميز HEVC إلا بواسطة بطاقة الرسوميات، لذلك لا يوجد مرمِّز عبر المعالج يحل محلها. أعد المحاولة، ويُفضَّل ألا تكون أي لعبة أو تسجيل شاشة يستخدم بطاقة الرسوميات في الوقت نفسه، أو انتقل إلى H.264 في إعدادات الترميز المتقدم.",
     "ENCODER_FALLBACK": "أبلغ مرمِّز بطاقة الرسوميات ({{from}}) عن خطأ بعد {{duration}}. انتقل squeezegram إلى المرمِّز عبر المعالج ({{to}}) وسيستمر في استخدامه حتى إعادة تشغيل التطبيق.",
     "ENCODER_FALLBACK_silent": "توقف مرمِّز بطاقة الرسوميات ({{from}}) دون رسالة خطأ (بعد {{duration}}). انتقل squeezegram إلى المرمِّز عبر المعالج ({{to}}) وسيستمر في استخدامه حتى إعادة تشغيل التطبيق.",
-    "CODEC_FALLBACK": "HEVC is not available on this computer, so this file was compressed as H.264 instead.",
+    "CODEC_FALLBACK": "HEVC غير متاح على هذا الكمبيوتر، لذلك ضُغط هذا الملف بصيغة H.264 بدلًا منه.",
     "OUTPUT_TOO_LARGE": "لا يمكن أن يتسع هذا الملف تحت حد الرفع، حتى بعد الضغط.",
-    "CAPTION_TOO_LONG": "This caption is too long: {{length}} characters, and Telegram allows {{max}}. Shorten it and retry; nothing was sent.",
+    "CAPTION_TOO_LONG": "هذا التعليق طويل جدًا: {{length}} حرفًا، بينما يسمح Telegram بـ {{max}}. اختصره وأعد المحاولة؛ لم يُرسل شيء.",
     "DISK_SPACE": "المساحة الحرة غير كافية في المجلد المؤقت.",
     "DUPLICATE": "سبق إرساله إلى هذه الوجهة.",
     "SIDECAR_CHECKSUM": "لا يطابق ffmpeg الذي تم تنزيله المجموع الاختباري المتوقع، لذلك لم يُثبَّت.",
@@ -63,7 +63,7 @@
     "SIDECAR_INVALID": "لا يحتوي هذا المجلد على ffmpeg وffprobe يعملان، لذلك لم يُستخدم.",
     "UPDATE_FAILED": "فشل التحديث.",
     "UPDATE_CHECK_FAILED": "تعذّر التحقق من التحديثات. تحقّق من اتصالك ثم حاول مرة أخرى.",
-    "UPDATE_NOT_PUBLISHED": "No update information is available yet. Try again later.",
+    "UPDATE_NOT_PUBLISHED": "لا تتوفر معلومات عن التحديث بعد. حاول لاحقًا.",
     "UPDATE_DOWNLOAD_FAILED": "تعذّر تنزيل التحديث. تحقّق من اتصالك ثم حاول مرة أخرى.",
     "UPDATE_SIGNATURE_INVALID": "لم يجتز التحديث الذي تم تنزيله فحص توقيعه، لذلك لم يُثبَّت.",
     "UPDATE_INSTALL_FAILED": "تعذّر تثبيت التحديث. بقيت النسخة الحالية كما هي.",
@@ -81,21 +81,21 @@
     "TG_UPLOAD_FAILED": "أبلغ Telegram بفشل الرفع.",
     "TG_LIB_MISSING": "مكتبة Telegram (tdjson.dll) مفقودة أو تالفة.",
     "TG_NOT_CONFIGURED": "لا تحتوي هذه النسخة على هوية Telegram API صالحة (api_id وapi_hash)، لذلك لا يمكنها الاتصال بـ Telegram.",
-    "TG_NOT_CONFIGURED_override_api_hash_unavailable": "Your own api_hash can't be read on this Windows account (saved by another user or computer, or damaged), so squeezegram can't connect to Telegram. Enter it again in Settings, or remove your own api_id to use squeezegram's.",
-    "TG_TRANSPORT_BUSY": "Telegram is starting or signing out. Try again in a moment.",
+    "TG_NOT_CONFIGURED_override_api_hash_unavailable": "تعذّر قراءة api_hash الخاص بك في حساب Windows هذا (حُفظ من قِبل مستخدم أو كمبيوتر آخر، أو أنه تالف)، لذلك لا يستطيع squeezegram الاتصال بـ Telegram. أدخله مجددًا في الإعدادات، أو أزِل api_id الخاص بك لاستخدام هوية squeezegram.",
+    "TG_TRANSPORT_BUSY": "يبدأ Telegram أو يسجّل الخروج الآن. حاول مرة أخرى بعد لحظة.",
     "TG_NOT_IMPLEMENTED": "هذه الميزة من Telegram غير متاحة بعد في هذا الإصدار.",
-    "TG_PROXY_FAILED": "The proxy did not work: {{message}}",
-    "TG_PROXY_SECRET_UNAVAILABLE": "The saved proxy password or secret can't be read on this Windows account, so squeezegram does not connect to Telegram. Enter it again in Settings > Network.",
-    "PROXY_INVALID": "This proxy setting is not valid.",
-    "PROXY_INVALID_kind": "Choose a proxy type first.",
-    "PROXY_INVALID_host": "Enter the server as a name (proxy.example.com) or an IP address, without http:// or a port.",
-    "PROXY_INVALID_port": "The port must be a whole number from 1 to 65535.",
-    "PROXY_INVALID_username": "The user name is too long or contains a line break.",
-    "PROXY_INVALID_password": "The password is too long or contains a line break.",
-    "PROXY_INVALID_secret": "This MTProto secret is not valid. Copy it exactly as given with the proxy (hexadecimal or base64url).",
-    "PROXY_TEST_UNAVAILABLE": "Telegram is not running, so this proxy can't be tested on its own. Apply it: squeezegram then starts through it, and Test works again.",
-    "METADATA_STRIP_FAILED": "The location and camera data of this file couldn't be removed (the file looks damaged), so it was not sent. To send it as it is, turn off \"Remove location and camera data\" in Settings.",
-    "LINK_REFUSED": "Only links to Telegram messages (https://t.me/…) can be opened.",
+    "TG_PROXY_FAILED": "لم يعمل الوكيل: {{message}}",
+    "TG_PROXY_SECRET_UNAVAILABLE": "تعذّر قراءة كلمة مرور الوكيل أو مفتاحه (secret) المحفوظين في حساب Windows هذا، لذلك لا يتصل squeezegram بـ Telegram. أدخلهما مجددًا في الإعدادات › الشبكة.",
+    "PROXY_INVALID": "إعداد الوكيل هذا غير صالح.",
+    "PROXY_INVALID_kind": "اختر نوع الوكيل أولًا.",
+    "PROXY_INVALID_host": "أدخل الخادم اسمًا (proxy.example.com) أو عنوان IP، دون http:// ودون منفذ.",
+    "PROXY_INVALID_port": "يجب أن يكون المنفذ عددًا صحيحًا من 1 إلى 65535.",
+    "PROXY_INVALID_username": "اسم المستخدم طويل جدًا أو يحتوي على سطر جديد.",
+    "PROXY_INVALID_password": "كلمة المرور طويلة جدًا أو تحتوي على سطر جديد.",
+    "PROXY_INVALID_secret": "مفتاح MTProto هذا غير صالح. انسخه تمامًا كما قُدِّم مع الوكيل (سداسي عشري أو base64url).",
+    "PROXY_TEST_UNAVAILABLE": "Telegram غير مشغَّل، لذلك لا يمكن اختبار هذا الوكيل وحده. طبّقه: يبدأ squeezegram عندئذ عبره، ويعمل زر الاختبار مجددًا.",
+    "METADATA_STRIP_FAILED": "تعذّرت إزالة بيانات الموقع والكاميرا من هذا الملف (يبدو الملف تالفًا)، لذلك لم يُرسل. لإرساله كما هو، أوقف خيار “إزالة بيانات الموقع والكاميرا” في الإعدادات.",
+    "LINK_REFUSED": "لا يمكن فتح إلا الروابط المؤدية إلى رسائل Telegram (https://t.me/…).",
     "CANCELLED": "أُلغي.",
     "FILES_SKIPPED_zero": "تم تخطي {{count}} ملفات ليست فيديوهات ولا صورًا في هذا المجلد.",
     "FILES_SKIPPED_one": "تم تخطي {{count}} ملف ليس فيديو ولا صورة في هذا المجلد.",
@@ -116,7 +116,7 @@
     "LIC_BAD_SIGNATURE": "لم يجتز هذا الترخيص فحص توقيعه. انسخه من رسالة البوت مجددًا دون أي تغيير.",
     "LIC_WRONG_ACCOUNT": "هذا الترخيص يخص حساب Telegram آخر. سجّل الدخول بالحساب الذي اشتُري الترخيص له.",
     "LIC_NO_ACCOUNT": "سجّل الدخول إلى Telegram للتحقق من هذا الترخيص.",
-    "FEATURE_NOT_LICENSED": "This feature is included with squeezegram Premium. Add a license in Settings, then try again."
+    "FEATURE_NOT_LICENSED": "هذه الميزة متضمَّنة في squeezegram Premium. أضف ترخيصًا في الإعدادات، ثم حاول مجددًا."
   },
   "sidecars": {
     "missingTitle": "يحتاج ffmpeg لضغط مقاطع الفيديو",
@@ -190,7 +190,7 @@
     "overlay": "أفلِت الملفات لإضافتها إلى قائمة الانتظار",
     "hint": "أفلِت مقاطع الفيديو والصور في أي مكان من هذه النافذة، أو",
     "browse": "تصفّح الملفات…",
-    "browseFolder": "or add a folder…"
+    "browseFolder": "أو أضِف مجلدًا…"
   },
   "add": {
     "title": "إضافة ملفات",
@@ -215,12 +215,12 @@
       "unavailableBody": "تعذّر على النواة عرض الوجهات، لذلك لا يمكن إضافة ملفات إلى قائمة الانتظار.",
       "empty": "لا توجد وجهات بعد. سجّل الدخول إلى Telegram، ثم حدّث القائمة.",
       "loadError": "تعذّر تحميل الوجهات.",
-      "extraLabel": "Destination {{number}}",
-      "removeExtra": "Remove destination {{number}}",
-      "extraEmpty": "Choose a destination for this slot, or remove it.",
-      "addAnother": "Add another destination",
+      "extraLabel": "الوجهة {{number}}",
+      "removeExtra": "إزالة الوجهة {{number}}",
+      "extraEmpty": "اختر وجهة لهذه الخانة، أو أزِلها.",
+      "addAnother": "إضافة وجهة أخرى",
       "premium": "Premium",
-      "multiLocked": "Sending one batch to several chats or topics is included with squeezegram Premium.",
+      "multiLocked": "إرسال دفعة واحدة إلى عدة محادثات أو موضوعات متضمَّن في squeezegram Premium.",
       "check": {
         "checking": "جارٍ التحقق من الأذونات…",
         "ok": "يمكنك الإرسال هنا.",
@@ -249,37 +249,37 @@
     "added_few": "تمت إضافة {{count}} ملفات إلى قائمة الانتظار.",
     "added_many": "تمت إضافة {{count}} ملفًا إلى قائمة الانتظار.",
     "added_other": "تمت إضافة {{count}} ملفًا إلى قائمة الانتظار.",
-    "addedEach_zero": "{{count}} files added to the queue for each of {{destinations}} destinations.",
-    "addedEach_one": "{{count}} file added to the queue for each of {{destinations}} destinations.",
-    "addedEach_two": "{{count}} files added to the queue for each of {{destinations}} destinations.",
-    "addedEach_few": "{{count}} files added to the queue for each of {{destinations}} destinations.",
-    "addedEach_many": "{{count}} files added to the queue for each of {{destinations}} destinations.",
-    "addedEach_other": "{{count}} files added to the queue for each of {{destinations}} destinations."
+    "addedEach_zero": "تمت إضافة {{count}} ملفات إلى قائمة الانتظار لكل وجهة من الوجهات {{destinations}}.",
+    "addedEach_one": "تمت إضافة {{count}} ملف إلى قائمة الانتظار لكل وجهة من الوجهات {{destinations}}.",
+    "addedEach_two": "تمت إضافة {{count}} ملفان إلى قائمة الانتظار لكل وجهة من الوجهات {{destinations}}.",
+    "addedEach_few": "تمت إضافة {{count}} ملفات إلى قائمة الانتظار لكل وجهة من الوجهات {{destinations}}.",
+    "addedEach_many": "تمت إضافة {{count}} ملفًا إلى قائمة الانتظار لكل وجهة من الوجهات {{destinations}}.",
+    "addedEach_other": "تمت إضافة {{count}} ملفًا إلى قائمة الانتظار لكل وجهة من الوجهات {{destinations}}."
   },
   "caption": {
     "help": {
-      "summary": "Variables you can use",
-      "escape": "Write {{open}} or {{close}} for a literal brace. A name that is not in this list stays as written."
+      "summary": "المتغيرات التي يمكنك استخدامها",
+      "escape": "اكتب {{open}} أو {{close}} للحصول على قوس حرفي. أي اسم غير موجود في هذه القائمة يبقى كما كُتب."
     },
     "var": {
-      "name": "File name without extension",
-      "file": "File name with extension",
-      "ext": "Extension, without the dot",
-      "duration": "Duration (m:ss or h:mm:ss)",
-      "original_size": "Size before compression",
-      "final_size": "Size of the file that is sent",
-      "saving": "Percent saved by compression (empty if not compressed)",
-      "resolution": "Width x height, e.g. 1920x1080 (empty for documents)",
-      "date": "Send date, yyyy-mm-dd",
-      "index": "Position of the file in its batch",
-      "count": "Number of files in the batch"
+      "name": "اسم الملف دون الامتداد",
+      "file": "اسم الملف مع الامتداد",
+      "ext": "الامتداد، دون النقطة",
+      "duration": "المدة (m:ss أو h:mm:ss)",
+      "original_size": "الحجم قبل الضغط",
+      "final_size": "حجم الملف المُرسَل",
+      "saving": "النسبة المئوية التي وفّرها الضغط (فارغة إن لم يُضغط)",
+      "resolution": "العرض x الارتفاع، مثلًا 1920x1080 (فارغة عند الإرسال كـ«ملف»)",
+      "date": "تاريخ الإرسال، yyyy-mm-dd",
+      "index": "ترتيب الملف داخل دفعته",
+      "count": "عدد الملفات في الدفعة"
     },
     "preview": {
-      "label": "Preview for the first file",
-      "estimated": "Duration, resolution and the sizes after compression are estimates until the file is encoded."
+      "label": "معاينة للملف الأول",
+      "estimated": "المدة والدقة وأحجام الملفات بعد الضغط تقديرات إلى أن يُرمَّز الملف."
     },
-    "counter": "{{length}} / {{max}} characters",
-    "tooLong": "Telegram refuses longer captions: the files would fail instead of being sent."
+    "counter": "{{length}} / {{max}} حرفًا",
+    "tooLong": "يرفض Telegram التعليقات الأطول: ستفشل الملفات بدلًا من أن تُرسل."
   },
   "queue": {
     "start": "تشغيل",
@@ -364,7 +364,7 @@
       "remux": "إعادة تغليف فقط",
       "remux_audio": "إعادة تغليف، مع تحويل الصوت",
       "photo": "تحويل الصورة",
-      "strip": "Ready as is, location removed"
+      "strip": "جاهز كما هو، بعد إزالة الموقع"
     },
     "step": {
       "prepare": "التحضير",
@@ -398,29 +398,29 @@
         "save": "حفظ التعليق"
       },
       "encoding": {
-        "open": "Encoding options",
-        "intro": "These choices replace the settings for this file only. You can change them until the file starts.",
-        "inactive": "This file has custom choices, but they are ignored without Premium.",
-        "locked": "Choose the codec, resolution and size of a single file with squeezegram Premium.",
-        "apply": "Apply to this file",
-        "reset": "Use the settings",
-        "fillLimit": "fills the limit",
-        "summary": "Custom encoding: {{codec}}, {{resolution}}, {{size}}",
+        "open": "خيارات الترميز",
+        "intro": "تحلّ هذه الخيارات محل الإعدادات لهذا الملف وحده. يمكنك تغييرها حتى يبدأ الملف.",
+        "inactive": "لهذا الملف خيارات مخصصة، لكنها تُتجاهَل دون Premium.",
+        "locked": "اختر الترميز والدقة والحجم لملف واحد مع squeezegram Premium.",
+        "apply": "تطبيق على هذا الملف",
+        "reset": "استخدام الإعدادات",
+        "fillLimit": "يملأ الحد",
+        "summary": "ترميز مخصص: {{codec}}، {{resolution}}، {{size}}",
         "estimate": {
-          "loading": "Estimating the size…",
-          "failed": "The size cannot be estimated right now.",
-          "encode": "Estimated size: about {{size}} (limit {{limit}}).",
-          "as_is": "Sent as it is or repackaged, without re-encoding: about {{size}}.",
-          "photo": "No estimate for a photo.",
-          "too_small": "This size is too small for the length of this video.",
-          "unknown": "No estimate: the length of this video is unknown.",
-          "fallback": "HEVC is not available on this computer: this file will be H.264."
+          "loading": "جارٍ تقدير الحجم…",
+          "failed": "تعذّر تقدير الحجم الآن.",
+          "encode": "الحجم المقدَّر: نحو {{size}} (الحد {{limit}}).",
+          "as_is": "يُرسل كما هو أو يُعاد تغليفه دون إعادة ترميز: نحو {{size}}.",
+          "photo": "لا تقدير للصور.",
+          "too_small": "هذا الحجم صغير جدًا بالنسبة إلى مدة هذا الفيديو.",
+          "unknown": "لا تقدير: مدة هذا الفيديو غير معروفة.",
+          "fallback": "HEVC غير متاح على هذا الكمبيوتر: سيكون هذا الملف بصيغة H.264."
         }
       },
       "duplicate": {
         "body": "سبق إرسال هذا الملف إلى هذه الوجهة. ينتظر حتى تؤكد.",
-        "sentTo": "Already sent to {{destination}} on {{date}}.",
-        "open": "Open the message",
+        "sentTo": "سبق إرساله إلى {{destination}} بتاريخ {{date}}.",
+        "open": "فتح الرسالة",
         "confirm": "إرسال على أي حال",
         "dialogTitle": "إرسال هذا الملف مجددًا؟",
         "dialogBody": "سبق إرسال {{name}} إلى هذه الوجهة. إعادة إرساله تنشر رسالة مكررة.",
@@ -435,8 +435,8 @@
         "countdown": "إعادة المحاولة خلال {{duration}}"
       },
       "interval": {
-        "body": "Waiting for this chat's minimum interval between sends. It goes out at {{time}}; other files go meanwhile.",
-        "countdown": "Sends in {{duration}}"
+        "body": "في انتظار الفاصل الأدنى بين الإرسالات إلى هذه المحادثة. سيُرسل عند {{time}}، وتُرسل الملفات الأخرى في الأثناء.",
+        "countdown": "الإرسال خلال {{duration}}"
       },
       "unknown": {
         "body": "توقف التطبيق أثناء رفع هذا الملف. ربما وصل إلى Telegram، وربما لم يصل.",
@@ -607,73 +607,73 @@
         "automatic": "{{kbps}} kbit/s (تلقائي)"
       },
       "codec": {
-        "label": "Video codec",
-        "hint": "HEVC keeps more detail at the same size, but it needs a graphics card that can encode it, and some Telegram apps do not play it inline. It only applies to a file that gets re-encoded.",
-        "h264": "H.264 (automatic)",
+        "label": "ترميز الفيديو",
+        "hint": "يحافظ HEVC على تفاصيل أكثر بالحجم نفسه، لكنه يحتاج إلى بطاقة رسوميات تستطيع ترميزه، ولا يشغّله بعض تطبيقات Telegram داخل المحادثة. ينطبق فقط على الملف الذي يُعاد ترميزه.",
+        "h264": "H.264 (تلقائي)",
         "hevc": "HEVC (H.265)"
       },
       "preset": {
-        "label": "Encoder speed",
-        "hint": "Faster finishes sooner; higher quality takes longer for a better picture at the same size. Encoders without a speed setting ignore this.",
-        "faster": "Faster",
-        "balanced": "Balanced (automatic)",
-        "quality": "Higher quality"
+        "label": "سرعة المرمِّز",
+        "hint": "الأسرع ينتهي مبكرًا، والجودة الأعلى تستغرق وقتًا أطول لصورة أفضل بالحجم نفسه. المرمِّزات التي لا تملك إعداد سرعة تتجاهل هذا.",
+        "faster": "أسرع",
+        "balanced": "متوازن (تلقائي)",
+        "quality": "جودة أعلى"
       },
       "target": {
-        "label": "Output size",
-        "hint": "Fill the upload limit, or aim for a smaller file. A file never goes over the limit.",
-        "limit": "Fill the upload limit (automatic)",
-        "custom": "Custom size",
-        "mb": "Target size (MB)",
-        "error": "Enter a whole number of MB from 1 to 4000."
+        "label": "حجم الإخراج",
+        "hint": "املأ حد الرفع، أو استهدف ملفًا أصغر. لا يتجاوز الملف الحد أبدًا.",
+        "limit": "ملء حد الرفع (تلقائي)",
+        "custom": "حجم مخصص",
+        "mb": "الحجم المستهدف (MB)",
+        "error": "أدخل عددًا صحيحًا من MB بين 1 و4000."
       }
     },
     "watch": {
-      "title": "Watched folders",
-      "hint": "New photos and videos that appear in these folders are added to the queue as pending, including those that arrived while squeezegram was closed. Nothing is sent until you approve each one. Files already in a folder when you add it are left alone.",
-      "locked": "Included with squeezegram Premium. Folders listed here stay saved, but none is watched until then.",
-      "empty": "No folder is watched yet.",
-      "folder": "Folder to watch",
-      "noFolder": "No folder chosen",
-      "choose": "Choose a folder",
-      "add": "Watch this folder",
-      "summary": "To {{destination}}, as {{mode}}",
-      "noDestination": "no destination",
-      "toggle": "Watch {{path}}",
-      "remove": "Stop watching {{path}}",
+      "title": "المجلدات المراقَبة",
+      "hint": "الصور ومقاطع الفيديو الجديدة التي تظهر في هذه المجلدات تُضاف إلى قائمة الانتظار بحالة «بانتظارك»، بما فيها تلك التي وصلت أثناء إغلاق squeezegram. لا يُرسل شيء حتى توافق على كل ملف. الملفات الموجودة في المجلد عند إضافته تُترك كما هي.",
+      "locked": "متضمَّن في squeezegram Premium. تبقى المجلدات المدرجة هنا محفوظة، لكن لا يُراقَب أي منها حتى ذلك الحين.",
+      "empty": "لا يُراقَب أي مجلد بعد.",
+      "folder": "المجلد المراد مراقبته",
+      "noFolder": "لم يُختر أي مجلد",
+      "choose": "اختر مجلدًا",
+      "add": "مراقبة هذا المجلد",
+      "summary": "إلى {{destination}}، بصيغة {{mode}}",
+      "noDestination": "بلا وجهة",
+      "toggle": "مراقبة {{path}}",
+      "remove": "إيقاف مراقبة {{path}}",
       "status": {
-        "active": "Watching: new files wait in the queue for your approval.",
-        "paused": "Paused: new files are not added.",
-        "locked": "Not watched without Premium.",
-        "unreadable": "Can't be read: the folder was moved, renamed or deleted, or its drive is offline. Choose it again or remove it."
+        "active": "قيد المراقبة: الملفات الجديدة تنتظر في قائمة الانتظار موافقتك.",
+        "paused": "متوقفة مؤقتًا: لا تُضاف ملفات جديدة.",
+        "locked": "لا تُراقَب دون Premium.",
+        "unreadable": "تعذّرت القراءة: نُقل المجلد أو أُعيدت تسميته أو حُذف، أو أن قرصه غير متصل. اختره مجددًا أو أزِله."
       }
     },
     "network": {
-      "title": "Network",
-      "hint": "Use a proxy if Telegram is blocked or slow where you are. Every connection to Telegram then goes through it.",
+      "title": "الشبكة",
+      "hint": "استخدم وكيلًا إذا كان Telegram محجوبًا أو بطيئًا في مكانك. عندئذ يمرّ كل اتصال بـ Telegram عبره.",
       "kind": {
-        "label": "Proxy",
-        "none": "No proxy (direct connection)",
+        "label": "الوكيل",
+        "none": "بدون وكيل (اتصال مباشر)",
         "socks5": "SOCKS5",
         "http": "HTTP",
         "mtproto": "MTProto"
       },
-      "host": "Server",
-      "port": "Port",
-      "username": "User name (optional)",
-      "password": "Password (optional)",
-      "secret": "Secret",
-      "secretHint": "As given with the proxy, in hexadecimal or base64url.",
-      "secretSaved": "Saved. Leave empty to keep it.",
-      "forgetPassword": "Remove the saved password",
-      "keepPassword": "Keep the saved password",
-      "protected": "The password or secret is stored encrypted for your Windows account and is never shown again.",
-      "test": "Test",
-      "testing": "Testing…",
-      "testOk": "The proxy works: Telegram answered in {{ms}} ms.",
-      "apply": "Apply",
-      "applying": "Applying…",
-      "saved": "Saved and applied."
+      "host": "الخادم",
+      "port": "المنفذ",
+      "username": "اسم المستخدم (اختياري)",
+      "password": "كلمة المرور (اختياري)",
+      "secret": "المفتاح (secret)",
+      "secretHint": "كما أُعطي مع الوكيل، بالنظام السداسي عشري أو base64url.",
+      "secretSaved": "محفوظ. اتركه فارغًا للإبقاء عليه.",
+      "forgetPassword": "إزالة كلمة المرور المحفوظة",
+      "keepPassword": "الإبقاء على كلمة المرور المحفوظة",
+      "protected": "تُخزَّن كلمة المرور أو المفتاح مشفّرين لحساب Windows الخاص بك، ولا يُعرضان مجددًا أبدًا.",
+      "test": "اختبار",
+      "testing": "جارٍ الاختبار…",
+      "testOk": "الوكيل يعمل: ردّ Telegram خلال {{ms}} مللي ثانية.",
+      "apply": "تطبيق",
+      "applying": "جارٍ التطبيق…",
+      "saved": "حُفظ وطُبّق."
     },
     "send": {
       "title": "فترات التوقف بين الإرسالات",
@@ -686,50 +686,50 @@
     "telegram": {
       "title": "Telegram",
       "device": {
-        "label": "Device name",
-        "hint": "Shown in Telegram under Settings > Devices. Leave it empty to use the name shown here. squeezegram gives it to Telegram when it starts: a new name applies after a restart, and Telegram may keep showing the previous one for a session already signed in until you sign in again.",
-        "error": "Use at most 64 characters, on a single line."
+        "label": "اسم الجهاز",
+        "hint": "يظهر في Telegram ضمن الإعدادات › الأجهزة. اتركه فارغًا لاستخدام الاسم المعروض هنا. يرسل squeezegram هذا الاسم إلى Telegram عند بدء التشغيل: يُطبَّق الاسم الجديد بعد إعادة التشغيل، وقد يستمر Telegram في عرض الاسم السابق لجلسة سُجّل الدخول إليها بالفعل حتى تسجّل الدخول مجددًا.",
+        "error": "استخدم 64 حرفًا على الأكثر، في سطر واحد."
       }
     },
     "apiIdentity": {
-      "title": "Advanced: your own API identity",
-      "hint": "squeezegram connects to Telegram with its own api_id. If you created one at my.telegram.org, you can use it instead.",
-      "warning": "Each identity keeps its own Telegram session on this computer. With your own api_id you sign in again the first time; going back to squeezegram's identity finds its session again. The change applies after squeezegram restarts.",
-      "busy": "Telegram is starting or signing out: wait a moment before changing the identity.",
-      "product": "squeezegram's own identity is in use.",
-      "saved": "Your api_id {{apiId}} is saved, with its api_hash (stored encrypted for your Windows account, never shown again).",
-      "hashMissing": "Your api_id {{apiId}} is saved, but its api_hash can't be read on this Windows account. Enter both again, or remove them.",
-      "restart": "Restart squeezegram to use this change.",
-      "use": "Use my own api_id",
-      "replace": "Replace",
-      "save": "Save",
-      "saving": "Saving…",
+      "title": "متقدّم: هويتك الخاصة في API",
+      "hint": "يتصل squeezegram بـ Telegram بـ api_id الخاص به. إذا أنشأت واحدًا على my.telegram.org، فيمكنك استخدامه بدلًا منه.",
+      "warning": "لكل هوية جلسة Telegram خاصة بها على هذا الكمبيوتر. مع api_id الخاص بك تسجّل الدخول مجددًا في المرة الأولى؛ والعودة إلى هوية squeezegram تعيد العثور على جلستها. يُطبَّق التغيير بعد إعادة تشغيل squeezegram.",
+      "busy": "يبدأ Telegram أو يسجّل الخروج: انتظر لحظة قبل تغيير الهوية.",
+      "product": "هوية squeezegram الخاصة هي المستخدمة.",
+      "saved": "api_id الخاص بك {{apiId}} محفوظ، مع api_hash الخاص به (مخزَّن مشفّرًا لحساب Windows الخاص بك، ولا يُعرض مجددًا أبدًا).",
+      "hashMissing": "api_id الخاص بك {{apiId}} محفوظ، لكن تعذّرت قراءة api_hash الخاص به في حساب Windows هذا. أدخلهما معًا مجددًا، أو أزِلهما.",
+      "restart": "أعد تشغيل squeezegram لاستخدام هذا التغيير.",
+      "use": "استخدام api_id الخاص بي",
+      "replace": "استبدال",
+      "save": "حفظ",
+      "saving": "جارٍ الحفظ…",
       "apiId": {
         "label": "api_id",
-        "error": "Enter the api_id as a whole number, as shown on my.telegram.org."
+        "error": "أدخل api_id عددًا صحيحًا، كما يظهر على my.telegram.org."
       },
       "apiHash": {
         "label": "api_hash",
-        "hint": "32 characters, digits and letters a to f. Stored encrypted for your Windows account and never shown again.",
-        "error": "The api_hash has 32 characters, digits and letters a to f."
+        "hint": "32 حرفًا: أرقام وحروف من a إلى f. مخزَّن مشفّرًا لحساب Windows الخاص بك، ولا يُعرض مجددًا أبدًا.",
+        "error": "يتكوّن api_hash من 32 حرفًا: أرقام وحروف من a إلى f."
       },
       "remove": {
-        "button": "Remove",
-        "title": "Go back to squeezegram's identity?",
-        "body": "Your api_id and api_hash are deleted from this computer. After the restart, squeezegram's identity and its session are used again.",
-        "confirm": "Remove"
+        "button": "إزالة",
+        "title": "العودة إلى هوية squeezegram؟",
+        "body": "يُحذف api_id وapi_hash الخاصان بك من هذا الكمبيوتر. بعد إعادة التشغيل، تُستخدم هوية squeezegram وجلستها مجددًا.",
+        "confirm": "إزالة"
       }
     },
     "caption": {
-      "title": "Default caption",
-      "hint": "Prefills the caption when you add files. Leave it empty for no caption.",
-      "label": "Caption template"
+      "title": "التعليق الافتراضي",
+      "hint": "يملأ التعليق مسبقًا عند إضافة الملفات. اتركه فارغًا لعدم وجود تعليق.",
+      "label": "قالب التعليق"
     },
     "privacy": {
-      "title": "Privacy",
+      "title": "الخصوصية",
       "strip": {
-        "label": "Remove location and camera data from photos",
-        "hint": "Photos sent without re-encoding (as files, for example) go out without their GPS position, camera serial numbers or editing history; their pixels and orientation are kept. Compliant MP4 videos lose their recorded location the same way. HEIC files are sent unchanged."
+        "label": "إزالة بيانات الموقع والكاميرا من الصور",
+        "hint": "تُرسل الصور التي لا تُعاد ترميزها (كملفات مثلًا) دون موقع GPS وأرقام تسلسلية للكاميرا وسجل التعديل، مع الإبقاء على بكسلاتها واتجاهها. وتفقد مقاطع MP4 المتوافقة موقعها المسجَّل بالطريقة نفسها. تُرسل ملفات HEIC دون تغيير."
       }
     },
     "temp": {
@@ -793,26 +793,26 @@
       "neverChecked": "لم يُتحقق منه قط."
     },
     "background": {
-      "title": "Background",
+      "title": "الخلفية",
       "premium": "Premium",
-      "locked": "Included with squeezegram Premium. Until then, closing the window quits the app.",
+      "locked": "متضمَّن في squeezegram Premium. حتى ذلك الحين، يؤدي إغلاق النافذة إلى إنهاء التطبيق.",
       "close": {
-        "label": "When I close the window",
-        "hint": "While it keeps running, the queue and the watched folders go on working. Right-click the icon in the notification area to pause the queue or quit.",
-        "quit": "Quit squeezegram",
-        "tray": "Keep running in the notification area"
+        "label": "عند إغلاق النافذة",
+        "hint": "أثناء استمرار التشغيل، تواصل قائمة الانتظار والمجلدات المراقَبة عملهما. انقر بالزر الأيمن على الأيقونة في منطقة الإشعارات لإيقاف قائمة الانتظار مؤقتًا أو لإنهاء التطبيق.",
+        "quit": "إنهاء squeezegram",
+        "tray": "الاستمرار في العمل في منطقة الإشعارات"
       },
       "autostart": {
-        "label": "Start with Windows",
-        "hint": "squeezegram starts when you sign in to Windows and stays hidden in the notification area. This applies right away; there is nothing to save.",
-        "inactive": "Starting hidden needs Premium. The startup entry is still there, so Windows starts squeezegram with its window showing. Turn this off to remove the entry."
+        "label": "البدء مع Windows",
+        "hint": "يبدأ squeezegram عند تسجيل دخولك إلى Windows ويبقى مخفيًا في منطقة الإشعارات. يُطبَّق هذا فورًا؛ لا شيء لحفظه.",
+        "inactive": "البدء مخفيًا يحتاج إلى Premium. مدخل بدء التشغيل ما زال موجودًا، لذلك يبدأ Windows squeezegram ونافذته ظاهرة. أوقف هذا الخيار لإزالة المدخل."
       }
     },
     "groupRisk": {
-      "title": "Sending to groups and channels",
-      "scope": "This notice never applies to Saved Messages or private chats.",
-      "acknowledged": "You have already accepted it.",
-      "pending": "It will be shown once, before your first send to a group or channel."
+      "title": "الإرسال إلى المجموعات والقنوات",
+      "scope": "لا يُطبَّق هذا التنبيه أبدًا على الرسائل المحفوظة أو المحادثات الخاصة.",
+      "acknowledged": "لقد قبلته من قبل.",
+      "pending": "سيُعرض مرة واحدة، قبل أول إرسال لك إلى مجموعة أو قناة."
     }
   },
   "update": {
@@ -901,14 +901,14 @@
     "favorite": "إضافة {{name}} إلى المفضلة",
     "unfavorite": "إزالة {{name}} من المفضلة",
     "favorites": "المفضلة",
-    "edit": "Name and send interval of {{name}}",
+    "edit": "الاسم وفاصل الإرسال لـ{{name}}",
     "renameLabel": "الاسم المحلي",
     "renameHint": "يظهر في squeezegram فقط. اتركه فارغًا لاستخدام اسم Telegram.",
     "interval": {
-      "label": "Minimum time between two sends (minutes)",
-      "hint": "Empty or 0: no minimum. Files for this chat wait until this much time has passed since the last one sent there; files for other chats go meanwhile.",
-      "error": "Enter a whole number of minutes, from 0 to 10080 (one week).",
-      "summary": "At least {{duration}} between two sends to this chat."
+      "label": "الحد الأدنى للوقت بين إرسالين (بالدقائق)",
+      "hint": "فارغ أو 0: لا حد أدنى. تنتظر الملفات الخاصة بهذه المحادثة حتى يمرّ هذا القدر من الوقت منذ آخر إرسال إليها، وتُرسل ملفات المحادثات الأخرى في الأثناء.",
+      "error": "أدخل عددًا صحيحًا من الدقائق، من 0 إلى 10080 (أسبوع واحد).",
+      "summary": "فاصل {{duration}} على الأقل بين إرسالين إلى هذه المحادثة."
     },
     "save": "حفظ",
     "unnamed": "محادثة بلا اسم",
@@ -976,36 +976,36 @@
     "unnamedHide": "إخفاؤها"
   },
   "codec": {
-    "hevcWarning": "HEVC files may not play inline in every Telegram app. Choose H.264 if the people you send to use older apps.",
+    "hevcWarning": "قد لا تعمل ملفات HEVC داخل المحادثة في كل تطبيقات Telegram. اختر H.264 إذا كان من ترسل إليهم يستخدمون تطبيقات قديمة.",
     "unavailable": {
-      "no_hevc_encoder": "HEVC is unavailable: none of the graphics card encoders (NVENC, Quick Sync, AMF) of the ffmpeg in use works for HEVC on this computer. Choose an ffmpeg that has one in Settings.",
-      "ffmpeg_unavailable": "HEVC cannot be checked because ffmpeg is not available."
+      "no_hevc_encoder": "HEVC غير متاح: لا يعمل أي من مرمِّزات بطاقة الرسوميات (NVENC وQuick Sync وAMF) في ffmpeg المستخدم مع HEVC على هذا الكمبيوتر. اختر ffmpeg يحتوي على أحدها من الإعدادات.",
+      "ffmpeg_unavailable": "لا يمكن التحقق من HEVC لأن ffmpeg غير متاح."
     }
   },
   "tray": {
-    "open": "Open squeezegram",
-    "pause": "Pause the queue",
-    "resume": "Resume the queue",
-    "quit": "Quit",
-    "idle": "squeezegram: idle",
-    "working": "squeezegram: {{count}} in queue",
-    "paused": "squeezegram: paused, {{count}} in queue"
+    "open": "فتح squeezegram",
+    "pause": "إيقاف قائمة الانتظار مؤقتًا",
+    "resume": "استئناف قائمة الانتظار",
+    "quit": "إنهاء",
+    "idle": "squeezegram: خامل",
+    "working": "squeezegram: {{count}} في قائمة الانتظار",
+    "paused": "squeezegram: متوقف مؤقتًا، {{count}} في قائمة الانتظار"
   },
   "quit": {
-    "title": "Quit squeezegram?",
-    "body": "A file is being compressed or sent. If you quit now, it is interrupted. A file that was being sent is marked Unconfirmed, so you can check next time whether it arrived.",
-    "confirm": "Quit"
+    "title": "إنهاء squeezegram؟",
+    "body": "يجري ضغط ملف أو إرساله. إذا أنهيت التطبيق الآن فسيُقاطَع. الملف الذي كان يُرسَل يُعلَّم «بحاجة إلى تحقق»، لتتحقق في المرة القادمة مما إذا كان قد وصل.",
+    "confirm": "إنهاء"
   },
   "groupRisk": {
-    "title": "Before you send to a group or channel",
-    "intro": "Sending files again and again to groups or channels where you don't have the right permissions can get your Telegram account restricted.",
+    "title": "قبل الإرسال إلى مجموعة أو قناة",
+    "intro": "إرسال الملفات مرارًا وتكرارًا إلى مجموعات أو قنوات لا تملك فيها الصلاحيات اللازمة قد يؤدي إلى تقييد حسابك في Telegram.",
     "practice": {
-      "title": "Good practice",
-      "permissions": "Only send to groups and channels where you are allowed to post.",
-      "slowMode": "Respect slow mode and the pauses between sends; don't shorten them to go faster.",
-      "spam": "Don't spam: avoid sending large batches of files to the same group."
+      "title": "الممارسات الجيدة",
+      "permissions": "أرسل فقط إلى المجموعات والقنوات التي يُسمح لك بالنشر فيها.",
+      "slowMode": "التزم بوضع التباطؤ والفواصل بين الإرساليات، ولا تقلّصها لتسريع العمل.",
+      "spam": "لا ترسل رسائل مزعجة: تجنّب إرسال دفعات كبيرة من الملفات إلى المجموعة نفسها."
     },
-    "promise": "squeezegram follows Telegram's rules and has no workaround for its limits: it can't promise your account won't be restricted.",
-    "confirm": "I understand, continue"
+    "promise": "يلتزم squeezegram بقواعد Telegram ولا يملك أي حل التفافي لحدوده: لا يمكنه ضمان عدم تقييد حسابك.",
+    "confirm": "فهمت، متابعة"
   }
 }
