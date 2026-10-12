@@ -61,8 +61,8 @@ impl Feature {
     /// Flip a feature to `true` in the batch that wires it.
     pub fn shipped(self) -> bool {
         match self {
-            Feature::AdvancedEncoding => true,
-            Feature::MultiDestination | Feature::WatchedFolder | Feature::Background => false,
+            Feature::AdvancedEncoding | Feature::MultiDestination => true,
+            Feature::WatchedFolder | Feature::Background => false,
         }
     }
 
@@ -176,9 +176,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_advanced_encoding_is_shipped_today() {
+    fn advanced_encoding_and_multi_destination_are_shipped_today() {
         let shipped: Vec<_> = Feature::ALL.into_iter().filter(|f| f.shipped()).collect();
-        assert_eq!(shipped, [Feature::AdvancedEncoding]);
+        assert_eq!(
+            shipped,
+            [Feature::AdvancedEncoding, Feature::MultiDestination]
+        );
     }
 
     #[test]

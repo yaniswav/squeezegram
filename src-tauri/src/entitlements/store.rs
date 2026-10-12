@@ -410,7 +410,7 @@ mod tests {
         EntitlementStatus {
             plan: Plan::Lifetime,
             source: EntitlementSource::License,
-            features: vec![Feature::AdvancedEncoding],
+            features: vec![Feature::AdvancedEncoding, Feature::MultiDestination],
             account_matches: Some(true),
             reason: None,
         }
