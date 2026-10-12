@@ -351,7 +351,9 @@ export interface Settings {
     /** The warning about sending to groups and channels was accepted (F33). */
     group_risk_acknowledged: boolean
   }
+  /** `dir` only changes through `tempDirChoose` (or back to `null` with `settingsSet`). */
   temp: { dir: string | null; min_free_gb: number }
+  /** `custom_dir` only changes through `sidecarsUse` / `sidecarsChoose` (or back to `null`). */
   ffmpeg: { custom_dir: string | null }
   ui: { theme: string; language: string }
   watch: { stable_seconds: number }
@@ -415,6 +417,11 @@ export type SettingsPatch = {
   [Section in keyof Settings]?: Settings[Section] extends object
     ? { [Key in keyof Settings[Section]]?: Settings[Section][Key] | null }
     : Settings[Section]
+} & {
+  // The core refuses a path for these two (`tempDirChoose`, `sidecarsUse`, `sidecarsChoose`
+  // set them): only a reset to the default goes through `settings_set`.
+  temp?: { dir?: null }
+  ffmpeg?: { custom_dir?: null }
 }
 
 // --- sidecars (src-tauri/src/sidecars/mod.rs) ---
@@ -448,7 +455,9 @@ export interface LimitStatus {
 
 /** `discover::Candidate`: a working ffmpeg/ffprobe pair found on this machine (proposal only). */
 export interface FfmpegCandidate {
-  /** Folder to give to `sidecarsUse`. */
+  /** What `sidecarsUse` takes: the core keeps each proposed folder, the page sends no path. */
+  id: number
+  /** Where it is, to show. */
   dir: string
   ffmpeg_path: string
   ffprobe_path: string
@@ -1193,6 +1202,7 @@ const recommendReasonDecoder = d.object<RecommendReason>({
 const ffmpegDiscoveryDecoder = d.object<FfmpegDiscovery>({
   candidates: d.array(
     d.object<FfmpegCandidate>({
+      id: d.number,
       dir: d.string,
       ffmpeg_path: d.string,
       ffprobe_path: d.string,
@@ -1692,9 +1702,31 @@ export function sidecarsDiscover(): Promise<FfmpegDiscovery> {
   return call("sidecars_discover", ffmpegDiscoveryDecoder)
 }
 
-/** Records a candidate's folder as `ffmpeg.custom_dir` after re-validating it. */
-export function sidecarsUse(dir: string): Promise<SidecarStatus> {
-  return call("sidecars_use", sidecarStatusDecoder, { dir })
+/**
+ * Records the folder of a candidate of the last search as `ffmpeg.custom_dir` after
+ * re-validating it. `SIDECAR_CHOICE_STALE` when a newer search replaced that candidate.
+ */
+export function sidecarsUse(candidateId: number): Promise<SidecarStatus> {
+  return call("sidecars_use", sidecarStatusDecoder, {
+    candidate_id: candidateId,
+  })
+}
+
+/**
+ * Opens the native folder dialog in the core and records the chosen ffmpeg folder like
+ * `sidecarsUse`. Resolves to null when the dialog is closed.
+ */
+export function sidecarsChoose(): Promise<SidecarStatus | null> {
+  return call("sidecars_choose", d.nullable(sidecarStatusDecoder))
+}
+
+/**
+ * Opens the native folder dialog in the core and records the chosen temporary folder, after
+ * the core checked it is a writable folder on a local drive (`TEMP_DIR_INVALID`). Resolves
+ * to the new settings, or null when the dialog is closed.
+ */
+export function tempDirChoose(): Promise<Settings | null> {
+  return call("temp_dir_choose", d.nullable(settingsDecoder))
 }
 
 /** Folder of the journal files (`%LOCALAPPDATA%\squeezegram\logs`). */

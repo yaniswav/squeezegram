@@ -61,6 +61,8 @@
     "SIDECAR_EXTRACT": "Não foi possível extrair o arquivo do ffmpeg.",
     "SIDECAR_BUSY": "Uma instalação do ffmpeg já está em andamento.",
     "SIDECAR_INVALID": "Esta pasta não contém um ffmpeg e um ffprobe funcionais, por isso não foi usada.",
+    "SIDECAR_CHOICE_STALE": "That ffmpeg choice is out of date. Search again and pick one from the new list.",
+    "TEMP_DIR_INVALID": "This folder can't be used for temporary files. Choose an existing, writable folder on a local drive (not a network share).",
     "UPDATE_FAILED": "A atualização falhou.",
     "UPDATE_CHECK_FAILED": "Não foi possível verificar atualizações. Verifique sua conexão e tente novamente.",
     "UPDATE_NOT_PUBLISHED": "Ainda não há informações de atualização disponíveis. Tente novamente mais tarde.",

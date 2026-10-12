@@ -439,6 +439,92 @@ impl Settings {
     }
 }
 
+/// Why a folder cannot hold the temporary files (`temp.dir`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TempDirProblem {
+    /// Relative, or without a drive.
+    NotAbsolute,
+    /// A network share (`\server\share`, a mapped network drive) or a device path: encodes
+    /// there would be slow, and a share can vanish or be somebody else's.
+    NotLocal,
+    /// Does not exist or is not a folder.
+    Missing,
+    /// A file cannot be created in it.
+    NotWritable,
+}
+
+impl TempDirProblem {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TempDirProblem::NotAbsolute => "not_absolute",
+            TempDirProblem::NotLocal => "not_local",
+            TempDirProblem::Missing => "missing",
+            TempDirProblem::NotWritable => "not_writable",
+        }
+    }
+}
+
+/// A folder is fit to be `temp.dir` when it is an absolute path on a local drive, exists, and
+/// a file can be created in it. The check is made by the core on the folder the user picked
+/// in the native dialog; the page never sends a path for this setting.
+pub fn check_temp_dir(dir: &Path) -> Result<(), TempDirProblem> {
+    check_local(dir)?;
+    match std::fs::metadata(dir) {
+        Ok(meta) if meta.is_dir() => {}
+        _ => return Err(TempDirProblem::Missing),
+    }
+    let probe = dir.join(format!(".squeezegram-write-check-{}", std::process::id()));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(file) => {
+            drop(file);
+            let _ = std::fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(_) => Err(TempDirProblem::NotWritable),
+    }
+}
+
+#[cfg(windows)]
+fn check_local(dir: &Path) -> Result<(), TempDirProblem> {
+    use std::path::{Component, Prefix};
+
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    use windows::core::HSTRING;
+
+    /// `DRIVE_REMOTE` of `GetDriveTypeW`.
+    const DRIVE_REMOTE: u32 = 4;
+
+    let mut parts = dir.components();
+    let (Some(Component::Prefix(prefix)), Some(Component::RootDir)) = (parts.next(), parts.next())
+    else {
+        return Err(TempDirProblem::NotAbsolute);
+    };
+    let letter = match prefix.kind() {
+        Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => letter,
+        // `\server\share`, `\?\UNC\...`, `\.\device`, `\?\Volume{...}`.
+        _ => return Err(TempDirProblem::NotLocal),
+    };
+    let root = HSTRING::from(format!("{}:\\", char::from(letter).to_ascii_uppercase()));
+    // SAFETY: `root` is a NUL-terminated wide string that outlives the call.
+    if unsafe { GetDriveTypeW(&root) } == DRIVE_REMOTE {
+        return Err(TempDirProblem::NotLocal);
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn check_local(dir: &Path) -> Result<(), TempDirProblem> {
+    if dir.is_absolute() {
+        Ok(())
+    } else {
+        Err(TempDirProblem::NotAbsolute)
+    }
+}
+
 /// JSON merge patch (RFC 7396): objects merge, `null` resets a field to its default.
 fn merge(target: &mut Value, patch: &Value) {
     match (target, patch) {

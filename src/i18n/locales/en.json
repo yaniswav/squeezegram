@@ -61,6 +61,8 @@
     "SIDECAR_EXTRACT": "The ffmpeg archive couldn't be extracted.",
     "SIDECAR_BUSY": "An ffmpeg installation is already running.",
     "SIDECAR_INVALID": "This folder doesn't hold a working ffmpeg and ffprobe, so it was not used.",
+    "SIDECAR_CHOICE_STALE": "That ffmpeg choice is out of date. Search again and pick one from the new list.",
+    "TEMP_DIR_INVALID": "This folder can't be used for temporary files. Choose an existing, writable folder on a local drive (not a network share).",
     "UPDATE_FAILED": "The update failed.",
     "UPDATE_CHECK_FAILED": "Couldn't check for updates. Check your connection and try again.",
     "UPDATE_NOT_PUBLISHED": "No update information is available yet. Try again later.",

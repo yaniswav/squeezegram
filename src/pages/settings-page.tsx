@@ -70,7 +70,9 @@ import {
   proxyGet,
   proxySet,
   proxyTest,
+  sidecarsChoose,
   sidecarsStatus,
+  tempDirChoose,
   watchAdd,
   watchList,
   watchRemove,
@@ -124,9 +126,10 @@ interface Draft {
   pauseMax: string
   captionTemplate: string
   deviceName: string
-  tempDir: string | null
+  /** "Use the default" was clicked; a folder is chosen through the core, not the form. */
+  resetTempDir: boolean
   minFreeGb: string
-  ffmpegDir: string | null
+  resetFfmpegDir: boolean
   theme: ThemeSetting
   language: string
   checkAutomatically: boolean
@@ -189,9 +192,9 @@ function toDraft(settings: Settings): Draft {
     pauseMax: settings.send.pause_max_s.toString(),
     captionTemplate: settings.send.caption_template,
     deviceName: settings.telegram.device_name ?? "",
-    tempDir: emptyToNull(settings.temp.dir),
+    resetTempDir: false,
     minFreeGb: settings.temp.min_free_gb.toString(),
-    ffmpegDir: emptyToNull(settings.ffmpeg.custom_dir),
+    resetFfmpegDir: false,
     theme: themeOf(settings.ui.theme),
     language: settings.ui.language,
     checkAutomatically: settings.updates.check_automatically,
@@ -327,15 +330,18 @@ function toPatch(draft: Draft, settings: Settings): SettingsPatch {
 
   const temp: NonNullable<SettingsPatch["temp"]> = {}
 
-  if (draft.tempDir !== saved.tempDir) temp.dir = draft.tempDir
+  // Only back to the default: a folder is chosen through `tempDirChoose`.
+  if (draft.resetTempDir && emptyToNull(settings.temp.dir) !== null)
+    temp.dir = null
 
   if (Number(draft.minFreeGb) !== settings.temp.min_free_gb)
     temp.min_free_gb = Number(draft.minFreeGb)
 
   if (Object.keys(temp).length > 0) patch.temp = temp
 
-  if (draft.ffmpegDir !== saved.ffmpegDir)
-    patch.ffmpeg = { custom_dir: draft.ffmpegDir }
+  // Only back to the default: a folder is chosen through `sidecarsChoose` / `sidecarsUse`.
+  if (draft.resetFfmpegDir && emptyToNull(settings.ffmpeg.custom_dir) !== null)
+    patch.ffmpeg = { custom_dir: null }
 
   const ui: NonNullable<SettingsPatch["ui"]> = {}
 
@@ -1635,7 +1641,7 @@ function SettingsForm({
   identity: TelegramIdentity | null
 }) {
   const { t } = useTranslation()
-  const { save } = useSettings()
+  const { save, reload } = useSettings()
   const { alerts, pushError } = useAlerts()
   const ids = useId()
   const [draft, setDraft] = useState<Draft>(() => toDraft(settings))
@@ -1707,10 +1713,21 @@ function SettingsForm({
     }
   }
 
-  async function chooseFolder(key: "tempDir" | "ffmpegDir") {
-    const folder = await pickFolder()
+  // The dialog is opened by the core, which checks the folder and records it itself.
+  async function chooseFolder(key: "resetTempDir" | "resetFfmpegDir") {
+    try {
+      const chosen =
+        key === "resetTempDir"
+          ? (await tempDirChoose()) !== null
+          : (await sidecarsChoose()) !== null
 
-    if (folder) update(key, folder)
+      if (chosen) {
+        await reload()
+        update(key, false)
+      }
+    } catch (error) {
+      pushError(error)
+    }
   }
 
   const fieldError = (key: keyof DraftErrors) => {
@@ -2095,12 +2112,12 @@ function SettingsForm({
         <FolderField
           id={`${ids}-temp`}
           label={t("settings.temp.dir")}
-          value={draft.tempDir}
+          value={draft.resetTempDir ? null : emptyToNull(settings.temp.dir)}
           defaultText={t("settings.temp.default")}
           chooseText={t("settings.temp.choose")}
           resetText={t("settings.temp.useDefault")}
-          onChoose={() => void chooseFolder("tempDir")}
-          onReset={() => update("tempDir", null)}
+          onChoose={() => void chooseFolder("resetTempDir")}
+          onReset={() => update("resetTempDir", true)}
         />
         <Field
           id={`${ids}-min-free`}
@@ -2128,20 +2145,18 @@ function SettingsForm({
           id={`${ids}-ffmpeg`}
           label={t("settings.ffmpeg.dir")}
           hint={t("settings.ffmpeg.hint")}
-          value={draft.ffmpegDir}
+          value={
+            draft.resetFfmpegDir
+              ? null
+              : emptyToNull(settings.ffmpeg.custom_dir)
+          }
           defaultText={t("settings.ffmpeg.default")}
           chooseText={t("settings.ffmpeg.choose")}
           resetText={t("settings.ffmpeg.useDefault")}
-          onChoose={() => void chooseFolder("ffmpegDir")}
-          onReset={() => update("ffmpegDir", null)}
+          onChoose={() => void chooseFolder("resetFfmpegDir")}
+          onReset={() => update("resetFfmpegDir", true)}
         />
-        <FfmpegFinder
-          onUsed={(dir, status) => {
-            // Already recorded by the core: the draft follows, so the form isn't dirty.
-            setDraft((current) => ({ ...current, ffmpegDir: dir }))
-            setSidecars(status)
-          }}
-        />
+        <FfmpegFinder onUsed={setSidecars} />
         {sidecars && (
           <p className="text-xs text-muted-foreground">
             {sidecars.ffmpeg_path ? (

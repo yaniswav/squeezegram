@@ -40,13 +40,14 @@ function Warning({ children }: { children: string }) {
  * Detection of an ffmpeg already installed. The core only proposes candidates (known install
  * folders, plus the PATH folders as listed-only entries), scored by the encoders that really
  * work with each and compared with the download; nothing is kept until the click on "Use this
- * one", which records the folder in `ffmpeg.custom_dir` through `sidecars_use`.
+ * one", which records the folder in `ffmpeg.custom_dir` through `sidecars_use`. The page
+ * gives the candidate's id, never a path.
  */
 export function FfmpegFinder({
   onUsed,
   onRecommendation,
 }: {
-  onUsed?: (dir: string, status: SidecarStatus) => void
+  onUsed?: (status: SidecarStatus) => void
   /** The global advice once a search is done (null while searching): lets the parent
    *  highlight its own download button. */
   onRecommendation?: (recommendation: FfmpegRecommendation | null) => void
@@ -55,7 +56,7 @@ export function FfmpegFinder({
   const { reload } = useSettings()
   const [discovery, setDiscovery] = useState<FfmpegDiscovery | null>(null)
   const [searching, setSearching] = useState(false)
-  const [using, setUsing] = useState<string | null>(null)
+  const [using, setUsing] = useState<number | null>(null)
   const [error, setError] = useState<ReturnType<typeof errorOf> | null>(null)
 
   async function search() {
@@ -77,14 +78,14 @@ export function FfmpegFinder({
     }
   }
 
-  async function use(dir: string) {
-    setUsing(dir)
+  async function use(id: number) {
+    setUsing(id)
     setError(null)
 
     try {
-      const status = await sidecarsUse(dir)
+      const status = await sidecarsUse(id)
       await reload()
-      onUsed?.(dir, status)
+      onUsed?.(status)
     } catch (caught) {
       setError(errorOf(caught))
     } finally {
@@ -149,7 +150,7 @@ export function FfmpegFinder({
           <ul className="space-y-2">
             {candidates.map((candidate) => (
               <li
-                key={candidate.dir}
+                key={candidate.id}
                 className={cn(
                   "flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center",
                   candidate.recommended && "border-primary/60 bg-primary/5",
@@ -222,9 +223,9 @@ export function FfmpegFinder({
                   size="sm"
                   variant={candidate.recommended ? "default" : "outline"}
                   disabled={using !== null}
-                  onClick={() => void use(candidate.dir)}
+                  onClick={() => void use(candidate.id)}
                 >
-                  {using === candidate.dir
+                  {using === candidate.id
                     ? t("sidecars.finder.using")
                     : t("sidecars.finder.use")}
                 </Button>

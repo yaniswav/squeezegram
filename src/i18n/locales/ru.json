@@ -61,6 +61,8 @@
     "SIDECAR_EXTRACT": "Не удалось распаковать архив ffmpeg.",
     "SIDECAR_BUSY": "Установка ffmpeg уже выполняется.",
     "SIDECAR_INVALID": "В этой папке нет работающих ffmpeg и ffprobe, поэтому она не используется.",
+    "SIDECAR_CHOICE_STALE": "That ffmpeg choice is out of date. Search again and pick one from the new list.",
+    "TEMP_DIR_INVALID": "This folder can't be used for temporary files. Choose an existing, writable folder on a local drive (not a network share).",
     "UPDATE_FAILED": "Не удалось обновить приложение.",
     "UPDATE_CHECK_FAILED": "Не удалось проверить наличие обновлений. Проверьте подключение и повторите попытку.",
     "UPDATE_NOT_PUBLISHED": "Сведений об обновлении пока нет. Попробуйте позже.",

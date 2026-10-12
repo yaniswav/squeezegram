@@ -55,7 +55,11 @@ pub enum License {
 /// A validated ffmpeg/ffprobe pair, as sent to the front.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Candidate {
-    /// Folder to record in `ffmpeg.custom_dir`.
+    /// What the page gives back to choose this one (`sidecars_use`): the core keeps the folder
+    /// of each candidate it proposed and takes no path from the page. Set by
+    /// `SidecarService::remember`; 0 until then.
+    pub id: u64,
+    /// Folder that would be recorded in `ffmpeg.custom_dir`; shown, never sent back.
     pub dir: String,
     pub ffmpeg_path: String,
     pub ffprobe_path: String,
@@ -344,6 +348,7 @@ pub async fn discover_in(places: Places) -> Vec<Candidate> {
                 let work_dir = test_dir("cand", index);
                 let working = working_encoders(&found.ffmpeg, &found.ffprobe, &work_dir).await;
                 Some(Candidate {
+                    id: 0,
                     dir: found.dir.to_string_lossy().into_owned(),
                     ffmpeg_path: found.ffmpeg.to_string_lossy().into_owned(),
                     ffprobe_path: found.ffprobe.to_string_lossy().into_owned(),

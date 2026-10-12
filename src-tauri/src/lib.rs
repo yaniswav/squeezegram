@@ -431,6 +431,8 @@ pub fn run() {
             commands::sidecars_install,
             commands::sidecars_discover,
             commands::sidecars_use,
+            commands::sidecars_choose,
+            commands::temp_dir_choose,
             commands::log_frontend,
             commands::log_path,
             commands::log_open_dir,

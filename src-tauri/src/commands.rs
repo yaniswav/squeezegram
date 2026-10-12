@@ -33,7 +33,10 @@ use crate::queue::store::{
     NewItem, SendMode, WatchFolder, WatchFolderPatch,
 };
 use crate::queue::{QueueError, State as ItemState};
-use crate::settings::{ProxySettings, Settings, SettingsError, SettingsStore, patch_keys};
+use crate::settings::{
+    ProxySettings, Settings, SettingsError, SettingsStore, TempDirProblem, check_temp_dir,
+    patch_keys,
+};
 use crate::sidecars::discover::{self, Discovery};
 use crate::sidecars::{SidecarError, SidecarService, SidecarStatus};
 use crate::transport::identity_settings::{
@@ -1044,6 +1047,34 @@ fn refuse_network(patch: &Value) -> CommandResult<()> {
     }
 }
 
+/// The two settings that name a folder the app runs code from (`ffmpeg.custom_dir`) or writes
+/// into (`temp.dir`) are not set by a path the page sends: the core opens the native folder
+/// dialog and checks the folder (`temp_dir_choose`, `sidecars_choose`, `sidecars_use`). Only
+/// `null` (back to the default) goes through the plain patch.
+fn refuse_folder_settings(patch: &Value) -> CommandResult<()> {
+    let refused = |field: &str| -> CommandResult<()> {
+        Err(CommandError {
+            code: "SETTINGS_INVALID",
+            params: json!({ "field": field }),
+        })
+    };
+    match patch.get("ffmpeg") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(ffmpeg)) => {
+            if ffmpeg.values().any(|value| !value.is_null()) {
+                return refused("ffmpeg.custom_dir");
+            }
+        }
+        Some(_) => return refused("ffmpeg"),
+    }
+    match patch.get("temp") {
+        Some(Value::Object(temp)) if temp.get("dir").is_some_and(|dir| !dir.is_null()) => {
+            refused("temp.dir")
+        }
+        _ => Ok(()),
+    }
+}
+
 /// The journal gets the changed keys (`send.pause_min_s`), never the values.
 #[tauri::command]
 pub fn settings_set(state: State<'_, AppState>, patch: Value) -> CommandResult<Settings> {
@@ -1055,7 +1086,7 @@ pub fn settings_set(state: State<'_, AppState>, patch: Value) -> CommandResult<S
             params: json!({ "field": "telegram.api_override" }),
         }));
     }
-    if let Err(error) = refuse_network(&patch) {
+    if let Err(error) = refuse_network(&patch).and_then(|()| refuse_folder_settings(&patch)) {
         return call.finish(Err(error));
     }
     let result = state.settings.set(&patch).inspect(|settings| {
@@ -1445,27 +1476,94 @@ pub async fn sidecars_install(
 #[tauri::command]
 pub async fn sidecars_discover(state: State<'_, AppState>) -> CommandResult<Discovery> {
     let call = Call::new("sidecars_discover");
-    let discovery = discover::discover(state.sidecars.installed_pair()).await;
+    let mut discovery = discover::discover(state.sidecars.installed_pair()).await;
+    // The page gets an id per candidate and gives it back to `sidecars_use`, never a path.
+    state.sidecars.remember(&mut discovery.candidates);
     call.arg("found", discovery.candidates.len())
         .finish(Ok(discovery))
 }
 
-/// Records the folder of a detected candidate as `ffmpeg.custom_dir` (after re-validating it)
-/// and emits `sidecars://status`.
+/// Records the folder of a candidate of the last `sidecars_discover` (by the id it carried) as
+/// `ffmpeg.custom_dir`, after re-validating it, and emits `sidecars://status`. The page cannot
+/// name a folder: a path it sent could be a network share holding any `ffmpeg.exe`.
 #[tauri::command]
 pub async fn sidecars_use(
     app: AppHandle,
     state: State<'_, AppState>,
-    dir: String,
+    candidate_id: u64,
 ) -> CommandResult<SidecarStatus> {
-    let call = Call::new("sidecars_use").arg("dir", dir.as_str());
-    let result = state.sidecars.use_dir(&dir).await;
-    if let Ok(status) = &result
-        && let Err(error) = app.emit(SIDECARS_STATUS, status)
-    {
-        tracing::warn!(event = "emit_failed", name = SIDECARS_STATUS, error = %error, "could not emit an event to the window");
+    let call = Call::new("sidecars_use").arg("candidate_id", candidate_id);
+    let result = state.sidecars.use_proposed(candidate_id).await;
+    if let Ok(status) = &result {
+        emit_sidecar_status(&app, status);
     }
     call.finish(result.map_err(Into::into))
+}
+
+/// Asks for an ffmpeg folder in the native dialog (opened here, not by the page), then records
+/// it like `sidecars_use`. `null` when the dialog is closed.
+#[tauri::command]
+pub async fn sidecars_choose(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<SidecarStatus>> {
+    let call = Call::new("sidecars_choose");
+    let result = match pick_folder(&app).await {
+        None => Ok(None),
+        Some(folder) => state.sidecars.use_picked(&folder).await.map(Some),
+    };
+    if let Ok(Some(status)) = &result {
+        emit_sidecar_status(&app, status);
+    }
+    call.finish(result.map_err(Into::into))
+}
+
+fn emit_sidecar_status(app: &AppHandle, status: &SidecarStatus) {
+    if let Err(error) = app.emit(SIDECARS_STATUS, status) {
+        tracing::warn!(event = "emit_failed", name = SIDECARS_STATUS, error = %error, "could not emit an event to the window");
+    }
+}
+
+/// The native "choose a folder" dialog; `None` when it is closed.
+async fn pick_folder(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |path| {
+        let _ = sender.send(path);
+    });
+    receiver.await.ok().flatten()?.into_path().ok()
+}
+
+/// `TEMP_DIR_INVALID { reason }` for a folder that cannot be the temporary folder.
+fn temp_dir_error(problem: TempDirProblem) -> CommandError {
+    CommandError {
+        code: "TEMP_DIR_INVALID",
+        params: json!({ "reason": problem.as_str() }),
+    }
+}
+
+/// Checks `folder` and records it as `temp.dir`.
+fn set_temp_dir(settings: &SettingsStore, folder: &Path) -> CommandResult<Settings> {
+    check_temp_dir(folder).map_err(temp_dir_error)?;
+    let text = folder
+        .to_str()
+        .ok_or_else(|| temp_dir_error(TempDirProblem::NotAbsolute))?;
+    Ok(settings.set(&json!({ "temp": { "dir": text } }))?)
+}
+
+/// Asks for the temporary folder in the native dialog (opened here, not by the page), checks it
+/// (absolute, local drive, existing, writable) and records it as `temp.dir`. `null` when the
+/// dialog is closed. Back to the default goes through `settings_set` with `temp.dir: null`.
+#[tauri::command]
+pub async fn temp_dir_choose(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<Settings>> {
+    let call = Call::new("temp_dir_choose");
+    let result = match pick_folder(&app).await {
+        None => Ok(None),
+        Some(folder) => set_temp_dir(&state.settings, &folder).map(Some),
+    };
+    call.finish(result)
 }
 
 // --- updates ---
@@ -1834,6 +1932,88 @@ mod tests {
         assert!(refuse_network(&json!({ "ui": { "theme": "dark" } })).is_ok());
         let refused = refuse_network(&json!({ "network": { "proxy": null } })).unwrap_err();
         assert_eq!(refused.code, "SETTINGS_INVALID");
+    }
+
+    #[test]
+    fn folders_that_run_or_hold_files_are_not_plain_settings() {
+        for fine in [
+            json!({ "ui": { "theme": "dark" } }),
+            json!({ "temp": { "min_free_gb": 8 } }),
+            // Back to the default is harmless.
+            json!({ "temp": { "dir": null } }),
+            json!({ "temp": null }),
+            json!({ "ffmpeg": { "custom_dir": null } }),
+            json!({ "ffmpeg": null }),
+        ] {
+            assert!(refuse_folder_settings(&fine).is_ok(), "{fine}");
+        }
+        for (bad, field) in [
+            (json!({ "temp": { "dir": "C:\\tmp" } }), "temp.dir"),
+            (json!({ "temp": { "dir": "\\\\host\\share" } }), "temp.dir"),
+            (json!({ "temp": { "dir": "" } }), "temp.dir"),
+            (
+                json!({ "temp": { "min_free_gb": 1, "dir": "D:\\x" } }),
+                "temp.dir",
+            ),
+            (
+                json!({ "ffmpeg": { "custom_dir": "\\\\host\\share\\bin" } }),
+                "ffmpeg.custom_dir",
+            ),
+            (
+                json!({ "ffmpeg": { "custom_dir": "" } }),
+                "ffmpeg.custom_dir",
+            ),
+            (json!({ "ffmpeg": "C:\\ffmpeg" }), "ffmpeg"),
+        ] {
+            let refused = refuse_folder_settings(&bad).unwrap_err();
+            assert_eq!(refused.code, "SETTINGS_INVALID", "{bad}");
+            assert_eq!(refused.params, json!({ "field": field }), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_temp_folder_is_checked_before_it_is_recorded() {
+        let dir = TestDir::new("commands-temp-dir");
+        let store = SettingsStore::load(dir.path().join("settings.json")).unwrap();
+        let usable = dir.path().join("work");
+        std::fs::create_dir_all(&usable).unwrap();
+
+        let saved = set_temp_dir(&store, &usable).unwrap();
+        assert_eq!(saved.temp.dir.as_deref(), usable.to_str());
+        assert_eq!(saved.temp.min_free_gb, 5, "the rest is kept");
+
+        for (bad, reason) in [
+            (dir.path().join("absent"), "missing"),
+            (std::path::PathBuf::from("relative\\folder"), "not_absolute"),
+            #[cfg(windows)]
+            (
+                std::path::PathBuf::from("\\\\host\\share\\tmp"),
+                "not_local",
+            ),
+            #[cfg(windows)]
+            (
+                std::path::PathBuf::from("\\\\?\\UNC\\host\\share\\tmp"),
+                "not_local",
+            ),
+            #[cfg(windows)]
+            (std::path::PathBuf::from("\\\\.\\C:\\tmp"), "not_local"),
+        ] {
+            let error = set_temp_dir(&store, &bad).unwrap_err();
+            assert_eq!(error.code, "TEMP_DIR_INVALID", "{bad:?}");
+            assert_eq!(error.params, json!({ "reason": reason }), "{bad:?}");
+        }
+        // A file is not a folder.
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let error = set_temp_dir(&store, &file).unwrap_err();
+        assert_eq!(error.params, json!({ "reason": "missing" }));
+        assert_eq!(
+            store.get().temp.dir.as_deref(),
+            usable.to_str(),
+            "a refused folder changes nothing"
+        );
+        // Nothing is left behind by the writability check.
+        assert_eq!(std::fs::read_dir(&usable).unwrap().count(), 0);
     }
 
     #[cfg(windows)]

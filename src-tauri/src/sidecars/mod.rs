@@ -6,7 +6,8 @@ pub mod recommend;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use serde::Serialize;
 use serde_json::json;
@@ -45,6 +46,8 @@ pub enum SidecarError {
     Busy,
     #[error("the folder does not hold a working ffmpeg and ffprobe")]
     Invalid,
+    #[error("the folder was not proposed by the last search")]
+    NotProposed,
     #[error("settings: {0}")]
     Settings(#[from] SettingsError),
 }
@@ -59,6 +62,7 @@ impl SidecarError {
             SidecarError::Io(_) => "IO_ERROR",
             SidecarError::Busy => "SIDECAR_BUSY",
             SidecarError::Invalid => "SIDECAR_INVALID",
+            SidecarError::NotProposed => "SIDECAR_CHOICE_STALE",
             SidecarError::Settings(error) => error.code(),
         }
     }
@@ -118,6 +122,11 @@ pub struct SidecarService {
     settings: Arc<SettingsStore>,
     build: Build,
     installing: AtomicBool,
+    /// The folders of the candidates the last search proposed, by the id the page was given.
+    /// `use_proposed` takes nothing else from the page: a path it sent could be any folder
+    /// holding an `ffmpeg.exe` to run, a network share included.
+    proposed: Mutex<Vec<(u64, PathBuf)>>,
+    last_id: AtomicU64,
 }
 
 impl SidecarService {
@@ -131,7 +140,23 @@ impl SidecarService {
             settings,
             build,
             installing: AtomicBool::new(false),
+            proposed: Mutex::new(Vec::new()),
+            last_id: AtomicU64::new(0),
         }
+    }
+
+    /// Numbers the candidates of a search and keeps their folders, replacing those of the
+    /// previous search (its ids are no longer accepted).
+    pub fn remember(&self, candidates: &mut [discover::Candidate]) {
+        let mut kept = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            candidate.id = self.last_id.fetch_add(1, Ordering::SeqCst) + 1;
+            kept.push((candidate.id, PathBuf::from(&candidate.dir)));
+        }
+        *self
+            .proposed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = kept;
     }
 
     /// The pinned build's executables, when it is installed.
@@ -185,33 +210,60 @@ impl SidecarService {
         }
     }
 
-    /// Records `dir` as `ffmpeg.custom_dir` after running `-version` on both tools: what the
-    /// user picked among the detected candidates. The `PATH` is not involved.
-    pub async fn use_dir(&self, dir: &str) -> Result<SidecarStatus, SidecarError> {
-        let dir = dir.trim();
-        if dir.is_empty() || find_in(Path::new(dir)).is_none() {
+    /// Records the folder of a candidate of the last search, after running `-version` on both
+    /// tools. `SIDECAR_CHOICE_STALE` for an id that search did not give (an older search, or
+    /// one the page made up). The `PATH` is not involved.
+    pub async fn use_proposed(&self, id: u64) -> Result<SidecarStatus, SidecarError> {
+        let dir = self
+            .proposed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .find(|(proposed, _)| *proposed == id)
+            .map(|(_, dir)| dir.clone());
+        let Some(dir) = dir else {
             tracing::warn!(
                 event = "sidecar_use",
-                dir,
+                error_code = SidecarError::NotProposed.code(),
+                "no such candidate in the last search"
+            );
+            return Err(SidecarError::NotProposed);
+        };
+        self.record_dir(&dir).await
+    }
+
+    /// Records a folder the user picked in the native dialog (opened by the core, not by the
+    /// page), with the same checks.
+    pub async fn use_picked(&self, dir: &Path) -> Result<SidecarStatus, SidecarError> {
+        self.record_dir(dir).await
+    }
+
+    async fn record_dir(&self, dir: &Path) -> Result<SidecarStatus, SidecarError> {
+        let dir_text = dir.to_string_lossy().into_owned();
+        let dir_text = dir_text.trim();
+        if dir_text.is_empty() || find_in(Path::new(dir_text)).is_none() {
+            tracing::warn!(
+                event = "sidecar_use",
+                dir = dir_text,
                 error_code = SidecarError::Missing.code(),
                 "no ffmpeg/ffprobe pair in this folder"
             );
             return Err(SidecarError::Missing);
         }
-        let Some(probed) = discover::probe_dir(Path::new(dir)).await else {
+        let Some(probed) = discover::probe_dir(Path::new(dir_text)).await else {
             tracing::warn!(
                 event = "sidecar_use",
-                dir,
+                dir = dir_text,
                 error_code = SidecarError::Invalid.code(),
                 "the pair in this folder does not run"
             );
             return Err(SidecarError::Invalid);
         };
         self.settings
-            .set(&json!({ "ffmpeg": { "custom_dir": dir } }))?;
+            .set(&json!({ "ffmpeg": { "custom_dir": dir_text } }))?;
         tracing::info!(
             event = "sidecar_use",
-            dir,
+            dir = dir_text,
             version = probed.version.as_str(),
             license = ?probed.license,
             "custom ffmpeg folder recorded"
@@ -261,38 +313,91 @@ mod tests {
         SidecarService::new(dir.path().join("sidecars"), settings)
     }
 
+    fn candidate(dir: &Path) -> discover::Candidate {
+        discover::Candidate {
+            id: 0,
+            dir: dir.to_string_lossy().into_owned(),
+            ffmpeg_path: String::new(),
+            ffprobe_path: String::new(),
+            origin: discover::Origin::Path,
+            version: "test".into(),
+            license: discover::License::Unknown,
+            encoders: Vec::new(),
+            working_encoders: Vec::new(),
+            score: 0,
+            recommended: false,
+            reasons: Vec::new(),
+        }
+    }
+
+    fn fake_pair(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(format!("ffmpeg{EXE}")), b"not an executable").unwrap();
+        std::fs::write(dir.join(format!("ffprobe{EXE}")), b"not an executable").unwrap();
+    }
+
     #[tokio::test]
-    async fn use_dir_refuses_missing_and_non_working_folders_and_records_nothing() {
+    async fn a_picked_folder_is_refused_when_missing_or_not_working_and_records_nothing() {
         let dir = TestDir::new("sidecars-use");
         let service = service(&dir);
         assert!(matches!(
-            service.use_dir("  ").await,
+            service.use_picked(Path::new("  ")).await,
             Err(SidecarError::Missing)
         ));
         assert!(matches!(
-            service.use_dir(&dir.path().to_string_lossy()).await,
+            service.use_picked(dir.path()).await,
             Err(SidecarError::Missing)
         ));
         let fake = dir.path().join("fake");
-        std::fs::create_dir_all(&fake).unwrap();
-        std::fs::write(fake.join(format!("ffmpeg{EXE}")), b"not an executable").unwrap();
-        std::fs::write(fake.join(format!("ffprobe{EXE}")), b"not an executable").unwrap();
-        let error = service.use_dir(&fake.to_string_lossy()).await.unwrap_err();
+        fake_pair(&fake);
+        let error = service.use_picked(&fake).await.unwrap_err();
         assert_eq!(error.code(), "SIDECAR_INVALID");
         assert_eq!(service.settings.get().ffmpeg.custom_dir, None);
         assert!(!service.status().installed);
     }
 
+    #[tokio::test]
+    async fn only_a_candidate_of_the_last_search_can_be_used() {
+        let dir = TestDir::new("sidecars-proposed");
+        let service = service(&dir);
+        let fake = dir.path().join("fake");
+        fake_pair(&fake);
+
+        // Nothing proposed yet: no id is accepted, whatever the folder holds.
+        let error = service.use_proposed(1).await.unwrap_err();
+        assert_eq!(error.code(), "SIDECAR_CHOICE_STALE");
+
+        let mut first = vec![candidate(&fake)];
+        service.remember(&mut first);
+        let id = first[0].id;
+        assert_ne!(id, 0);
+        // A proposed folder is still checked: this one does not run.
+        let error = service.use_proposed(id).await.unwrap_err();
+        assert_eq!(error.code(), "SIDECAR_INVALID");
+        // An id nobody was given.
+        let error = service.use_proposed(id + 100).await.unwrap_err();
+        assert_eq!(error.code(), "SIDECAR_CHOICE_STALE");
+
+        // A new search replaces the list: the earlier id is no longer valid, and the new one
+        // differs even for the same folder.
+        let mut second = vec![candidate(&fake)];
+        service.remember(&mut second);
+        assert_ne!(second[0].id, id);
+        let error = service.use_proposed(id).await.unwrap_err();
+        assert_eq!(error.code(), "SIDECAR_CHOICE_STALE");
+        assert_eq!(service.settings.get().ffmpeg.custom_dir, None);
+    }
+
     /// Against the real ffmpeg of the session scratchpad; run with `--ignored`.
     #[tokio::test]
     #[ignore = "needs a real ffmpeg at a machine-specific path"]
-    async fn use_dir_records_a_real_ffmpeg_and_the_status_resolves_it() {
+    async fn use_picked_records_a_real_ffmpeg_and_the_status_resolves_it() {
         let dir = TestDir::new("sidecars-use-real");
         let service = service(&dir);
         let bin_owned = std::env::var("SQUEEZEGRAM_TEST_FFMPEG_DIR")
             .expect("SQUEEZEGRAM_TEST_FFMPEG_DIR must point to the bin folder of an ffmpeg build");
         let bin = bin_owned.as_str();
-        let status = service.use_dir(bin).await.unwrap();
+        let status = service.use_picked(Path::new(bin)).await.unwrap();
         assert!(status.installed);
         assert_eq!(status.source, Some(Source::Custom));
         assert_eq!(

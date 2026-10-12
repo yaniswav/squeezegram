@@ -61,6 +61,8 @@
     "SIDECAR_EXTRACT": "Arsip ffmpeg tidak dapat diekstrak.",
     "SIDECAR_BUSY": "Pemasangan ffmpeg sedang berjalan.",
     "SIDECAR_INVALID": "Folder ini tidak berisi ffmpeg dan ffprobe yang berfungsi, sehingga tidak digunakan.",
+    "SIDECAR_CHOICE_STALE": "That ffmpeg choice is out of date. Search again and pick one from the new list.",
+    "TEMP_DIR_INVALID": "This folder can't be used for temporary files. Choose an existing, writable folder on a local drive (not a network share).",
     "UPDATE_FAILED": "Pembaruan gagal.",
     "UPDATE_CHECK_FAILED": "Pemeriksaan pembaruan gagal. Periksa koneksi, lalu coba lagi.",
     "UPDATE_NOT_PUBLISHED": "Belum ada informasi pembaruan. Coba lagi nanti.",

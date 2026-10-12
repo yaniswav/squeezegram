@@ -272,6 +272,7 @@ mod tests {
 
     fn candidate(dir: &str, version: &str, license: License, working: &[Encoder]) -> Candidate {
         Candidate {
+            id: 0,
             dir: dir.into(),
             ffmpeg_path: format!("{dir}\\ffmpeg.exe"),
             ffprobe_path: format!("{dir}\\ffprobe.exe"),
