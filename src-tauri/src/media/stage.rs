@@ -146,6 +146,25 @@ fn strippable_image(source: &Path, size: i64) -> bool {
         && metadata::sniff(&head).is_some()
 }
 
+/// `plan` under "Remove location and camera data" (`plan::without_private_data`); the badge of
+/// the background analysis and the probing apply it alike.
+fn with_privacy(
+    settings: &Settings,
+    plan: Plan,
+    source: &Path,
+    item: &Item,
+    info: Option<&MediaInfo>,
+) -> Plan {
+    if !settings.privacy.strip_metadata {
+        return plan;
+    }
+    let private = plan::PrivateData {
+        image: plan.kind == Kind::Skip && strippable_image(source, item.source_size),
+        video_tags: info.is_some_and(|info| info.private_tags),
+    };
+    plan::without_private_data(plan, source, private)
+}
+
 struct Cached {
     ffmpeg: PathBuf,
     detection: Detection,
@@ -711,6 +730,7 @@ impl FfmpegStage {
         // probing fails it with the right code when its turn comes.
         let plan_json = plan::build_plan(info.as_ref(), &input)
             .ok()
+            .map(|plan| with_privacy(&settings, plan, &source, item, info.as_ref()))
             .and_then(|plan| serde_json::to_string(&plan).ok());
         Ok(Some(Analysis {
             media_json: info.and_then(|i| serde_json::to_string(&i).ok()),
@@ -798,15 +818,9 @@ impl FfmpegStage {
             json = summary.as_str(),
             "probe and identity done"
         );
-        let mut plan = plan::build_plan(info.as_ref(), &input)
+        let plan = plan::build_plan(info.as_ref(), &input)
             .map_err(|e| MediaError::failed(e.code(), e.to_string()))?;
-        if settings.privacy.strip_metadata {
-            let private = plan::PrivateData {
-                image: plan.kind == Kind::Skip && strippable_image(&source, item.source_size),
-                video_tags: info.as_ref().is_some_and(|info| info.private_tags),
-            };
-            plan = plan::without_private_data(plan, &source, private);
-        }
+        let mut plan = with_privacy(&settings, plan, &source, item, info.as_ref());
 
         if plan.kind == Kind::Encode
             && let Some(resolved) = &resolved
@@ -1814,5 +1828,46 @@ mod tests {
         assert!(reusable_info(&item, None).is_none(), "file gone");
         assert!(reusable_info(&analyzed_item(None), Some((10, 1))).is_none());
         assert!(reusable_info(&analyzed_item(Some("{")), Some((10, 1))).is_none());
+    }
+
+    /// The badge and the probing see the same plan: a JPEG sent as a file becomes a stripped
+    /// copy, unless the setting is off, the file is no JPEG/PNG/WebP, or it is too big to read.
+    #[test]
+    fn privacy_applies_to_images_sent_as_they_are_only() {
+        let dir = crate::queue::test_util::TestDir::new("stage-privacy");
+        let jpeg = dir.file("IMG_1.JPG", b"\xff\xd8\xff\xe1\0\x08Exif\0\0\xff\xd9");
+        let heic = dir.file("IMG_2.HEIC", b"\0\0\0\x18ftypheic\0\0\0\0");
+        let plan_of = |settings: &Settings, path: &str, size: i64| {
+            let mut item = analyzed_item(None);
+            item.source_path = path.to_owned();
+            item.source_size = size;
+            item.send_mode = SendMode::Document;
+            let source = PathBuf::from(path);
+            let input = plan_input(
+                &source,
+                &item,
+                plan::MIB * 1024,
+                settings,
+                &AdvancedEncoding::AUTOMATIC,
+                None,
+            );
+            let plan = plan::build_plan(None, &input).unwrap();
+            with_privacy(settings, plan, &source, &item, None)
+        };
+        let on = Settings::default();
+        let stripped = plan_of(&on, &jpeg, 14);
+        assert_eq!(
+            (stripped.kind, stripped.output_name.as_str()),
+            (Kind::Strip, "IMG_1.JPG")
+        );
+        assert_eq!(plan_of(&on, &heic, 16).kind, Kind::Skip, "HEIC unchanged");
+        assert_eq!(
+            plan_of(&on, &jpeg, STRIP_MAX_BYTES + 1).kind,
+            Kind::Skip,
+            "too big to read whole"
+        );
+        let mut off = Settings::default();
+        off.privacy.strip_metadata = false;
+        assert_eq!(plan_of(&off, &jpeg, 14).kind, Kind::Skip);
     }
 }
