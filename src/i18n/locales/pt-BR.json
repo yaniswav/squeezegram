@@ -89,6 +89,7 @@
     "TG_PROXY_FAILED": "O proxy não funcionou: {{message}}",
     "TG_PROXY_SECRET_UNAVAILABLE": "A senha ou o segredo do proxy salvo não pode ser lido nesta conta do Windows, então o squeezegram não se conecta ao Telegram. Digite-o novamente em Configurações > Rede.",
     "TG_SESSION_IN_USE": "The Telegram session is in use, so it can't be reset.",
+    "PROXY_SECRET_NOT_SAVED": "The proxy password or secret could not be stored on this Windows account, so the proxy was not changed. Try again.",
     "PROXY_INVALID": "Esta configuração de proxy não é válida.",
     "PROXY_INVALID_kind": "Escolha primeiro um tipo de proxy.",
     "PROXY_INVALID_host": "Digite o servidor como nome (proxy.exemplo.com) ou endereço IP, sem http:// nem porta.",

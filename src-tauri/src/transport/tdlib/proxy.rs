@@ -41,7 +41,9 @@ pub fn store_secret(dir: &Path, secret: &str) -> Result<(), TransportError> {
     if secret.is_empty() {
         return clear_secret(dir);
     }
-    let blob = protect(secret.as_bytes())?;
+    // `protect` words its failure for the database key; this is the proxy's.
+    let blob = protect(secret.as_bytes())
+        .map_err(|_| TransportError::Protocol("proxy secret: DPAPI protect failed".into()))?;
     fs::create_dir_all(dir).map_err(io_error)?;
     let temporary = dir.join(format!("{SECRET_FILE}.tmp"));
     fs::write(&temporary, &blob).map_err(io_error)?;

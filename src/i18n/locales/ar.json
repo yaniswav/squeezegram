@@ -89,6 +89,7 @@
     "TG_PROXY_FAILED": "لم يعمل الوكيل: {{message}}",
     "TG_PROXY_SECRET_UNAVAILABLE": "تعذّر قراءة كلمة مرور الوكيل أو مفتاحه (secret) المحفوظين في حساب Windows هذا، لذلك لا يتصل squeezegram بـ Telegram. أدخلهما مجددًا في الإعدادات › الشبكة.",
     "TG_SESSION_IN_USE": "The Telegram session is in use, so it can't be reset.",
+    "PROXY_SECRET_NOT_SAVED": "The proxy password or secret could not be stored on this Windows account, so the proxy was not changed. Try again.",
     "PROXY_INVALID": "إعداد الوكيل هذا غير صالح.",
     "PROXY_INVALID_kind": "اختر نوع الوكيل أولًا.",
     "PROXY_INVALID_host": "أدخل الخادم اسمًا (proxy.example.com) أو عنوان IP، دون http:// ودون منفذ.",

@@ -1154,6 +1154,16 @@ fn proxy_from_input(
     Ok(Some(proxy))
 }
 
+/// The proxy's secret could not be stored (DPAPI, disk): its own code, not the database
+/// key's or a generic protocol error. The detail goes to the journal, never the secret.
+fn proxy_secret_not_saved(error: TransportError) -> CommandError {
+    tracing::warn!(event = "command_error_detail", error = %error, "proxy secret not saved");
+    CommandError {
+        code: "PROXY_SECRET_NOT_SAVED",
+        params: json!({}),
+    }
+}
+
 /// The secret first (DPAPI; removed when there is none), then the settings: what `select`
 /// loads at the next launch.
 fn save_proxy(
@@ -1161,7 +1171,8 @@ fn save_proxy(
     dir: &Path,
     proxy: Option<&Proxy>,
 ) -> CommandResult<Settings> {
-    tdlib::proxy::store_secret(dir, proxy.map_or("", |proxy| proxy.secret.as_str()))?;
+    tdlib::proxy::store_secret(dir, proxy.map_or("", |proxy| proxy.secret.as_str()))
+        .map_err(proxy_secret_not_saved)?;
     let stored = proxy.map(|proxy| ProxySettings {
         kind: proxy.kind,
         host: proxy.host.clone(),
@@ -1191,6 +1202,8 @@ pub fn proxy_get(state: State<'_, AppState>) -> CommandResult<ProxyView> {
 /// once TDLib took it: a refused proxy leaves the saved one (and its secret) in place. A
 /// TDLib start that had failed (unreadable secret, refused proxy) is tried again with the new
 /// choice; if it fails again the transport goes back to the saved choice and nothing is saved.
+/// The same goes back when the saving itself fails (the secret cannot be protected or written):
+/// the transport must not keep a proxy that the next launch will not find.
 pub(crate) async fn apply_then_save_proxy(
     transport: &dyn TelegramTransport,
     kind: TransportKind,
@@ -1200,18 +1213,33 @@ pub(crate) async fn apply_then_save_proxy(
 ) -> CommandResult<ProxyView> {
     let saved = settings.get().network.proxy;
     let proxy = proxy_from_input(input, saved.as_ref(), || tdlib::proxy::load_secret(dir))?;
+    // What the transport goes back to; unknown when the saved secret cannot be read.
+    let previous = tdlib::proxy::load(dir, saved.as_ref()).ok();
     transport.set_proxy(proxy.clone()).await?;
     let failed_start = kind == TransportKind::Tdlib
         && matches!(*transport.auth_state().borrow(), AuthState::StartFailed(_));
     if failed_start && let Err(error) = crate::transport::select::start(transport).await {
         // The saved choice may itself be unusable (unreadable secret): then the new one stays
         // in memory, which only the next try in this session reads.
-        if let Ok(previous) = tdlib::proxy::load(dir, saved.as_ref()) {
+        if let Some(previous) = previous {
             let _ = transport.set_proxy(previous).await;
         }
         return Err(error.into());
     }
-    let settings = save_proxy(settings, dir, proxy.as_ref())?;
+    let settings = match save_proxy(settings, dir, proxy.as_ref()) {
+        Ok(settings) => settings,
+        Err(error) => {
+            if let Some(previous) = previous {
+                // The secret may have been replaced before the settings failed: put it back too.
+                let _ = tdlib::proxy::store_secret(
+                    dir,
+                    previous.as_ref().map_or("", |proxy| proxy.secret.as_str()),
+                );
+                let _ = transport.set_proxy(previous).await;
+            }
+            return Err(error);
+        }
+    };
     Ok(ProxyView {
         proxy: settings.network.proxy,
         has_secret: proxy.is_some_and(|proxy| !proxy.secret.is_empty()),
@@ -1912,6 +1940,75 @@ mod tests {
             tdlib::proxy::load_secret(&tdlib_dir).unwrap().as_deref(),
             Some(MT),
             "and its secret"
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_proxy_whose_secret_cannot_be_stored_is_rolled_back_and_not_saved() {
+        use crate::transport::mock::MockTransport;
+
+        let dir = TestDir::new("commands-proxy-store-fails");
+        let store = SettingsStore::load(dir.path().join("settings.json")).unwrap();
+        let tdlib_dir = dir.path().join("tdlib");
+        let mock = MockTransport::authorized();
+        let mut good = input(Some(ProxyKind::Mtproto), Some(MT));
+        good.host = "mt.example".into();
+        apply_then_save_proxy(&mock, TransportKind::Mock, &store, &tdlib_dir, &good)
+            .await
+            .unwrap();
+
+        // The folder of the secret cannot be written to: a file sits where its temporary
+        // file should go.
+        std::fs::create_dir(tdlib_dir.join(format!("{}.tmp", tdlib::proxy::SECRET_FILE))).unwrap();
+        let mut other = input(Some(ProxyKind::Mtproto), Some(&format!("dd{MT}")));
+        other.host = "other.example".into();
+        let refused = apply_then_save_proxy(&mock, TransportKind::Mock, &store, &tdlib_dir, &other)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "PROXY_SECRET_NOT_SAVED");
+        assert_eq!(store.get().network.proxy.unwrap().host, "mt.example");
+        assert_eq!(
+            mock.proxy().unwrap().host,
+            "mt.example",
+            "the transport goes back to the saved proxy"
+        );
+        assert_eq!(
+            tdlib::proxy::load_secret(&tdlib_dir).unwrap().as_deref(),
+            Some(MT)
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn the_transport_goes_back_when_the_settings_cannot_be_written() {
+        use crate::transport::mock::MockTransport;
+
+        let dir = TestDir::new("commands-proxy-settings-fail");
+        let settings_path = dir.path().join("settings.json");
+        let store = SettingsStore::load(settings_path.clone()).unwrap();
+        let tdlib_dir = dir.path().join("tdlib");
+        let mock = MockTransport::authorized();
+        let mut good = input(Some(ProxyKind::Mtproto), Some(MT));
+        good.host = "mt.example".into();
+        apply_then_save_proxy(&mock, TransportKind::Mock, &store, &tdlib_dir, &good)
+            .await
+            .unwrap();
+
+        // The settings file cannot be replaced: a folder sits at the temporary file's name.
+        std::fs::create_dir(settings_path.with_extension("json.tmp")).unwrap();
+        let mut other = input(Some(ProxyKind::Mtproto), Some(&format!("dd{MT}")));
+        other.host = "other.example".into();
+        let refused = apply_then_save_proxy(&mock, TransportKind::Mock, &store, &tdlib_dir, &other)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "IO_ERROR");
+        assert_eq!(store.get().network.proxy.unwrap().host, "mt.example");
+        assert_eq!(mock.proxy().unwrap().host, "mt.example", "rolled back");
+        assert_eq!(
+            tdlib::proxy::load_secret(&tdlib_dir).unwrap().as_deref(),
+            Some(MT),
+            "and the secret put back"
         );
     }
 

@@ -89,6 +89,7 @@
     "TG_PROXY_FAILED": "Proksi tidak berfungsi: {{message}}",
     "TG_PROXY_SECRET_UNAVAILABLE": "Kata sandi atau secret proksi yang tersimpan tidak dapat dibaca di akun Windows ini, sehingga squeezegram tidak terhubung ke Telegram. Masukkan lagi di Pengaturan > Jaringan.",
     "TG_SESSION_IN_USE": "The Telegram session is in use, so it can't be reset.",
+    "PROXY_SECRET_NOT_SAVED": "The proxy password or secret could not be stored on this Windows account, so the proxy was not changed. Try again.",
     "PROXY_INVALID": "Pengaturan proksi ini tidak valid.",
     "PROXY_INVALID_kind": "Pilih jenis proksi terlebih dahulu.",
     "PROXY_INVALID_host": "Masukkan server sebagai nama (proxy.example.com) atau alamat IP, tanpa http:// atau port.",
