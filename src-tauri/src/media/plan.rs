@@ -82,13 +82,17 @@ pub fn is_image(path: &Path) -> bool {
         .is_some_and(|e| IMAGE_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
-/// Longest and shortest side of the downscale cap.
+/// Longest and shortest side of the downscale cap; named as in `settings.advanced_encoding`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ResolutionCap {
+    #[serde(rename = "1080p")]
     P1080,
+    #[serde(rename = "1440p")]
     P1440,
+    #[serde(rename = "2160p")]
+    P2160,
     /// Keeps the source size, within what NVENC accepts (4096).
+    #[serde(rename = "original")]
     Original,
 }
 
@@ -97,6 +101,7 @@ impl ResolutionCap {
         match self {
             ResolutionCap::P1080 => (1920, 1080),
             ResolutionCap::P1440 => (2560, 1440),
+            ResolutionCap::P2160 => (3840, 2160),
             ResolutionCap::Original => (4096, 4096),
         }
     }
@@ -567,6 +572,11 @@ mod tests {
         assert!(
             video_filter(&video("h264", "High", "yuv420p"), ResolutionCap::Original)
                 .contains("min(4096,iw)")
+        );
+        let uhd = video_filter(&video("h264", "High", "yuv420p"), ResolutionCap::P2160);
+        assert!(
+            uhd.contains("min(3840,iw)") && uhd.contains("min(2160,ih)"),
+            "{uhd}"
         );
     }
 

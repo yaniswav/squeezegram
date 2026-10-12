@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::media::plan::ResolutionCap;
 use crate::queue::orchestrator::PauseRange;
 
 pub const FILE_NAME: &str = "settings.json";
@@ -44,6 +45,36 @@ pub struct Settings {
     pub logging: Logging,
     /// Update checks. Absent from files written before they existed: the defaults apply.
     pub updates: Updates,
+    /// Paid feature `advanced_encoding`. Absent from older files: the defaults apply.
+    pub advanced_encoding: AdvancedEncoding,
+}
+
+/// Audio bitrates offered for an encode, in kbit/s.
+pub const AUDIO_KBPS_CHOICES: [u32; 4] = [96, 128, 160, 192];
+
+/// Advanced encoding choices. Saved whatever the plan; the media stage reads them only while
+/// the license grants `advanced_encoding`, and uses `AUTOMATIC` otherwise.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AdvancedEncoding {
+    /// Cap of an encode (`1080p`, `1440p`, `2160p`, `original`); never an upscale.
+    pub max_resolution: ResolutionCap,
+    /// AAC bitrate of an encode or an audio conversion, one of `AUDIO_KBPS_CHOICES`.
+    pub audio_kbps: u32,
+}
+
+impl AdvancedEncoding {
+    /// What every encode uses without the feature.
+    pub const AUTOMATIC: Self = Self {
+        max_resolution: ResolutionCap::P1080,
+        audio_kbps: 128,
+    };
+}
+
+impl Default for AdvancedEncoding {
+    fn default() -> Self {
+        Self::AUTOMATIC
+    }
 }
 
 /// Update checks (`update` module). The check asks GitHub for the latest release manifest and
@@ -77,6 +108,8 @@ pub struct Limit {
 pub struct Encoding {
     pub mode: String,
     pub prefer: String,
+    /// Not read: the audio bitrate is `advanced_encoding.audio_kbps` with the feature, 128
+    /// without. Kept so that the files that carry it still load.
     pub audio_kbps: u32,
     pub video_codec: String,
 }
@@ -142,6 +175,7 @@ impl Default for Settings {
             watch: Watch::default(),
             logging: Logging::default(),
             updates: Updates::default(),
+            advanced_encoding: AdvancedEncoding::default(),
         }
     }
 }
@@ -232,6 +266,11 @@ impl Settings {
             && crate::queue::parse_iso(at).is_none()
         {
             return Err(SettingsError::Invalid("updates.last_check_at".into()));
+        }
+        if !AUDIO_KBPS_CHOICES.contains(&self.advanced_encoding.audio_kbps) {
+            return Err(SettingsError::Invalid(
+                "advanced_encoding.audio_kbps".into(),
+            ));
         }
         Ok(())
     }
@@ -388,9 +427,47 @@ mod tests {
               "ui": { "theme": "system", "language": "en" },
               "watch": { "stable_seconds": 10 },
               "logging": { "level": null },
-              "updates": { "check_automatically": true, "last_check_at": null }
+              "updates": { "check_automatically": true, "last_check_at": null },
+              "advanced_encoding": { "max_resolution": "1080p", "audio_kbps": 128 }
             })
         );
+    }
+
+    #[test]
+    fn a_file_without_advanced_encoding_loads_and_choices_are_validated() {
+        let dir = TestDir::new("settings-advanced");
+        let path = dir.path().join(FILE_NAME);
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("advanced_encoding");
+        std::fs::write(&path, old.to_string()).unwrap();
+        let store = SettingsStore::load(path).unwrap();
+        assert_eq!(store.get().advanced_encoding, AdvancedEncoding::AUTOMATIC);
+
+        for (resolution, cap) in [
+            ("1440p", ResolutionCap::P1440),
+            ("2160p", ResolutionCap::P2160),
+            ("original", ResolutionCap::Original),
+            ("1080p", ResolutionCap::P1080),
+        ] {
+            let saved = store
+                .set(&json!({ "advanced_encoding": { "max_resolution": resolution, "audio_kbps": 192 } }))
+                .unwrap();
+            assert_eq!(saved.advanced_encoding.max_resolution, cap);
+        }
+        for bad in [
+            json!({ "advanced_encoding": { "audio_kbps": 100 } }),
+            json!({ "advanced_encoding": { "audio_kbps": 0 } }),
+            json!({ "advanced_encoding": { "max_resolution": "4k" } }),
+            json!({ "advanced_encoding": { "max_resolution": "p1080" } }),
+            json!({ "advanced_encoding": { "bitrate": 1 } }),
+        ] {
+            assert_eq!(
+                store.set(&bad).unwrap_err().code(),
+                "SETTINGS_INVALID",
+                "{bad}"
+            );
+        }
+        assert_eq!(store.get().advanced_encoding.audio_kbps, 192);
     }
 
     #[test]

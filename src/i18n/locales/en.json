@@ -87,7 +87,12 @@
     "TG_WRITE_FORBIDDEN_restricted": "Your account is restricted in this chat.",
     "TG_WRITE_FORBIDDEN_media_not_allowed": "This chat doesn't allow {{media}} messages.",
     "TG_WRITE_FORBIDDEN_admins_only": "Only administrators can post in this chat.",
-    "TG_WRITE_FORBIDDEN_topic_closed": "This topic is closed."
+    "TG_WRITE_FORBIDDEN_topic_closed": "This topic is closed.",
+    "LIC_MALFORMED": "This isn't a squeezegram license. Copy the whole license from the bot's message and paste it again.",
+    "LIC_UNKNOWN_KID": "This license was signed with a key this version of squeezegram doesn't know. Update the app, then try again.",
+    "LIC_BAD_SIGNATURE": "This license failed its signature check. Copy it again from the bot's message, without changing anything.",
+    "LIC_WRONG_ACCOUNT": "This license belongs to another Telegram account. Sign in with the account it was bought for.",
+    "LIC_NO_ACCOUNT": "Sign in to Telegram to check this license."
   },
   "sidecars": {
     "missingTitle": "ffmpeg is needed to compress videos",
@@ -372,6 +377,41 @@
     "discard": "Discard changes",
     "unsaved": "Unsaved changes",
     "invalid": "Fix the highlighted fields to save.",
+    "license": {
+      "title": "License",
+      "hint": "A license unlocks squeezegram Premium for the Telegram account it was bought for. It is checked on this computer, with no network request.",
+      "unavailable": "The license status couldn't be read.",
+      "status": {
+        "free": "Plan: Free",
+        "premium": "Plan: Premium, lifetime",
+        "features": "Unlocked: {{list}}",
+        "pending": "A license is saved. Sign in to Telegram to check it: it applies once the account it was bought for is signed in.",
+        "otherAccount": "The saved license is bound to another Telegram account. Sign in with the account it was bought for, or remove it.",
+        "invalid": "The saved license can't be used. {{message}}"
+      },
+      "feature": {
+        "advanced_encoding": "advanced encoding",
+        "multi_destination": "several destinations",
+        "watched_folder": "watched folders",
+        "background": "background mode",
+        "caption_templates": "caption templates"
+      },
+      "input": {
+        "label": "Paste your license",
+        "hint": "The bot sends it in a message. It starts with SQZ1."
+      },
+      "activate": "Activate",
+      "activating": "Checking…",
+      "activated": "License activated.",
+      "savedPending": "License saved. Sign in to Telegram to check it.",
+      "buy": "Buy a license from @squeezegram_bot on Telegram",
+      "remove": {
+        "button": "Remove license",
+        "title": "Remove the license?",
+        "body": "Premium features stop on this computer. Keep the bot's message: the same license can be activated again.",
+        "confirm": "Remove license"
+      }
+    },
     "limit": {
       "title": "Upload limit",
       "premium": {
@@ -410,6 +450,25 @@
         "cpu": "Processor first",
         "hint": "If the first kind fails its test, the other one is used. If the graphics card stops in the middle of a compression (a game or a screen recorder using it can cause this), the file is compressed again on the processor. If that keeps happening, choose “Processor first”: slower, but it leaves the graphics card alone.",
         "gpuFailed": "The graphics card encoder ({{encoder}}) stopped during a compression in this session. squeezegram uses the processor until the app restarts, then tries the graphics card again."
+      }
+    },
+    "advanced": {
+      "title": "Advanced encoding",
+      "premium": "Premium",
+      "locked": "Included with squeezegram Premium. Until then, compression uses the automatic values shown here.",
+      "resolution": {
+        "label": "Maximum resolution",
+        "hint": "Larger videos are scaled down to this size; smaller ones are never enlarged. A higher resolution leaves fewer bits for each pixel under the upload limit.",
+        "1080p": "1080p (automatic)",
+        "1440p": "1440p",
+        "2160p": "2160p (4K)",
+        "original": "Original size (up to 4096 pixels wide)"
+      },
+      "audio": {
+        "label": "Audio bitrate",
+        "hint": "A higher bitrate sounds better and takes room from the picture under the upload limit.",
+        "value": "{{kbps}} kbit/s",
+        "automatic": "{{kbps}} kbit/s (automatic)"
       }
     },
     "send": {

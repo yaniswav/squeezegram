@@ -1,23 +1,32 @@
-//! Entitlements: which paid features may run (open-core, see `docs/LICENSE-KEY.md`).
+//! Entitlements: which paid features may run.
 //!
-//! The public source holds no paid feature: the app state carries `FreeOnly`, which refuses
-//! every one, so a build made from this repository behaves exactly as the free app. The
-//! official build swaps in an implementation backed by a verified license (`store`), with the
-//! production public keys supplied from outside this repository.
+//! The app state carries `LicenseEntitlements` (`store`): the license stored next to
+//! `settings.json`, verified offline against the public keys of `keys` and bound to the
+//! signed-in Telegram account. `FreeOnly` refuses every feature; tests use it as the free plan.
 //!
 //! - `license`: the `SQZ1` token format, Ed25519 verification, account binding
-//! - `store`: `license.txt` next to `settings.json`, evaluated against the signed-in account
+//! - `keys`: the production public keys, by `kid`
+//! - `store`: `license.txt`, evaluated against the signed-in account
 
+pub mod keys;
 pub mod license;
 pub mod store;
 
 use serde::Serialize;
 
+pub use store::LicenseEntitlements;
+
+/// Where a license is bought: a Telegram bot. Opened by the core, never chosen by the page.
+pub const PURCHASE_URL: &str = "https://t.me/squeezegram_bot";
+
 /// A paid feature. Closed on purpose: a license names features by `as_str`, and a name this
 /// version does not know is ignored, never mapped to something else.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Feature {
+    /// Maximum resolution and audio bitrate of an encode (`settings.advanced_encoding`).
     AdvancedEncoding,
+    /// Declared, not wired to anything yet.
     MultiDestination,
     /// Declared, not wired to anything yet.
     WatchedFolder,
@@ -36,7 +45,7 @@ impl Feature {
         Feature::CaptionTemplates,
     ];
 
-    /// Name in a license's `feat` list.
+    /// Name in a license's `feat` list (also its serialized form).
     pub fn as_str(self) -> &'static str {
         match self {
             Feature::AdvancedEncoding => "advanced_encoding",
@@ -76,14 +85,17 @@ impl Plan {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntitlementSource {
-    /// This build has no paid features (built from the public source).
+    /// `FreeOnly`: no license is ever read.
     Build,
     /// No license is stored.
     None,
     /// A stored license verifies and belongs to the signed-in account.
     License,
-    /// A license is stored but does not apply (malformed, unknown key, bad signature, another
-    /// account, or no account signed in to check it against); the journal has the code.
+    /// A stored license verifies, and no account is signed in to check it against: it applies
+    /// once its account signs in.
+    Pending,
+    /// A license is stored but does not apply (malformed, unknown key, bad signature, or
+    /// another account); `reason` has the code.
     Rejected,
 }
 
@@ -93,22 +105,34 @@ impl EntitlementSource {
             EntitlementSource::Build => "build",
             EntitlementSource::None => "none",
             EntitlementSource::License => "license",
+            EntitlementSource::Pending => "pending",
             EntitlementSource::Rejected => "rejected",
         }
     }
 }
 
-/// Result of `entitlements_status`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+/// Result of `entitlements_status` and payload of `entitlements://status`. Carries no
+/// identifier: neither the license, nor its `sub`, nor the account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct EntitlementStatus {
     pub plan: Plan,
     pub source: EntitlementSource,
+    /// Features granted now (empty unless `source` is `license`).
+    pub features: Vec<Feature>,
+    /// Whether the stored license was issued to the signed-in account; `null` when there is no
+    /// verified license or no account to compare with.
+    pub account_matches: Option<bool>,
+    /// The `LIC_*` code that keeps a stored license from applying.
+    pub reason: Option<&'static str>,
 }
 
 impl EntitlementStatus {
     pub const FREE_BUILD: Self = Self {
         plan: Plan::Free,
         source: EntitlementSource::Build,
+        features: Vec::new(),
+        account_matches: None,
+        reason: None,
     };
 }
 
@@ -119,7 +143,7 @@ pub trait Entitlements: Send + Sync {
     fn status(&self) -> EntitlementStatus;
 }
 
-/// The public build: every paid feature is refused.
+/// Every paid feature refused, no license read.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FreeOnly;
 
@@ -147,7 +171,13 @@ mod tests {
         }
         assert_eq!(
             serde_json::to_value(entitlements.status()).unwrap(),
-            serde_json::json!({ "plan": "free", "source": "build" })
+            serde_json::json!({
+                "plan": "free",
+                "source": "build",
+                "features": [],
+                "account_matches": null,
+                "reason": null
+            })
         );
     }
 
@@ -155,6 +185,10 @@ mod tests {
     fn feature_names_round_trip_and_unknown_names_are_none() {
         for feature in Feature::ALL {
             assert_eq!(Feature::from_name(feature.as_str()), Some(feature));
+            assert_eq!(
+                serde_json::to_value(feature).unwrap(),
+                serde_json::json!(feature.as_str())
+            );
         }
         for unknown in ["", "teleport", "Advanced_Encoding", "advanced_encoding "] {
             assert_eq!(Feature::from_name(unknown), None, "{unknown:?}");

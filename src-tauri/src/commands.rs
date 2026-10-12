@@ -14,7 +14,8 @@ use serde_json::{Map, Value, json};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::entitlements::{EntitlementStatus, Entitlements};
+use crate::entitlements::store::StoreError;
+use crate::entitlements::{self, EntitlementStatus, Entitlements, LicenseEntitlements};
 use crate::limit::{EffectiveLimit, LimitResolver};
 use crate::logging::{self, export, frontend};
 use crate::media::stage::{FfmpegStage, GpuFailure};
@@ -39,6 +40,8 @@ use crate::update::{self, Trigger, UpdateError, UpdateInfo, UpdateNotice, Update
 
 /// Event of the login state machine.
 pub const AUTH_STATE: &str = "auth://state";
+/// Event of a new `EntitlementStatus` (license set or removed, sign-in, sign-out).
+pub const ENTITLEMENTS_STATUS: &str = "entitlements://status";
 /// Queue items whose error codes go into a debug export.
 const EXPORT_ERRORS: i64 = 50;
 
@@ -53,8 +56,11 @@ pub struct AppState {
     pub media: Arc<FfmpegStage>,
     /// Effective upload limit (`limit_status`); the media stage holds the same resolver.
     pub limits: Arc<LimitResolver>,
-    /// Paid features (`entitlements_status`); `FreeOnly` in the public build.
-    pub entitlements: Arc<dyn Entitlements>,
+    /// Paid features and the stored license (`entitlements_status`, `license_*`); the media
+    /// stage holds the same instance.
+    pub entitlements: Arc<LicenseEntitlements>,
+    /// Last status sent on `entitlements://status`.
+    pub entitlement_feed: Arc<StatusFeed>,
     /// Update checks and installs (`update_*`).
     pub updates: Arc<UpdateService>,
     /// Items changed by the startup recovery, announced once the page has loaded.
@@ -126,6 +132,16 @@ impl From<SettingsError> for CommandError {
 impl From<SidecarError> for CommandError {
     fn from(error: SidecarError) -> Self {
         tracing::warn!(event = "command_error_detail", error_code = error.code(), error = %error, "sidecar error");
+        Self {
+            code: error.code(),
+            params: json!({}),
+        }
+    }
+}
+
+impl From<StoreError> for CommandError {
+    /// `LIC_*` or `IO_ERROR`; the store has already journaled it (`license_set`, `license_cleared`).
+    fn from(error: StoreError) -> Self {
         Self {
             code: error.code(),
             params: json!({}),
@@ -278,6 +294,28 @@ impl EventSink for TauriEvents {
 pub fn emit_auth_state(app: &AppHandle, payload: &AuthPayload) {
     if let Err(error) = app.emit(AUTH_STATE, payload) {
         tracing::warn!(event = "emit_failed", name = AUTH_STATE, error = %error, "could not emit an event to the window");
+    }
+}
+
+/// Last status sent on `entitlements://status`, shared by the license commands and the login
+/// watcher so that each change goes out once.
+#[derive(Default)]
+pub struct StatusFeed(Mutex<Option<EntitlementStatus>>);
+
+impl StatusFeed {
+    /// Emits `status` unless it is the one sent last.
+    pub fn publish(&self, app: &AppHandle, status: EntitlementStatus) {
+        let mut last = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if last.as_ref() == Some(&status) {
+            return;
+        }
+        if let Err(error) = app.emit(ENTITLEMENTS_STATUS, &status) {
+            tracing::warn!(event = "emit_failed", name = ENTITLEMENTS_STATUS, error = %error, "could not emit an event to the window");
+        }
+        *last = Some(status);
     }
 }
 
@@ -669,11 +707,58 @@ pub fn limit_status(state: State<'_, AppState>) -> EffectiveLimit {
     Call::quiet("limit_status").done(state.limits.current())
 }
 
-/// Not in SPEC section 4: the plan in effect (`{ plan, source }`, plan `free` | `lifetime`,
-/// source `build` | `none` | `license` | `rejected`). Always `free`/`build` in the public build.
+/// Not in SPEC section 4: the plan in effect, the features granted, whether the stored license
+/// belongs to the signed-in account and the `LIC_*` code that keeps it from applying.
 #[tauri::command]
 pub fn entitlements_status(state: State<'_, AppState>) -> EntitlementStatus {
     Call::quiet("entitlements_status").done(state.entitlements.status())
+}
+
+/// Verifies `token` offline, then stores it. Refused with its `LIC_*` code when it does not
+/// verify or belongs to another signed-in account; kept (`pending`) when no account is signed
+/// in. The token is never written to the journal.
+#[tauri::command]
+pub fn license_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+) -> CommandResult<EntitlementStatus> {
+    let call = Call::new("license_set");
+    let result = state.entitlements.save(&token);
+    if let Ok(status) = &result {
+        state.entitlement_feed.publish(&app, status.clone());
+    }
+    call.finish(result.map_err(Into::into))
+}
+
+/// Removes the stored license: back to the free plan.
+#[tauri::command]
+pub fn license_clear(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<EntitlementStatus> {
+    let call = Call::new("license_clear");
+    let result = state.entitlements.clear().map(|()| {
+        let status = state.entitlements.status();
+        state.entitlement_feed.publish(&app, status.clone());
+        status
+    });
+    call.finish(result.map_err(Into::into))
+}
+
+/// Opens the purchase bot in the browser. The address is fixed in the core.
+#[tauri::command]
+pub fn license_open_purchase() -> CommandResult<()> {
+    let call = Call::new("license_open_purchase");
+    let result = std::process::Command::new("explorer.exe")
+        .arg(entitlements::PURCHASE_URL)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| {
+            tracing::warn!(event = "command_error_detail", error = %error, "explorer did not start");
+            CommandError::io()
+        });
+    call.finish(result)
 }
 
 /// Downloads and installs the pinned ffmpeg build; progress goes out on `sidecars://progress`.

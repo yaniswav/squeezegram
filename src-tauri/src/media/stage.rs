@@ -11,21 +11,36 @@ use tokio::sync::Mutex;
 
 use super::detect::{self, Detection, Encoder, Tools};
 use super::encode::{self, EncoderStop, Job};
-use super::plan::{self, Kind, Plan, PlanInput, ResolutionCap};
+use super::plan::{self, Kind, Plan, PlanInput};
 use super::probe::{self, MediaInfo};
 use super::{MediaError, Result, hash};
+use crate::entitlements::{Entitlements, Feature};
 use crate::limit::LimitResolver;
 use crate::queue::events::{Phase, Progress};
 use crate::queue::orchestrator::{
     MediaOutput, MediaStage, ProbeOutcome, StageContext, StageError, Treatment,
 };
 use crate::queue::store::{Item, SendMode};
-use crate::settings::SettingsStore;
+use crate::settings::{AdvancedEncoding, Settings, SettingsStore};
 use crate::sidecars::{Resolved, SidecarService};
 
-/// No setting exists for the resolution cap yet: 1080p.
-const DEFAULT_CAP: ResolutionCap = ResolutionCap::P1080;
 const PROGRESS_TICK: Duration = Duration::from_millis(250);
+
+/// The resolution cap and audio bitrate of a plan, and whether they come from the advanced
+/// settings (`true`) or are the automatic ones.
+///
+/// The license is asked here, when the plan is built: a value saved while the feature was
+/// granted (or written into `settings.json` by hand) has no effect without it.
+pub(crate) fn encoding_choice(
+    settings: &Settings,
+    entitlements: &dyn Entitlements,
+) -> (AdvancedEncoding, bool) {
+    if entitlements.allows(Feature::AdvancedEncoding) {
+        (settings.advanced_encoding.clone(), true)
+    } else {
+        (AdvancedEncoding::AUTOMATIC, false)
+    }
+}
 
 struct Cached {
     ffmpeg: PathBuf,
@@ -37,6 +52,8 @@ pub struct FfmpegStage {
     settings: Arc<SettingsStore>,
     /// Effective upload limit, resolved once per item when its media work starts.
     limits: Arc<LimitResolver>,
+    /// Asked for `AdvancedEncoding` each time a plan is built.
+    entitlements: Arc<dyn Entitlements>,
     detection: Mutex<Option<Cached>>,
     gpu: GpuSession,
 }
@@ -290,11 +307,13 @@ impl FfmpegStage {
         sidecars: Arc<SidecarService>,
         settings: Arc<SettingsStore>,
         limits: Arc<LimitResolver>,
+        entitlements: Arc<dyn Entitlements>,
     ) -> Self {
         Self {
             sidecars,
             settings,
             limits,
+            entitlements,
             detection: Mutex::new(None),
             gpu: GpuSession::default(),
         }
@@ -441,14 +460,15 @@ impl FfmpegStage {
             None
         };
 
+        let (choice, advanced) = encoding_choice(&settings, self.entitlements.as_ref());
         let input = PlanInput {
             source: &source,
             source_size: u64::try_from(item.source_size).unwrap_or(0),
             send_mode: item.send_mode,
             limit_bytes: limit.limit_bytes,
             margin: settings.limit.margin_percent / 100.0,
-            audio_kbps: settings.encoding.audio_kbps,
-            cap: DEFAULT_CAP,
+            audio_kbps: choice.audio_kbps,
+            cap: choice.max_resolution,
             moov_first,
         };
         let summary = probe_summary(item, &content_id, info.as_ref(), moov_first);
@@ -484,6 +504,7 @@ impl FfmpegStage {
         tracing::info!(
             event = "media_plan",
             margin_percent = settings.limit.margin_percent,
+            advanced,
             json = plan_json.as_str(),
             "plan built"
         );
@@ -1092,6 +1113,86 @@ mod tests {
             tested: vec![(Encoder::Nvenc, detect::Outcome::Works)],
         };
         assert_eq!(pick_encoder(&gpu_only, false, true), Some(Encoder::Nvenc));
+    }
+
+    /// A 4K HEVC source with AAC audio, encoded under a 100 MiB limit, planned with what
+    /// `encoding_choice` gives for `settings` and `entitlements`.
+    fn plan_with(settings: &Settings, entitlements: &dyn Entitlements) -> (Plan, bool) {
+        let info: MediaInfo = serde_json::from_value(json!({
+            "format_name": "matroska,webm", "duration_s": 600.0, "bit_rate": null,
+            "video": { "index": 0, "codec": "hevc", "profile": "Main", "width": 3840,
+                "height": 2160, "sar": [1, 1], "pix_fmt": "yuv420p",
+                "field_order": "progressive", "color_transfer": null, "rotation": 0,
+                "bit_rate": null, "hdr": false },
+            "audio": { "index": 1, "codec": "aac", "channels": 2, "bit_rate": null }
+        }))
+        .unwrap();
+        let (choice, advanced) = encoding_choice(settings, entitlements);
+        let source = Path::new("D:\\clips\\uhd.mkv");
+        let input = PlanInput {
+            source,
+            source_size: 900 * plan::MIB,
+            send_mode: SendMode::Video,
+            limit_bytes: 100 * plan::MIB,
+            margin: 0.03,
+            audio_kbps: choice.audio_kbps,
+            cap: choice.max_resolution,
+            moov_first: None,
+        };
+        (plan::build_plan(Some(&info), &input).unwrap(), advanced)
+    }
+
+    #[test]
+    fn advanced_settings_reach_the_plan_only_with_the_feature() {
+        use crate::entitlements::license::test_vectors;
+        use crate::entitlements::{FreeOnly, LicenseEntitlements};
+        use crate::transport::TelegramTransport;
+        use crate::transport::mock::MockTransport;
+
+        let mut settings = Settings::default();
+        settings.advanced_encoding = AdvancedEncoding {
+            max_resolution: plan::ResolutionCap::P2160,
+            audio_kbps: 192,
+        };
+        // Changed by hand in the file: never read.
+        settings.encoding.audio_kbps = 320;
+
+        let automatic = |(plan, advanced): (Plan, bool)| {
+            assert!(!advanced);
+            assert_eq!(plan.audio_kbps, Some(128));
+            let vf = plan.vf.unwrap();
+            assert!(vf.contains("min(1920,iw)") && !vf.contains("3840"), "{vf}");
+        };
+        automatic(plan_with(&settings, &FreeOnly));
+
+        let dir = TestDir::new("stage-advanced");
+        let vectors = test_vectors::load();
+        let license_file = dir.path().join("license.txt");
+        let account = MockTransport::authorized();
+        let licensed = |token: &str, auth| {
+            std::fs::write(&license_file, token).unwrap();
+            LicenseEntitlements::load(license_file.clone(), vectors.key_ring(), auth)
+        };
+        let valid = &vectors.case("valid").token;
+
+        // Granted: the saved cap and bitrate, and a video budget that pays for the audio.
+        let granted = licensed(valid, Some(account.auth_state()));
+        let (plan, advanced) = plan_with(&settings, &granted);
+        assert!(advanced);
+        assert_eq!(plan.audio_kbps, Some(192));
+        assert!(plan.vf.as_deref().unwrap().contains("min(3840,iw)"));
+        assert_eq!(
+            plan.video_bps,
+            plan::plan_bitrate(100 * plan::MIB, 0.03, 600.0, Some(192))
+        );
+
+        // A license for another account, or no account signed in: automatic values.
+        let other = licensed(
+            &vectors.case("other_account").token,
+            Some(account.auth_state()),
+        );
+        automatic(plan_with(&settings, &other));
+        automatic(plan_with(&settings, &licensed(valid, None)));
     }
 
     #[test]

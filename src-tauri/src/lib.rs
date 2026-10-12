@@ -12,7 +12,7 @@
 //! - `settings`: versioned settings
 //! - `limit`: the effective upload limit (settings, else the signed-in account)
 //! - `logging`: the JSON Lines journal
-//! - `entitlements`: paid features (none in the public build: `FreeOnly`), license keys
+//! - `entitlements`: paid features, granted by a license verified offline (`LicenseEntitlements`)
 //! - `update`: update checks (installer: download and install; portable: tell the user)
 
 mod commands;
@@ -33,8 +33,8 @@ use std::time::{Duration, Instant};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, RunEvent, WebviewWindow};
 
-use commands::{AppState, TauriEvents};
-use entitlements::FreeOnly;
+use commands::{AppState, StatusFeed, TauriEvents};
+use entitlements::{Entitlements, LicenseEntitlements};
 use limit::LimitResolver;
 use media::stage::FfmpegStage;
 use queue::orchestrator::Orchestrator;
@@ -111,10 +111,16 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         settings.clone(),
         Some(transport.auth_state()),
     ));
+    // `license.txt` beside `settings.json`, judged against the account the transport signs in.
+    let entitlements = Arc::new(LicenseEntitlements::production(
+        LicenseEntitlements::path_beside(&SettingsStore::path_next_to(&db_path)),
+        Some(transport.auth_state()),
+    ));
     let media = Arc::new(FfmpegStage::new(
         sidecars.clone(),
         settings.clone(),
         limits.clone(),
+        entitlements.clone(),
     ));
     let send = Arc::new(TransportStage::new(transport.clone(), settings.clone()));
     let queue = Orchestrator::new(
@@ -137,8 +143,8 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         transport_kind,
         media,
         limits,
-        // The public build has no paid feature; nothing reads a license here.
-        entitlements: Arc::new(FreeOnly),
+        entitlements,
+        entitlement_feed: Arc::new(StatusFeed::default()),
         updates,
         recovered: Mutex::new(recovered),
     })
@@ -167,6 +173,26 @@ fn spawn_transport(
                 transport::service::auth_payload(&state, kind)
             };
             commands::emit_auth_state(&app, &payload);
+            if states.changed().await.is_err() {
+                return;
+            }
+        }
+    });
+}
+
+/// Sends `entitlements://status` after every change of the login state (the commands send it
+/// after a license change). The status is computed for the account signed in at that moment.
+fn spawn_entitlements_watch(
+    app: &AppHandle,
+    entitlements: Arc<LicenseEntitlements>,
+    feed: Arc<StatusFeed>,
+    mut states: tokio::sync::watch::Receiver<transport::AuthState>,
+) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            states.borrow_and_update();
+            feed.publish(&app, entitlements.status());
             if states.changed().await.is_err() {
                 return;
             }
@@ -266,6 +292,12 @@ pub fn run() {
                 state.transport_kind,
                 queue.clone(),
             );
+            spawn_entitlements_watch(
+                app.handle(),
+                state.entitlements.clone(),
+                state.entitlement_feed.clone(),
+                state.transport.auth_state(),
+            );
             tauri::async_runtime::spawn(async move { queue.run().await });
             app.manage(state);
             tracing::info!(event = "setup_done", "core ready");
@@ -302,6 +334,9 @@ pub fn run() {
             commands::encoder_status,
             commands::limit_status,
             commands::entitlements_status,
+            commands::license_set,
+            commands::license_clear,
+            commands::license_open_purchase,
             commands::sidecars_install,
             commands::sidecars_discover,
             commands::sidecars_use,

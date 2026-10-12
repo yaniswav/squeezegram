@@ -1,9 +1,20 @@
-import { Download, FolderOpen, RefreshCw, RotateCcw, Save } from "lucide-react"
+import {
+  Download,
+  ExternalLink,
+  FolderOpen,
+  KeyRound,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  Trash2,
+} from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { useEffect, useId, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { FfmpegFinder } from "@/components/ffmpeg-finder"
 import { PageHeader } from "@/components/page-header"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -16,18 +27,33 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { availableLanguages } from "@/i18n"
-import { formatDateTime, formatNumber } from "@/lib/format"
+import { errorMessage, errorOf, type ErrorReport } from "@/i18n/errors"
+import {
+  AUDIO_KBPS_CHOICES,
+  AUTOMATIC_ENCODING,
+  MAX_RESOLUTIONS,
+  effectiveEncoding,
+} from "@/lib/advanced-encoding"
+import { grants, hasStoredLicense, licenseView } from "@/lib/entitlements"
+import { formatDateTime, formatList, formatNumber } from "@/lib/format"
 import {
   debugExport,
   encoderStatus,
+  entitlementsStatus,
   isDesktop,
+  licenseClear,
+  licenseOpenPurchase,
+  licenseSet,
   limitStatus,
   logOpenDir,
   logPath,
+  onEntitlementsStatus,
   pickFolder,
   sidecarsStatus,
   type EncoderStatus,
+  type EntitlementStatus,
   type LimitStatus,
+  type MaxResolution,
   type Settings,
   type SettingsPatch,
   type SidecarStatus,
@@ -43,12 +69,17 @@ type Premium = "auto" | "yes" | "no"
 
 type Prefer = "gpu" | "cpu"
 
+/** `null` while loading, `"failed"` when the core could not be asked. */
+type EntitlementState = EntitlementStatus | "failed" | null
+
 /** Text inputs stay strings until validation; folders are null for "default". */
 interface Draft {
   premium: Premium
   customMb: string
   margin: string
   prefer: Prefer
+  maxResolution: MaxResolution
+  audioKbps: string
   pauseMin: string
   pauseMax: string
   tempDir: string | null
@@ -95,6 +126,8 @@ function toDraft(settings: Settings): Draft {
     customMb: settings.limit.custom_mb?.toString() ?? "",
     margin: settings.limit.margin_percent.toString(),
     prefer: preferOf(settings.encoding.prefer),
+    maxResolution: settings.advanced_encoding.max_resolution,
+    audioKbps: settings.advanced_encoding.audio_kbps.toString(),
     pauseMin: settings.send.pause_min_s.toString(),
     pauseMax: settings.send.pause_max_s.toString(),
     tempDir: emptyToNull(settings.temp.dir),
@@ -163,6 +196,16 @@ function toPatch(draft: Draft, settings: Settings): SettingsPatch {
 
   if (draft.prefer !== saved.prefer) patch.encoding = { prefer: draft.prefer }
 
+  const advanced: NonNullable<SettingsPatch["advanced_encoding"]> = {}
+
+  if (draft.maxResolution !== saved.maxResolution)
+    advanced.max_resolution = draft.maxResolution
+
+  if (Number(draft.audioKbps) !== settings.advanced_encoding.audio_kbps)
+    advanced.audio_kbps = Number(draft.audioKbps)
+
+  if (Object.keys(advanced).length > 0) patch.advanced_encoding = advanced
+
   const send: NonNullable<SettingsPatch["send"]> = {}
 
   if (Number(draft.pauseMin) !== settings.send.pause_min_s)
@@ -202,6 +245,7 @@ function toPatch(draft: Draft, settings: Settings): SettingsPatch {
 export function SettingsPage({ focusTitle }: { focusTitle: boolean }) {
   const { t } = useTranslation()
   const { status, settings, reload } = useSettings()
+  const [entitlements, setEntitlements] = useEntitlementStatus()
 
   return (
     <div className="space-y-6">
@@ -221,8 +265,276 @@ export function SettingsPage({ focusTitle }: { focusTitle: boolean }) {
           <Diagnostics />
         </>
       )}
-      {settings && <SettingsForm settings={settings} />}
+      {settings && (
+        <>
+          <LicenseSection status={entitlements} onChange={setEntitlements} />
+          <SettingsForm settings={settings} entitlements={entitlements} />
+        </>
+      )}
     </div>
+  )
+}
+
+/** `entitlements_status`, then every `entitlements://status` (license change, sign-in, sign-out). */
+function useEntitlementStatus() {
+  const [status, setStatus] = useState<EntitlementState>(null)
+
+  useEffect(() => {
+    let stale = false
+    const stop = onEntitlementsStatus(setStatus)
+
+    entitlementsStatus().then(
+      (next) => {
+        if (!stale) setStatus(next)
+      },
+      () => {
+        if (!stale) setStatus((current) => current ?? "failed")
+      },
+    )
+
+    return () => {
+      stale = true
+      stop()
+    }
+  }, [])
+
+  return [status, setStatus] as const
+}
+
+/** Opens @squeezegram_bot on Telegram; the core holds the address. */
+function PurchaseButton() {
+  const { t } = useTranslation()
+  const { pushError } = useAlerts()
+
+  return (
+    <Button
+      type="button"
+      variant="link"
+      size="sm"
+      className="px-0"
+      disabled={!isDesktop()}
+      onClick={() => void licenseOpenPurchase().catch(pushError)}
+    >
+      <ExternalLink data-icon="inline-start" />
+      {t("settings.license.buy")}
+    </Button>
+  )
+}
+
+/** The plan in words. Names no account and shows nothing of the license itself. */
+function LicenseStatusText({ status }: { status: EntitlementState }) {
+  const { t, i18n } = useTranslation()
+
+  if (status === null) return null
+
+  if (status === "failed")
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t("settings.license.unavailable")}
+      </p>
+    )
+
+  const view = licenseView(status)
+
+  switch (view.kind) {
+    case "premium": {
+      const features = view.features.map((feature) =>
+        t(`settings.license.feature.${feature}`),
+      )
+
+      return (
+        <div role="status" className="space-y-1">
+          <p className="text-sm font-medium">
+            {t("settings.license.status.premium")}
+          </p>
+          {features.length > 0 && (
+            <p className="text-sm text-muted-foreground">
+              {t("settings.license.status.features", {
+                list: formatList(features, i18n.language),
+              })}
+            </p>
+          )}
+        </div>
+      )
+    }
+
+    case "free":
+      return (
+        <p role="status" className="text-sm font-medium">
+          {t("settings.license.status.free")}
+        </p>
+      )
+
+    case "pending":
+      return (
+        <LicenseNotice>{t("settings.license.status.pending")}</LicenseNotice>
+      )
+
+    case "other_account":
+      return (
+        <LicenseNotice>
+          {t("settings.license.status.otherAccount")}
+        </LicenseNotice>
+      )
+
+    case "invalid":
+      return (
+        <LicenseNotice>
+          {t("settings.license.status.invalid", {
+            message: errorMessage(t, view.code),
+          })}
+        </LicenseNotice>
+      )
+  }
+}
+
+function LicenseNotice({ children }: { children: ReactNode }) {
+  return (
+    <p
+      role="status"
+      className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm"
+    >
+      {children}
+    </p>
+  )
+}
+
+/** Paste and activate a license, see what it unlocks, remove it. */
+function LicenseSection({
+  status,
+  onChange,
+}: {
+  status: EntitlementState
+  onChange: (status: EntitlementStatus) => void
+}) {
+  const { t } = useTranslation()
+  const { pushError } = useAlerts()
+  const id = useId()
+  const [token, setToken] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<ErrorReport | null>(null)
+  const [saved, setSaved] = useState<EntitlementStatus | null>(null)
+  const [confirming, setConfirming] = useState(false)
+
+  const stored =
+    status !== null && status !== "failed" && hasStoredLicense(status)
+
+  async function activate() {
+    if (busy || token.trim() === "") return
+    setBusy(true)
+    setError(null)
+    setSaved(null)
+
+    try {
+      const next = await licenseSet(token)
+      onChange(next)
+      setSaved(next)
+      setToken("")
+    } catch (cause) {
+      setError(errorOf(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove() {
+    setSaved(null)
+
+    try {
+      onChange(await licenseClear())
+    } catch (cause) {
+      pushError(cause)
+    }
+  }
+
+  const describedBy = error ? `${id}-error ${id}-hint` : `${id}-hint`
+
+  return (
+    <Section
+      title={t("settings.license.title")}
+      hint={t("settings.license.hint")}
+    >
+      <LicenseStatusText status={status} />
+      <form
+        noValidate
+        className="space-y-2"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void activate()
+        }}
+      >
+        <label htmlFor={`${id}-token`} className="block text-sm font-medium">
+          {t("settings.license.input.label")}
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <Input
+            id={`${id}-token`}
+            className="min-w-0 flex-1 basis-64 font-mono"
+            autoComplete="off"
+            spellCheck={false}
+            value={token}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={describedBy}
+            onChange={(event) => {
+              setToken(event.target.value)
+              setError(null)
+            }}
+          />
+          <Button
+            type="submit"
+            disabled={!isDesktop() || busy || token.trim() === ""}
+          >
+            <KeyRound data-icon="inline-start" />
+            {busy
+              ? t("settings.license.activating")
+              : t("settings.license.activate")}
+          </Button>
+        </div>
+        {error && (
+          <p
+            id={`${id}-error`}
+            role="alert"
+            className="text-xs text-destructive"
+          >
+            {errorMessage(t, error.code, error.params)}
+          </p>
+        )}
+        <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+          {t("settings.license.input.hint")}
+        </p>
+        {saved && (
+          <p role="status" className="text-sm">
+            {saved.source === "pending"
+              ? t("settings.license.savedPending")
+              : t("settings.license.activated")}
+          </p>
+        )}
+      </form>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <PurchaseButton />
+        {stored && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setConfirming(true)}
+          >
+            <Trash2 data-icon="inline-start" />
+            {t("settings.license.remove.button")}
+          </Button>
+        )}
+      </div>
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={t("settings.license.remove.title")}
+        description={t("settings.license.remove.body")}
+        confirmLabel={t("settings.license.remove.confirm")}
+        cancelLabel={t("common.cancel")}
+        destructive
+        onConfirm={() => void remove()}
+      />
+    </Section>
   )
 }
 
@@ -371,7 +683,13 @@ function LimitNow({ settings }: { settings: Settings["limit"] }) {
   )
 }
 
-function SettingsForm({ settings }: { settings: Settings }) {
+function SettingsForm({
+  settings,
+  entitlements,
+}: {
+  settings: Settings
+  entitlements: EntitlementState
+}) {
   const { t } = useTranslation()
   const { save } = useSettings()
   const { alerts, pushError } = useAlerts()
@@ -393,6 +711,18 @@ function SettingsForm({ settings }: { settings: Settings }) {
   const dirty = valid
     ? Object.keys(patch).length > 0
     : JSON.stringify(draft) !== JSON.stringify(toDraft(settings))
+
+  const advancedGranted =
+    entitlements !== "failed" && grants(entitlements, "advanced_encoding")
+
+  // Without the feature the controls show what an encode uses, not what is saved.
+  const encoding = effectiveEncoding(
+    {
+      max_resolution: draft.maxResolution,
+      audio_kbps: Number(draft.audioKbps),
+    },
+    advancedGranted,
+  )
 
   // Read again when a GPU stop is announced while this page is open.
   useEffect(() => {
@@ -531,6 +861,64 @@ function SettingsForm({ settings }: { settings: Settings }) {
             })}
           </p>
         )}
+      </Section>
+
+      <Section title={t("settings.advanced.title")}>
+        {!advancedGranted && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Badge variant="secondary">{t("settings.advanced.premium")}</Badge>
+            <p className="min-w-0 flex-1 basis-64 text-sm text-muted-foreground">
+              {t("settings.advanced.locked")}
+            </p>
+            <PurchaseButton />
+          </div>
+        )}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            id={`${ids}-resolution`}
+            label={t("settings.advanced.resolution.label")}
+            hint={t("settings.advanced.resolution.hint")}
+          >
+            {(props) => (
+              <Choice
+                {...props}
+                disabled={!advancedGranted}
+                value={encoding.max_resolution}
+                onChange={(value) => update("maxResolution", value)}
+                options={MAX_RESOLUTIONS.map(
+                  (resolution) =>
+                    [
+                      resolution,
+                      t(`settings.advanced.resolution.${resolution}`),
+                    ] as const,
+                )}
+              />
+            )}
+          </Field>
+          <Field
+            id={`${ids}-audio`}
+            label={t("settings.advanced.audio.label")}
+            hint={t("settings.advanced.audio.hint")}
+          >
+            {(props) => (
+              <Choice
+                {...props}
+                disabled={!advancedGranted}
+                value={encoding.audio_kbps.toString()}
+                onChange={(value) => update("audioKbps", value)}
+                options={AUDIO_KBPS_CHOICES.map(
+                  (kbps) =>
+                    [
+                      kbps.toString(),
+                      kbps === AUTOMATIC_ENCODING.audio_kbps
+                        ? t("settings.advanced.audio.automatic", { kbps })
+                        : t("settings.advanced.audio.value", { kbps }),
+                    ] as const,
+                )}
+              />
+            )}
+          </Field>
+        </div>
       </Section>
 
       <Section title={t("settings.send.title")} hint={t("settings.send.hint")}>
@@ -871,15 +1259,18 @@ function Choice<T extends string>({
   value,
   onChange,
   options,
+  disabled = false,
   ...props
 }: ControlProps & {
   value: T
   onChange: (value: T) => void
   options: readonly (readonly [T, string])[]
+  disabled?: boolean
 }) {
   return (
     <Select
       value={value}
+      disabled={disabled}
       onValueChange={(next) => {
         const chosen = options.find(([option]) => option === next)
 

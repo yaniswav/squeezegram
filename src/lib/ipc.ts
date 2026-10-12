@@ -18,6 +18,10 @@ import {
   type JsonObject,
 } from "./json"
 import {
+  maxResolutionDecoder,
+  type AdvancedEncoding,
+} from "./advanced-encoding"
+import {
   entitlementStatusDecoder,
   type EntitlementStatus,
 } from "./entitlements"
@@ -31,10 +35,14 @@ import {
   type UpdateProgress,
 } from "./update"
 
+export type { AdvancedEncoding, MaxResolution } from "./advanced-encoding"
+
 export type {
   EntitlementPlan,
   EntitlementSource,
   EntitlementStatus,
+  Feature,
+  LicenseCode,
 } from "./entitlements"
 
 export type {
@@ -287,6 +295,7 @@ export interface Settings {
     mode: string
     /** "gpu" | "cpu" (stage.rs only tests for "cpu"). */
     prefer: string
+    /** Not read by the core: see `advanced_encoding.audio_kbps`. */
     audio_kbps: number
     video_codec: string
   }
@@ -307,6 +316,8 @@ export interface Settings {
     /** ISO 8601 UTC time of the last check, successful or not; null if never. */
     last_check_at: string | null
   }
+  /** Used by an encode only while the license grants `advanced_encoding`. */
+  advanced_encoding: AdvancedEncoding
 }
 
 /** JSON merge patch (RFC 7396): objects merge, `null` resets a field to its default. */
@@ -940,6 +951,10 @@ const settingsDecoder = d.object<Settings>({
     check_automatically: d.boolean,
     last_check_at: d.nullable(d.string),
   }),
+  advanced_encoding: d.object<Settings["advanced_encoding"]>({
+    max_resolution: maxResolutionDecoder,
+    audio_kbps: d.number,
+  }),
 })
 
 const sidecarStatusDecoder = d.object<SidecarStatus>({
@@ -1304,12 +1319,27 @@ export function limitStatus(): Promise<LimitStatus> {
   return call("limit_status", limitStatusDecoder)
 }
 
-/**
- * The plan in effect (`entitlements_status`): always `free` from the `build` in the public
- * source. Nothing in the UI reads it yet.
- */
+/** The plan in effect, the features granted, and why a stored license does not apply. */
 export function entitlementsStatus(): Promise<EntitlementStatus> {
   return call("entitlements_status", entitlementStatusDecoder)
+}
+
+/**
+ * Verifies the license offline and stores it. Rejects with a `LIC_*` code when it does not
+ * verify or belongs to another signed-in Telegram account.
+ */
+export function licenseSet(token: string): Promise<EntitlementStatus> {
+  return call("license_set", entitlementStatusDecoder, { token })
+}
+
+/** Removes the stored license: back to the free plan. */
+export function licenseClear(): Promise<EntitlementStatus> {
+  return call("license_clear", entitlementStatusDecoder)
+}
+
+/** Opens the purchase bot on Telegram in the browser (the core knows the address). */
+export function licenseOpenPurchase(): Promise<void> {
+  return call("license_open_purchase", d.nothing)
 }
 
 /** Long: downloads about 170 MB, progress on `sidecars://progress`. */
@@ -1447,6 +1477,13 @@ export function onUpdateProgress(handler: (event: UpdateProgress) => void) {
 
 export function onSidecarStatus(handler: (event: SidecarStatus) => void) {
   return subscribe("sidecars://status", sidecarStatusDecoder, handler)
+}
+
+/** A new status after a license change, a sign-in or a sign-out. */
+export function onEntitlementsStatus(
+  handler: (event: EntitlementStatus) => void,
+) {
+  return subscribe("entitlements://status", entitlementStatusDecoder, handler)
 }
 
 // --- window, native drag-and-drop, dialogs ---

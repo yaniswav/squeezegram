@@ -72,6 +72,13 @@ export function formatDuration(totalSeconds: number, language: string): string {
   )
 }
 
+/** "a, b and c" in the UI language. */
+export function formatList(items: readonly string[], language: string): string {
+  return new Intl.ListFormat(intlLocale(language), {
+    type: "conjunction",
+  }).format(items)
+}
+
 export function formatTime(date: Date, language: string): string {
   return new Intl.DateTimeFormat(intlLocale(language), {
     timeStyle: "short",

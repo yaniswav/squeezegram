@@ -78,6 +78,7 @@ impl Env {
                 sidecars,
                 settings.clone(),
                 Arc::new(LimitResolver::new(settings, None)),
+                Arc::new(crate::entitlements::FreeOnly),
             ),
             dir,
             store: memory_store(),

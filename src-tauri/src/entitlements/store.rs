@@ -2,11 +2,13 @@
 //! renamed (as `key.bin`). No file means the free plan.
 //!
 //! Evaluated at call time against the signed-in account, like the upload limit (`limit.rs`):
-//! every change of the login state (sign-in, sign-out, another account) gives a new verdict,
-//! with one `license_evaluated` journal line (plan, source, error code). A missing, unreadable
-//! or corrupt file is never an error for the app: the plan is free.
+//! every change of the login state (sign-in, sign-out, another account) gives a new verdict.
+//! No account signed in is a wait, not an error: the license applies once its account signs
+//! in. A missing, unreadable or corrupt file is never an error for the app: the plan is free.
 //!
-//! The token never reaches the journal, a `Debug` or an error text.
+//! Journal: `license_status` (once per new verdict), `license_set` and `license_cleared`, with
+//! the plan, the `LIC_*` code and the `kid` of a verified license. The token and its `sub` never
+//! reach the journal, a `Debug` or an error text.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -17,7 +19,7 @@ use std::sync::{Mutex, MutexGuard};
 use tokio::sync::watch;
 
 use super::license::{self, KeyRing, License, LicenseError};
-use super::{EntitlementSource, EntitlementStatus, Entitlements, Feature, Plan};
+use super::{EntitlementSource, EntitlementStatus, Entitlements, Feature, Plan, keys};
 use crate::limit;
 use crate::transport::AuthState;
 
@@ -29,17 +31,17 @@ const MAX_FILE_BYTES: u64 = 64 * 1024;
 enum Stored {
     Absent,
     Token(String),
-    /// Not readable, too large or not UTF-8: evaluated as `LIC_MALFORMED`.
-    Unreadable,
+    /// Not readable (with the I/O error kind), too large or not UTF-8: `LIC_MALFORMED`.
+    Unreadable(Option<io::ErrorKind>),
 }
 
 impl fmt::Debug for Stored {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Stored::Absent => "Absent",
-            Stored::Token(_) => "Token(<redacted>)",
-            Stored::Unreadable => "Unreadable",
-        })
+        match self {
+            Stored::Absent => f.write_str("Absent"),
+            Stored::Token(_) => f.write_str("Token(<redacted>)"),
+            Stored::Unreadable(kind) => write!(f, "Unreadable({kind:?})"),
+        }
     }
 }
 
@@ -67,7 +69,77 @@ impl From<io::Error> for StoreError {
     }
 }
 
-type Verdict = Result<Option<License>, LicenseError>;
+/// The stored token judged against the account signed in at that moment.
+enum Verdict {
+    NoLicense,
+    /// Verified and issued to the signed-in account.
+    Applies(License),
+    /// Verified, but not for the account signed in now: `NoAccount` or `WrongAccount`.
+    NotThisAccount(License, LicenseError),
+    /// Not a license this build accepts.
+    Invalid(LicenseError),
+}
+
+impl Verdict {
+    fn of(stored: &Stored, keys: &KeyRing, user_id: Option<i64>) -> Self {
+        let token = match stored {
+            Stored::Absent => return Verdict::NoLicense,
+            Stored::Unreadable(_) => return Verdict::Invalid(LicenseError::Malformed),
+            Stored::Token(token) => token,
+        };
+        match license::verify(token, keys) {
+            Err(error) => Verdict::Invalid(error),
+            Ok(license) => match license::check_account(&license, user_id) {
+                Ok(()) => Verdict::Applies(license),
+                Err(error) => Verdict::NotThisAccount(license, error),
+            },
+        }
+    }
+
+    fn error(&self) -> Option<LicenseError> {
+        match self {
+            Verdict::NoLicense | Verdict::Applies(_) => None,
+            Verdict::NotThisAccount(_, error) | Verdict::Invalid(error) => Some(*error),
+        }
+    }
+
+    /// Only for a license whose signature verified: an unverified `kid` is attacker text.
+    fn kid(&self) -> Option<&str> {
+        match self {
+            Verdict::Applies(license) | Verdict::NotThisAccount(license, _) => Some(&license.kid),
+            Verdict::NoLicense | Verdict::Invalid(_) => None,
+        }
+    }
+
+    fn allows(&self, feature: Feature) -> bool {
+        matches!(self, Verdict::Applies(license) if license.allows(feature))
+    }
+
+    fn status(&self) -> EntitlementStatus {
+        let free = |source, account_matches| EntitlementStatus {
+            plan: Plan::Free,
+            source,
+            features: Vec::new(),
+            account_matches,
+            reason: self.error().map(LicenseError::code),
+        };
+        match self {
+            Verdict::NoLicense => free(EntitlementSource::None, None),
+            Verdict::Applies(license) => EntitlementStatus {
+                plan: license.plan,
+                source: EntitlementSource::License,
+                features: license.features.clone(),
+                account_matches: Some(true),
+                reason: None,
+            },
+            Verdict::NotThisAccount(_, LicenseError::NoAccount) => {
+                free(EntitlementSource::Pending, None)
+            }
+            Verdict::NotThisAccount(..) => free(EntitlementSource::Rejected, Some(false)),
+            Verdict::Invalid(_) => free(EntitlementSource::Rejected, None),
+        }
+    }
+}
 
 struct Cached {
     generation: u64,
@@ -82,17 +154,18 @@ struct Inner {
     cached: Option<Cached>,
 }
 
-pub struct LicenseStore {
+/// The `Entitlements` of the app: the stored license, its keys and the login state.
+pub struct LicenseEntitlements {
     path: PathBuf,
     keys: KeyRing,
-    /// `None`: no transport, never an account (a stored license is then `LIC_NO_ACCOUNT`).
+    /// `None`: no transport, never an account (a stored license then waits for one).
     auth: Option<watch::Receiver<AuthState>>,
     inner: Mutex<Inner>,
 }
 
-impl fmt::Debug for LicenseStore {
+impl fmt::Debug for LicenseEntitlements {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LicenseStore")
+        f.debug_struct("LicenseEntitlements")
             .field("keys", &self.keys)
             .field("stored", &self.lock().stored)
             .finish_non_exhaustive()
@@ -103,44 +176,23 @@ fn read_stored(path: &Path) -> Stored {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Stored::Absent,
-        Err(error) => {
-            tracing::warn!(event = "license_unreadable", error_kind = %error.kind(), "license file not readable");
-            return Stored::Unreadable;
-        }
+        Err(error) => return Stored::Unreadable(Some(error.kind())),
     };
     let mut bytes = Vec::new();
     if let Err(error) = file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes) {
-        tracing::warn!(event = "license_unreadable", error_kind = %error.kind(), "license file not readable");
-        return Stored::Unreadable;
+        return Stored::Unreadable(Some(error.kind()));
     }
     if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Stored::Unreadable;
+        return Stored::Unreadable(None);
     }
     match String::from_utf8(bytes) {
         Ok(text) if text.trim().is_empty() => Stored::Absent,
         Ok(text) => Stored::Token(text.trim().to_owned()),
-        Err(_) => Stored::Unreadable,
+        Err(_) => Stored::Unreadable(None),
     }
 }
 
-fn status_of(verdict: &Verdict) -> EntitlementStatus {
-    match verdict {
-        Ok(None) => EntitlementStatus {
-            plan: Plan::Free,
-            source: EntitlementSource::None,
-        },
-        Ok(Some(license)) => EntitlementStatus {
-            plan: license.plan,
-            source: EntitlementSource::License,
-        },
-        Err(_) => EntitlementStatus {
-            plan: Plan::Free,
-            source: EntitlementSource::Rejected,
-        },
-    }
-}
-
-impl LicenseStore {
+impl LicenseEntitlements {
     /// `license.txt` in the folder of `sibling` (`settings.json`).
     pub fn path_beside(sibling: &Path) -> PathBuf {
         sibling.with_file_name(FILE_NAME)
@@ -161,6 +213,11 @@ impl LicenseStore {
         }
     }
 
+    /// `load` with the production keys (`keys::PRODUCTION_KEYS`).
+    pub fn production(path: PathBuf, auth: Option<watch::Receiver<AuthState>>) -> Self {
+        Self::load(path, keys::production(), auth)
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner
             .lock()
@@ -173,37 +230,41 @@ impl LicenseStore {
     }
 
     /// The verdict for the stored token and the account signed in now; recomputed (and
-    /// logged) only when one of them changed.
+    /// logged as `license_status`) only when one of them changed.
     fn with_verdict<R>(&self, read: impl FnOnce(&Verdict) -> R) -> R {
         let user_id = self.user_id();
-        let mut inner = self.lock();
-        let generation = inner.generation;
+        let mut guard = self.lock();
+        let inner = &mut *guard;
         let fresh = inner
             .cached
             .as_ref()
-            .is_some_and(|c| c.generation == generation && c.user_id == user_id);
+            .is_some_and(|c| c.generation == inner.generation && c.user_id == user_id);
         if !fresh {
-            let verdict = match &inner.stored {
-                Stored::Absent => Ok(None),
-                Stored::Unreadable => Err(LicenseError::Malformed),
-                Stored::Token(token) => license::verify_for(token, &self.keys, user_id).map(Some),
+            let verdict = Verdict::of(&inner.stored, &self.keys, user_id);
+            let status = verdict.status();
+            let io_error = match inner.stored {
+                Stored::Unreadable(Some(kind)) => Some(kind.to_string()),
+                _ => None,
             };
-            let status = status_of(&verdict);
             tracing::info!(
-                event = "license_evaluated",
+                event = "license_status",
                 plan = status.plan.as_str(),
                 source = status.source.as_str(),
-                error_code = verdict.as_ref().err().map(|e| e.code()),
+                error_code = status.reason,
+                kid = verdict.kid(),
+                io_error = io_error.as_deref(),
                 "license evaluated"
             );
             inner.cached = Some(Cached {
-                generation,
+                generation: inner.generation,
                 user_id,
                 verdict,
             });
         }
-        let cached = inner.cached.as_ref().map(|c| &c.verdict);
-        read(cached.unwrap_or(&Ok(None)))
+        match &inner.cached {
+            Some(cached) => read(&cached.verdict),
+            None => read(&Verdict::NoLicense),
+        }
     }
 
     /// Verifies then stores `token` (surrounding whitespace dropped). Refused, and the file
@@ -211,29 +272,47 @@ impl LicenseStore {
     /// when no account is signed in yet (checked at sign-in).
     pub fn save(&self, token: &str) -> Result<EntitlementStatus, StoreError> {
         let token = token.trim();
-        let checked = license::verify(token, &self.keys).and_then(|license| {
-            match license::check_account(&license, self.user_id()) {
-                Err(LicenseError::NoAccount) => Ok(()),
-                other => other,
-            }
-        });
+        let verified = license::verify(token, &self.keys);
+        let kid = verified.as_ref().ok().map(|license| license.kid.clone());
+        let checked =
+            verified.and_then(
+                |license| match license::check_account(&license, self.user_id()) {
+                    Err(LicenseError::NoAccount) => Ok(()),
+                    other => other,
+                },
+            );
         if let Err(error) = checked {
             tracing::warn!(
-                event = "license_rejected",
+                event = "license_set",
+                ok = false,
                 error_code = error.code(),
+                kid = kid.as_deref(),
                 "license key refused"
             );
             return Err(StoreError::License(error));
         }
-        self.write(token).inspect_err(|error| {
-            tracing::warn!(event = "license_write_failed", error_code = error.code(), error = %error, "license key not saved");
-        })?;
+        if let Err(error) = self.write(token) {
+            tracing::warn!(
+                event = "license_set",
+                ok = false,
+                error_code = error.code(),
+                error = %error,
+                kid = kid.as_deref(),
+                "license key not saved"
+            );
+            return Err(error);
+        }
         {
             let mut inner = self.lock();
             inner.stored = Stored::Token(token.to_owned());
             inner.generation += 1;
         }
-        tracing::info!(event = "license_saved", "license key saved");
+        tracing::info!(
+            event = "license_set",
+            ok = true,
+            kid = kid.as_deref(),
+            "license key saved"
+        );
         Ok(self.status())
     }
 
@@ -253,28 +332,36 @@ impl LicenseStore {
         if let Err(error) = fs::remove_file(&self.path)
             && error.kind() != io::ErrorKind::NotFound
         {
-            return Err(error.into());
+            let error = StoreError::from(error);
+            tracing::warn!(
+                event = "license_cleared",
+                ok = false,
+                error_code = error.code(),
+                error = %error,
+                "license key not removed"
+            );
+            return Err(error);
         }
         let mut inner = self.lock();
         inner.stored = Stored::Absent;
         inner.generation += 1;
-        tracing::info!(event = "license_cleared", "license key removed");
+        tracing::info!(event = "license_cleared", ok = true, "license key removed");
         Ok(())
     }
 
     /// The code that keeps the stored license from applying now, if any.
     pub fn problem(&self) -> Option<LicenseError> {
-        self.with_verdict(|verdict| verdict.as_ref().err().copied())
+        self.with_verdict(Verdict::error)
     }
 }
 
-impl Entitlements for LicenseStore {
+impl Entitlements for LicenseEntitlements {
     fn allows(&self, feature: Feature) -> bool {
-        self.with_verdict(|verdict| matches!(verdict, Ok(Some(license)) if license.allows(feature)))
+        self.with_verdict(|verdict| verdict.allows(feature))
     }
 
     fn status(&self) -> EntitlementStatus {
-        self.with_verdict(status_of)
+        self.with_verdict(Verdict::status)
     }
 }
 
@@ -290,25 +377,49 @@ mod tests {
     use crate::transport::mock::{MOCK_CODE, MOCK_ME_ID, MockTransport};
     use crate::transport::{AuthInput, TelegramTransport};
 
-    const FREE_NONE: EntitlementStatus = EntitlementStatus {
-        plan: Plan::Free,
-        source: EntitlementSource::None,
-    };
-    const FREE_REJECTED: EntitlementStatus = EntitlementStatus {
-        plan: Plan::Free,
-        source: EntitlementSource::Rejected,
-    };
-    const LIFETIME: EntitlementStatus = EntitlementStatus {
-        plan: Plan::Lifetime,
-        source: EntitlementSource::License,
-    };
+    fn status(
+        source: EntitlementSource,
+        account_matches: Option<bool>,
+        reason: Option<&'static str>,
+    ) -> EntitlementStatus {
+        EntitlementStatus {
+            plan: Plan::Free,
+            source,
+            features: Vec::new(),
+            account_matches,
+            reason,
+        }
+    }
+
+    fn free_none() -> EntitlementStatus {
+        status(EntitlementSource::None, None, None)
+    }
+
+    fn pending() -> EntitlementStatus {
+        status(EntitlementSource::Pending, None, Some("LIC_NO_ACCOUNT"))
+    }
+
+    /// The `valid` vector on its own account.
+    fn lifetime() -> EntitlementStatus {
+        EntitlementStatus {
+            plan: Plan::Lifetime,
+            source: EntitlementSource::License,
+            features: vec![Feature::AdvancedEncoding, Feature::MultiDestination],
+            account_matches: Some(true),
+            reason: None,
+        }
+    }
 
     fn token(vectors: &Vectors, name: &str) -> String {
         vectors.case(name).token.clone()
     }
 
-    fn store(dir: &TestDir, vectors: &Vectors, transport: &dyn TelegramTransport) -> LicenseStore {
-        LicenseStore::load(
+    fn store(
+        dir: &TestDir,
+        vectors: &Vectors,
+        transport: &dyn TelegramTransport,
+    ) -> LicenseEntitlements {
+        LicenseEntitlements::load(
             dir.path().join(FILE_NAME),
             vectors.key_ring(),
             Some(transport.auth_state()),
@@ -327,9 +438,9 @@ mod tests {
         let vectors = test_vectors::load();
         let account = MockTransport::authorized();
         let first = store(&dir, &vectors, &account);
-        assert_eq!(first.status(), FREE_NONE);
+        assert_eq!(first.status(), free_none());
         let valid = token(&vectors, "valid");
-        assert_eq!(first.save(&format!("  {valid}\r\n")), Ok(LIFETIME));
+        assert_eq!(first.save(&format!("  {valid}\r\n")), Ok(lifetime()));
         assert!(first.allows(Feature::AdvancedEncoding));
         assert!(first.allows(Feature::MultiDestination));
         assert!(!first.allows(Feature::Background));
@@ -338,16 +449,16 @@ mod tests {
         assert!(!path.with_extension("txt.tmp").exists());
 
         let second = store(&dir, &vectors, &account);
-        assert_eq!(second.status(), LIFETIME);
+        assert_eq!(second.status(), lifetime());
         assert!(second.allows(Feature::AdvancedEncoding));
 
         second.clear().unwrap();
         second.clear().unwrap();
         assert!(!path.exists());
-        assert_eq!(second.status(), FREE_NONE);
+        assert_eq!(second.status(), free_none());
         assert!(Feature::ALL.iter().all(|f| !second.allows(*f)));
         assert_eq!(
-            LicenseStore::path_beside(&dir.path().join(crate::settings::FILE_NAME)),
+            LicenseEntitlements::path_beside(&dir.path().join(crate::settings::FILE_NAME)),
             path
         );
     }
@@ -357,8 +468,8 @@ mod tests {
         let dir = TestDir::new("license-absent");
         let vectors = test_vectors::load();
         let path = dir.path().join("missing").join(FILE_NAME);
-        let store = LicenseStore::load(path.clone(), vectors.key_ring(), None);
-        assert_eq!(store.status(), FREE_NONE);
+        let store = LicenseEntitlements::load(path.clone(), vectors.key_ring(), None);
+        assert_eq!(store.status(), free_none());
         assert_eq!(store.problem(), None);
         assert!(Feature::ALL.iter().all(|f| !store.allows(*f)));
         assert!(!path.exists(), "reading never creates the file");
@@ -367,7 +478,7 @@ mod tests {
         let account = MockTransport::authorized();
         assert_eq!(
             super::tests::store(&dir, &vectors, &account).status(),
-            FREE_NONE
+            free_none()
         );
     }
 
@@ -379,21 +490,28 @@ mod tests {
         let path = dir.path().join(FILE_NAME);
         let mut huge = token(&vectors, "valid").into_bytes();
         huge.resize(MAX_FILE_BYTES as usize + 10, b'A');
-        let contents: Vec<Vec<u8>> = vec![
-            vec![0xFF, 0xFE, 0x00, 0x80, 0xC3],
-            b"garbage".to_vec(),
-            b"SQZ1...".to_vec(),
-            huge,
-            token(&vectors, "prefix_sqz2").into_bytes(),
-            token(&vectors, "payload_byte_altered").into_bytes(),
-            token(&vectors, "other_account").into_bytes(),
-            format!("{0}\n{0}", token(&vectors, "valid")).into_bytes(),
+        let contents: Vec<(Vec<u8>, &str)> = vec![
+            (vec![0xFF, 0xFE, 0x00, 0x80, 0xC3], "LIC_MALFORMED"),
+            (b"garbage".to_vec(), "LIC_MALFORMED"),
+            (b"SQZ1...".to_vec(), "LIC_MALFORMED"),
+            (huge, "LIC_MALFORMED"),
+            (token(&vectors, "prefix_sqz2").into_bytes(), "LIC_MALFORMED"),
+            (
+                token(&vectors, "payload_byte_altered").into_bytes(),
+                "LIC_BAD_SIGNATURE",
+            ),
+            (
+                format!("{0}\n{0}", token(&vectors, "valid")).into_bytes(),
+                "LIC_MALFORMED",
+            ),
         ];
-        for content in contents {
+        for (content, code) in contents {
             fs::write(&path, &content).unwrap();
             let store = store(&dir, &vectors, &account);
-            assert_eq!(store.status(), FREE_REJECTED);
-            assert!(store.problem().is_some());
+            assert_eq!(
+                store.status(),
+                status(EntitlementSource::Rejected, None, Some(code))
+            );
             assert!(Feature::ALL.iter().all(|f| !store.allows(*f)));
         }
         // A folder where the file should be: unreadable, still free.
@@ -401,6 +519,32 @@ mod tests {
         fs::create_dir(&path).unwrap();
         let store = store(&dir, &vectors, &account);
         assert_eq!(store.status().plan, Plan::Free);
+        assert_eq!(store.problem(), Some(LicenseError::Malformed));
+    }
+
+    #[test]
+    fn another_account_is_rejected_and_no_account_is_pending() {
+        let dir = TestDir::new("license-accounts");
+        let vectors = test_vectors::load();
+        fs::write(dir.path().join(FILE_NAME), token(&vectors, "other_account")).unwrap();
+        let account = MockTransport::authorized();
+        let other = store(&dir, &vectors, &account);
+        assert_eq!(
+            other.status(),
+            status(
+                EntitlementSource::Rejected,
+                Some(false),
+                Some("LIC_WRONG_ACCOUNT")
+            )
+        );
+        assert!(Feature::ALL.iter().all(|f| !other.allows(*f)));
+
+        fs::write(dir.path().join(FILE_NAME), token(&vectors, "valid")).unwrap();
+        let signed_out =
+            LicenseEntitlements::load(dir.path().join(FILE_NAME), vectors.key_ring(), None);
+        assert_eq!(signed_out.status(), pending());
+        assert!(!signed_out.allows(Feature::AdvancedEncoding));
+        assert_eq!(signed_out.problem(), Some(LicenseError::NoAccount));
     }
 
     #[test]
@@ -419,20 +563,20 @@ mod tests {
         ] {
             let error = store.save(&token(&vectors, name)).unwrap_err();
             assert_eq!(error.code(), code, "{name}");
-            assert_eq!(store.status(), LIFETIME, "{name}");
+            assert_eq!(store.status(), lifetime(), "{name}");
         }
         assert_eq!(
             fs::read_to_string(dir.path().join(FILE_NAME)).unwrap(),
             format!("{valid}\n")
         );
         // Signed out: a license is kept, then checked at sign-in.
-        let signed_out = LicenseStore::load(
+        let signed_out = LicenseEntitlements::load(
             dir.path().join("other").join(FILE_NAME),
             vectors.key_ring(),
             None,
         );
         let status = signed_out.save(&token(&vectors, "other_account")).unwrap();
-        assert_eq!(status, FREE_REJECTED);
+        assert_eq!(status, pending());
         assert_eq!(signed_out.problem(), Some(LicenseError::NoAccount));
     }
 
@@ -445,7 +589,7 @@ mod tests {
         let later = MockTransport::new();
         let store = store(&dir, &vectors, &later);
         later.start().await.unwrap();
-        assert_eq!(store.status(), FREE_REJECTED);
+        assert_eq!(store.status(), pending());
         assert_eq!(store.problem(), Some(LicenseError::NoAccount));
 
         later
@@ -456,27 +600,67 @@ mod tests {
             .auth_submit(AuthInput::Code(MOCK_CODE.into()))
             .await
             .unwrap();
-        assert_eq!(store.status(), LIFETIME);
+        assert_eq!(store.status(), lifetime());
         assert!(store.allows(Feature::MultiDestination));
 
         later.log_out().await.unwrap();
-        assert_eq!(store.status(), FREE_REJECTED);
+        assert_eq!(store.status(), pending());
         assert!(!store.allows(Feature::MultiDestination));
 
-        let codes: Vec<serde_json::Value> = journal
+        let lines: Vec<(serde_json::Value, serde_json::Value)> = journal
             .lines()
             .iter()
-            .filter(|l| l["event"] == "license_evaluated")
-            .map(|l| l["error_code"].clone())
+            .filter(|l| l["event"] == "license_status")
+            .map(|l| (l["fields"]["source"].clone(), l["fields"]["kid"].clone()))
             .collect();
         assert_eq!(
-            codes,
+            lines,
             [
-                json!("LIC_NO_ACCOUNT"),
-                serde_json::Value::Null,
-                json!("LIC_NO_ACCOUNT")
+                (json!("pending"), json!("test-1")),
+                (json!("license"), json!("test-1")),
+                (json!("pending"), json!("test-1")),
             ],
             "one line per change, none for repeated reads"
+        );
+    }
+
+    #[test]
+    fn journal_lines_carry_the_code_and_the_verified_kid_only() {
+        let dir = TestDir::new("license-lines");
+        let journal = TestJournal::new(&dir.path().join("logs"), "info");
+        let vectors = test_vectors::load();
+        let account = MockTransport::authorized();
+        let store = store(&dir, &vectors, &account);
+        store.save(&token(&vectors, "unknown_kid")).unwrap_err();
+        store.save(&token(&vectors, "other_account")).unwrap_err();
+        store.save(&token(&vectors, "valid")).unwrap();
+        store.clear().unwrap();
+        let lines = journal.lines();
+        let set: Vec<(serde_json::Value, serde_json::Value)> = lines
+            .iter()
+            .filter(|l| l["event"] == "license_set")
+            .map(|l| (l["error_code"].clone(), l["fields"]["kid"].clone()))
+            .collect();
+        // An unknown kid is text from the token: never written.
+        assert_eq!(
+            set,
+            [
+                (json!("LIC_UNKNOWN_KID"), serde_json::Value::Null),
+                (json!("LIC_WRONG_ACCOUNT"), json!("test-1")),
+                (serde_json::Value::Null, json!("test-1")),
+            ]
+        );
+        assert!(lines.iter().any(|l| l["event"] == "license_cleared"));
+        let license_events: Vec<&str> = lines
+            .iter()
+            .filter_map(|l| l["event"].as_str())
+            .filter(|e| e.starts_with("license"))
+            .collect();
+        assert!(
+            license_events
+                .iter()
+                .all(|e| ["license_set", "license_cleared", "license_status"].contains(e)),
+            "{license_events:?}"
         );
     }
 
@@ -529,7 +713,7 @@ mod tests {
                 .unwrap();
         }
         let logged = journal.text();
-        assert!(logged.contains("license_evaluated") && logged.contains("license_saved"));
+        assert!(logged.contains("license_status") && logged.contains("license_set"));
         let license = license::verify(&token(&vectors, "valid"), &vectors.key_ring()).unwrap();
         for case in &vectors.cases {
             let parts: Vec<&str> = case.token.trim().split('.').collect();
