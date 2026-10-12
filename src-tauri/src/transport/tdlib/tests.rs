@@ -224,7 +224,7 @@ async fn wrong_database_key_is_bad_database_key_and_closes_the_client() {
     assert_eq!(replay.sent_of("close").len(), 1);
     assert!(matches!(
         *transport.auth_state().borrow(),
-        AuthState::Closed
+        AuthState::StartFailed(TransportError::BadDatabaseKey)
     ));
     assert_eq!(transport.inner.current_client(), 0);
     // `setNetworkType` and `disableProxy`, queued before the parameters, never answered.
@@ -271,7 +271,7 @@ async fn a_request_never_answered_times_out_and_closes() {
     assert!(lock(&transport.inner.pending).is_empty());
     assert!(matches!(
         *transport.auth_state().borrow(),
-        AuthState::Closed
+        AuthState::StartFailed(TransportError::Timeout("getOption"))
     ));
     transport.shutdown().await;
 }
@@ -319,7 +319,7 @@ async fn set_tdlib_parameters_failures() {
     );
     assert!(matches!(
         *transport.auth_state().borrow(),
-        AuthState::Closed
+        AuthState::StartFailed(TransportError::Other { code: 400, .. })
     ));
 
     // Never answered: bounded by the start timeout.
@@ -706,6 +706,115 @@ async fn nothing_works_before_start() {
     assert!(transport.bindings().calls().is_empty());
 }
 
+/// DPAPI refuses `key.bin` (Windows password reset, profile migration, copy to another
+/// account): the start fails before any client, says why, and the reset of the current
+/// identity's session (here a personal one, beside the product's) gets back to `WaitPhone`.
+#[tokio::test]
+async fn an_unreadable_key_is_a_failed_start_that_a_session_reset_fixes() {
+    let dir = TempDir::new("reset-dpapi");
+    let root = dir.path();
+    let session = root.join("custom-777");
+    std::fs::create_dir_all(session.join("db")).unwrap();
+    std::fs::write(session.join("db").join("td.binlog"), b"old database").unwrap();
+    std::fs::write(session.join(key::KEY_FILE), b"not a DPAPI blob").unwrap();
+    // The product's session and the files that are not part of any session.
+    std::fs::create_dir_all(root.join("db")).unwrap();
+    for file in [key::KEY_FILE, "api_hash.bin", "proxy_secret.bin"] {
+        std::fs::write(root.join(file), b"kept").unwrap();
+    }
+    let transport = TdlibJson::new(Replay::new(fixture(&[START, CLOSE])), config(&session));
+
+    let error = transport.start().await.unwrap_err();
+    assert!(matches!(error, TransportError::BadDatabaseKey), "{error}");
+    assert!(matches!(
+        *transport.auth_state().borrow(),
+        AuthState::StartFailed(TransportError::BadDatabaseKey)
+    ));
+    assert!(!transport.bindings().calls().contains(&"create".to_owned()));
+    // Logging out cannot help: there is no client.
+    assert!(matches!(
+        transport.log_out().await,
+        Err(TransportError::NotAuthorized)
+    ));
+
+    transport.reset_session().await.unwrap();
+    wait_state(&transport, "WaitPhone", |s| {
+        matches!(s, AuthState::WaitPhone)
+    })
+    .await;
+    assert!(!session.join("db").join("td.binlog").exists());
+    // A fresh key, readable, is the one TDLib got.
+    let sent = &transport.bindings().sent_of("setTdlibParameters")[0];
+    let key = DatabaseKey::load_or_create(&session).unwrap();
+    assert_eq!(sent["database_encryption_key"], key.base64());
+    for file in [key::KEY_FILE, "api_hash.bin", "proxy_secret.bin"] {
+        assert_eq!(std::fs::read(root.join(file)).unwrap(), b"kept", "{file}");
+    }
+    assert!(root.join("db").is_dir());
+    transport.shutdown().await;
+    let replay = transport.bindings();
+    assert!(replay.unexpected().is_empty(), "{:?}", replay.unexpected());
+}
+
+/// TDLib refuses the key (`401` on `setTdlibParameters`): the client is closed, then the
+/// reset deletes the session and a new client starts with a new key.
+#[tokio::test]
+async fn a_key_tdlib_refuses_is_fixed_by_a_session_reset() {
+    let dir = TempDir::new("reset-401");
+    let transport = transport(&[BAD_KEY, START, CLOSE], &dir);
+    let first_key = {
+        transport.start().await.unwrap_err();
+        DatabaseKey::load_or_create(dir.path()).unwrap().base64()
+    };
+    std::fs::write(dir.path().join("db").join("td.binlog"), b"x").unwrap();
+    assert!(matches!(
+        *transport.auth_state().borrow(),
+        AuthState::StartFailed(TransportError::BadDatabaseKey)
+    ));
+
+    transport.reset_session().await.unwrap();
+    wait_state(&transport, "WaitPhone", |s| {
+        matches!(s, AuthState::WaitPhone)
+    })
+    .await;
+    let replay = transport.bindings();
+    assert_eq!(replay.calls().iter().filter(|c| *c == "create").count(), 2);
+    let parameters = replay.sent_of("setTdlibParameters");
+    assert_eq!(parameters[0]["database_encryption_key"], first_key);
+    assert_ne!(parameters[1]["database_encryption_key"], first_key);
+    assert!(!dir.path().join("db").join("td.binlog").exists());
+    transport.shutdown().await;
+    assert!(replay.unexpected().is_empty(), "{:?}", replay.unexpected());
+    assert!(replay.remaining().is_empty(), "{:?}", replay.remaining());
+}
+
+/// A session that runs (or has not failed) is never deleted.
+#[tokio::test]
+async fn a_session_in_use_is_never_reset() {
+    let dir = TempDir::new("reset-in-use");
+    let transport = transport(&[START, CLOSE], &dir);
+    // Before any start.
+    assert!(matches!(
+        transport.reset_session().await,
+        Err(TransportError::SessionInUse)
+    ));
+    transport.start().await.unwrap();
+    wait_state(&transport, "WaitPhone", |s| {
+        matches!(s, AuthState::WaitPhone)
+    })
+    .await;
+    let error = transport.reset_session().await.unwrap_err();
+    assert_eq!(error.code_and_params().0, "TG_SESSION_IN_USE");
+    assert!(dir.path().join(key::KEY_FILE).is_file() && dir.path().join("db").is_dir());
+    // After a shutdown (`Closed`) neither.
+    transport.shutdown().await;
+    assert!(matches!(
+        transport.reset_session().await,
+        Err(TransportError::SessionInUse)
+    ));
+    assert!(dir.path().join(key::KEY_FILE).is_file());
+}
+
 #[tokio::test]
 async fn a_missing_dll_fails_start_with_lib_missing_and_writes_nothing() {
     let dir = TempDir::new("nodll");
@@ -716,7 +825,7 @@ async fn a_missing_dll_fails_start_with_lib_missing_and_writes_nothing() {
     assert!(!dir.path().join(key::KEY_FILE).exists());
     assert!(matches!(
         *transport.auth_state().borrow(),
-        AuthState::Closed
+        AuthState::StartFailed(TransportError::LibMissing(_))
     ));
     transport.shutdown().await;
 }

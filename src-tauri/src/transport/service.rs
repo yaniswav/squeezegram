@@ -423,6 +423,13 @@ pub struct MePayload {
     pub upload_limit_bytes: u64,
 }
 
+/// Why the start failed (`start_failed`): the error as every command reports it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StartErrorPayload {
+    pub code: &'static str,
+    pub params: Value,
+}
+
 /// Payload of `auth://state`, plus `transport` (`mock` | `tdlib` | `none`) so
 /// the UI can flag the test transport.
 #[derive(Clone, PartialEq, Serialize)]
@@ -440,6 +447,12 @@ pub struct AuthPayload {
     pub me: Option<MePayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub other_step: Option<String>,
+    /// `start_failed` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<StartErrorPayload>,
+    /// `start_failed` only: `auth_reset_session` may fix this failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub can_reset_session: Option<bool>,
 }
 
 /// `auth_state` journal line: the state name and non-identifying facts only. Never the QR
@@ -457,6 +470,8 @@ pub fn log_auth_state(state: &AuthState) {
             .as_deref()
             .is_some_and(|h| !h.is_empty()),
         other_step = payload.other_step.as_deref(),
+        // The code only: a proxy error's params name the proxy server.
+        error_code = payload.error.as_ref().map(|error| error.code),
         is_premium = me.map(|m| m.is_premium),
         caption_max_chars = me.map(|m| m.caption_max_chars),
         upload_limit_bytes = me.map(|m| m.upload_limit_bytes),
@@ -473,6 +488,8 @@ pub fn auth_payload(state: &AuthState, transport: TransportKind) -> AuthPayload 
         password_hint: None,
         me: None,
         other_step: None,
+        error: None,
+        can_reset_session: None,
     };
     payload.state = match state {
         AuthState::Starting => "starting",
@@ -503,6 +520,12 @@ pub fn auth_payload(state: &AuthState, transport: TransportKind) -> AuthPayload 
         }
         AuthState::LoggingOut => "logging_out",
         AuthState::Closed => "closed",
+        AuthState::StartFailed(error) => {
+            let (code, params) = error.code_and_params();
+            payload.error = Some(StartErrorPayload { code, params });
+            payload.can_reset_session = Some(error.session_reset_may_help());
+            "start_failed"
+        }
         AuthState::OtherStep { name } => {
             payload.other_step = Some(name.clone());
             "other_step"
@@ -1063,6 +1086,19 @@ mod tests {
         assert_eq!(
             payload(&other),
             json!({ "state": "other_step", "transport": "tdlib", "otherStep": "registration" })
+        );
+        assert_eq!(
+            payload(&AuthState::StartFailed(TransportError::BadDatabaseKey)),
+            json!({ "state": "start_failed", "transport": "tdlib",
+                "error": { "code": "TG_BAD_DB_KEY", "params": {} }, "canResetSession": true })
+        );
+        assert_eq!(
+            payload(&AuthState::StartFailed(
+                TransportError::ProxySecretUnavailable
+            )),
+            json!({ "state": "start_failed", "transport": "tdlib",
+                "error": { "code": "TG_PROXY_SECRET_UNAVAILABLE", "params": {} },
+                "canResetSession": false })
         );
         for kind in [TransportKind::Mock, TransportKind::None] {
             assert_eq!(

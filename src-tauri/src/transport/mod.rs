@@ -134,6 +134,10 @@ pub enum AuthState {
     Ready(Me),
     LoggingOut,
     Closed,
+    /// The start failed and left no client (the key or the database cannot be opened, the
+    /// proxy is unusable…). Unlike `Closed`, the page says why and, when it may help, offers
+    /// `reset_session`.
+    StartFailed(TransportError),
     /// Any step the app does not handle (sign-up, Premium purchase required…): generic screen.
     OtherStep {
         name: String,
@@ -159,6 +163,10 @@ impl fmt::Debug for AuthState {
             AuthState::Ready(me) => f.debug_tuple("Ready").field(me).finish(),
             AuthState::LoggingOut => f.write_str("LoggingOut"),
             AuthState::Closed => f.write_str("Closed"),
+            // The code only: a proxy error's text names the proxy server.
+            AuthState::StartFailed(error) => {
+                write!(f, "StartFailed({})", error.code_and_params().0)
+            }
             AuthState::OtherStep { name } => {
                 f.debug_struct("OtherStep").field("name", name).finish()
             }
@@ -541,6 +549,10 @@ pub enum TransportError {
     /// machine, corrupt file). Nothing connects until the user enters it again.
     #[error("proxy secret unavailable")]
     ProxySecretUnavailable,
+    /// `reset_session` while a client runs (or the start did not fail): the session in use is
+    /// never deleted.
+    #[error("the Telegram session is in use")]
+    SessionInUse,
 }
 
 impl TransportError {
@@ -579,7 +591,20 @@ impl TransportError {
             TransportError::NotImplemented(what) => ("TG_NOT_IMPLEMENTED", json!({ "what": what })),
             TransportError::Proxy(message) => ("TG_PROXY_FAILED", json!({ "message": message })),
             TransportError::ProxySecretUnavailable => ("TG_PROXY_SECRET_UNAVAILABLE", json!({})),
+            TransportError::SessionInUse => ("TG_SESSION_IN_USE", json!({})),
         }
+    }
+
+    /// A start failure that comes from the local session itself (key refused by DPAPI or by
+    /// TDLib, database or folder unreadable, TDLib not answering on it): resetting the session
+    /// may fix it. Proxy, library and identity problems have their own remedy.
+    pub fn session_reset_may_help(&self) -> bool {
+        matches!(
+            self,
+            TransportError::BadDatabaseKey
+                | TransportError::Protocol(_)
+                | TransportError::Timeout(_)
+        )
     }
 }
 
@@ -642,6 +667,13 @@ pub trait TelegramTransport: Send + Sync {
 
     /// Round trip to Telegram through `proxy`, without changing the proxy in use.
     async fn test_proxy(&self, proxy: &proxy::Proxy) -> Result<Duration, TransportError>;
+
+    /// After a failed start only (`AuthState::StartFailed`): deletes the current identity's
+    /// local session (database, files, key) and starts again, so the user can sign in anew.
+    /// The queue, history and settings are not part of it. `SessionInUse` otherwise.
+    async fn reset_session(&self) -> Result<(), TransportError> {
+        Err(TransportError::NotImplemented("reset_session"))
+    }
 
     async fn shutdown(&self);
 }
@@ -812,10 +844,15 @@ mod tests {
         let qr = AuthState::WaitQr {
             link: "tg://login?token=SECRET".into(),
         };
-        let text = format!("{me:?} {:?} {qr:?}", AuthState::Ready(me.clone()));
-        for secret in ["987654321", "Alice", "alice_s", "SECRET"] {
+        let failed = AuthState::StartFailed(TransportError::Proxy("10.9.9.9:1080".into()));
+        let text = format!(
+            "{me:?} {:?} {qr:?} {failed:?}",
+            AuthState::Ready(me.clone())
+        );
+        for secret in ["987654321", "Alice", "alice_s", "SECRET", "10.9.9.9"] {
             assert!(!text.contains(secret), "{text}");
         }
+        assert!(text.contains("StartFailed(TG_PROXY_FAILED)"), "{text}");
         assert!(text.contains("is_premium: true"));
     }
 
@@ -920,9 +957,34 @@ mod tests {
                 "TG_PROXY_SECRET_UNAVAILABLE",
                 json!({}),
             ),
+            (TransportError::SessionInUse, "TG_SESSION_IN_USE", json!({})),
         ];
         for (error, code, params) in cases {
             assert_eq!(error.code_and_params(), (code, params), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_session_reset_is_offered_for_local_session_failures_only() {
+        for error in [
+            TransportError::BadDatabaseKey,
+            TransportError::Protocol("database key file: PermissionDenied".into()),
+            TransportError::Timeout("setTdlibParameters"),
+        ] {
+            assert!(error.session_reset_may_help(), "{error}");
+        }
+        for error in [
+            TransportError::Proxy("refused".into()),
+            TransportError::ProxySecretUnavailable,
+            TransportError::LibMissing("x".into()),
+            TransportError::NotConfigured("api_id_missing"),
+            TransportError::Other {
+                code: 400,
+                message: "Valid api_id must be provided".into(),
+            },
+            TransportError::SessionInUse,
+        ] {
+            assert!(!error.session_reset_may_help(), "{error}");
         }
     }
 
@@ -973,6 +1035,10 @@ mod tests {
         assert!(matches!(
             transport.auth_submit(AuthInput::RequestQr).await,
             Err(TransportError::NotConfigured(_))
+        ));
+        assert!(matches!(
+            transport.reset_session().await,
+            Err(TransportError::NotImplemented(_))
         ));
         let missing = NoTransport::unavailable(TransportError::LibMissing("x".into()));
         assert_eq!(

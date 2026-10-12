@@ -984,6 +984,16 @@ pub async fn auth_logout(state: State<'_, AppState>) -> CommandResult<()> {
     call.finish(result.map_err(Into::into))
 }
 
+/// After a failed start (`start_failed`): deletes the local Telegram session of the identity in
+/// use and starts Telegram again; the user then signs in anew. The queue, history and settings
+/// stay. `TG_SESSION_IN_USE` while a session runs.
+#[tauri::command]
+pub async fn auth_reset_session(state: State<'_, AppState>) -> CommandResult<()> {
+    let call = Call::new("auth_reset_session");
+    let result = state.transport.reset_session().await;
+    call.finish(result.map_err(Into::into))
+}
+
 /// The default device name and the personal API identity as Settings shows them: never the
 /// `api_hash`, only whether one is stored.
 #[tauri::command]
@@ -1161,7 +1171,7 @@ pub(crate) async fn apply_then_save_proxy(
     let proxy = proxy_from_input(input, saved.as_ref(), || tdlib::proxy::load_secret(dir))?;
     transport.set_proxy(proxy.clone()).await?;
     let failed_start = kind == TransportKind::Tdlib
-        && matches!(*transport.auth_state().borrow(), AuthState::Closed);
+        && matches!(*transport.auth_state().borrow(), AuthState::StartFailed(_));
     if failed_start && let Err(error) = crate::transport::select::start(transport).await {
         // The saved choice may itself be unusable (unreadable secret): then the new one stays
         // in memory, which only the next try in this session reads.

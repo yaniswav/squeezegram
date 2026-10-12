@@ -169,7 +169,7 @@ async fn a_refused_proxy_fails_the_start() {
     );
     assert!(matches!(
         *transport.auth_state().borrow(),
-        AuthState::Closed
+        AuthState::StartFailed(TransportError::Proxy(_))
     ));
     transport.shutdown().await;
 }

@@ -10,9 +10,11 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useNow } from "@/hooks/use-now"
+import { errorMessage } from "@/i18n/errors"
 import { formatBytes, formatDuration } from "@/lib/format"
 import {
   authLogout,
+  authResetSession,
   authSubmit,
   type AuthInput,
   type AuthState,
@@ -69,7 +71,18 @@ function AuthStep({ auth }: { auth: AuthState }) {
     case "logging_out":
       return <Status text={t("connection.loggingOut")} />
     case "closed":
-      return <Status text={t("connection.closed")} />
+      // Only a build without Telegram is closed for good; otherwise TDLib was stopped.
+      return (
+        <Status
+          text={
+            auth.transport === "none"
+              ? t("connection.closed")
+              : t("connection.stopped")
+          }
+        />
+      )
+    case "start_failed":
+      return <StartFailedStep auth={auth} />
     case "wait_phone":
       return <PhoneStep />
     case "wait_qr":
@@ -330,6 +343,73 @@ function CodeStep({ auth }: { auth: AuthState }) {
         </span>
       )}
     </ValueStep>
+  )
+}
+
+/**
+ * Telegram did not start: why, and when the local session itself is the cause (key refused
+ * after a Windows password reset, a profile migration or a copy to another account), a way
+ * out that deletes that session only.
+ */
+function StartFailedStep({ auth }: { auth: AuthState }) {
+  const { t } = useTranslation()
+  const { pushError } = useAlerts()
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  async function reset() {
+    setBusy(true)
+
+    try {
+      await authResetSession()
+    } catch (error) {
+      pushError(error)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-1">
+        <h2 className="font-heading text-base font-medium">
+          {t("connection.startFailed.title")}
+        </h2>
+        {auth.error && (
+          <p role="alert" className="text-sm text-destructive">
+            {errorMessage(t, auth.error.code, auth.error.params)}
+          </p>
+        )}
+      </div>
+      {auth.canResetSession ? (
+        <>
+          <p className="text-sm text-muted-foreground">
+            {t("connection.startFailed.resetHint")}
+          </p>
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => setConfirming(true)}
+          >
+            {t("connection.startFailed.reset")}
+          </Button>
+          <ConfirmDialog
+            open={confirming}
+            onOpenChange={setConfirming}
+            title={t("connection.startFailed.resetTitle")}
+            description={t("connection.startFailed.resetBody")}
+            confirmLabel={t("connection.startFailed.resetConfirm")}
+            cancelLabel={t("common.cancel")}
+            destructive
+            onConfirm={() => void reset()}
+          />
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {t("connection.startFailed.otherHint")}
+        </p>
+      )}
+    </div>
   )
 }
 

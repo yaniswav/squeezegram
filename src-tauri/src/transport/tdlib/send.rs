@@ -649,7 +649,10 @@ impl<B: TdBindings> Inner<B> {
                 }
                 changed = auth.changed() => {
                     let closed = changed.is_err()
-                        || matches!(*auth.borrow_and_update(), AuthState::Closed | AuthState::LoggingOut);
+                        || matches!(
+                            *auth.borrow_and_update(),
+                            AuthState::Closed | AuthState::LoggingOut | AuthState::StartFailed(_)
+                        );
                     if closed {
                         // The message may have gone out just before: in doubt.
                         return Err(TransportError::Protocol("TDLib closed during the upload".into()));

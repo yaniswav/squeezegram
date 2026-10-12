@@ -49,6 +49,7 @@ pub mod proxy;
 #[cfg(any(test, debug_assertions))]
 pub mod replay;
 pub mod send;
+pub mod session;
 #[cfg(test)]
 pub(crate) mod tests;
 #[cfg(test)]
@@ -362,6 +363,11 @@ struct Inner<B: TdBindings> {
     pending: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
     /// Current client, 0 when there is none.
     client_id: AtomicI32,
+    /// Held by the receive thread from its "is this the current client?" check to the
+    /// publication of the state, and by `forget_client` around the reset of `client_id`: a
+    /// state of the old client is then queued before the transport's own final state, never
+    /// after it (a late `Closed` would hide a `StartFailed`).
+    client_gate: Mutex<()>,
     /// Last raw `authorizationState*` type per client, for `start` / `shutdown` waits.
     raw: watch::Sender<(i32, String)>,
     auth: AuthPublisher,
@@ -412,6 +418,7 @@ impl<B: TdBindings> TdlibJson<B> {
                 next_extra: AtomicU64::new(1),
                 pending: Mutex::new(HashMap::new()),
                 client_id: AtomicI32::new(0),
+                client_gate: Mutex::new(()),
                 raw: watch::Sender::new((0, String::new())),
                 auth: AuthPublisher::new(AuthState::Starting),
                 receiver: Mutex::new(None),
@@ -791,12 +798,23 @@ impl<B: TdBindings> Inner<B> {
             .await
     }
 
+    /// No current client any more; what this session read about the account goes with it.
+    fn forget_client(&self) {
+        {
+            let _gate = lock(&self.client_gate);
+            self.client_id.store(0, Ordering::Release);
+        }
+        *lock(&self.me_cache) = None;
+        *lock(&self.folders) = None;
+    }
+
     /// `close` then `authorizationStateClosed`, bounded by `close_timeout`; forgets the client
-    /// and publishes `Closed` (also after a start that failed before creating one).
-    async fn close_client(&self) {
+    /// and publishes `last`: `Closed` on shutdown, `StartFailed` after a start that failed
+    /// (also before creating a client).
+    async fn close_client(&self, last: AuthState) {
         let client = self.current_client();
         if client == 0 {
-            self.auth.publish_wait(AuthState::Closed).await;
+            self.auth.publish_wait(last).await;
             return;
         }
         let timeout = self.config.close_timeout;
@@ -811,10 +829,19 @@ impl<B: TdBindings> Inner<B> {
         {
             tracing::warn!(event = "tdlib_close", error_code = error.code_and_params().0, error = %error, "TDLib close did not finish cleanly");
         }
-        self.client_id.store(0, Ordering::Release);
-        *lock(&self.me_cache) = None;
-        *lock(&self.folders) = None;
-        self.auth.publish_wait(AuthState::Closed).await;
+        self.forget_client();
+        self.auth.publish_wait(last).await;
+    }
+
+    /// `open`, and on error the client closed with `StartFailed` (a 401 key error requires a
+    /// new client anyway). Caller holds the lifecycle lock.
+    async fn open_or_fail(self: &Arc<Self>) -> Result<(), TransportError> {
+        let result = self.open().await;
+        if let Err(error) = &result {
+            self.close_client(AuthState::StartFailed(error.clone()))
+                .await;
+        }
+        result
     }
 }
 
@@ -928,6 +955,8 @@ fn on_authorization_state<B: TdBindings>(inner: &Arc<Inner<B>>, message: &Value,
     if let Some(kind) = state["@type"].as_str() {
         inner.raw.send_replace((client, kind.to_owned()));
     }
+    // Until the state is queued: see `Inner::client_gate`.
+    let _gate = lock(&inner.client_gate);
     if client != inner.current_client() {
         return;
     }
@@ -963,12 +992,8 @@ impl<B: TdBindings> TelegramTransport for TdlibJson<B> {
         if inner.current_client() != 0 {
             return Ok(());
         }
-        let result = inner.open().await;
-        if result.is_err() {
-            // A failed start leaves no half-open client (a 401 key error requires a new one).
-            inner.close_client().await;
-        }
-        result
+        // A failed start leaves no half-open client, and says why (`StartFailed`).
+        inner.open_or_fail().await
     }
 
     fn auth_state(&self) -> watch::Receiver<AuthState> {
@@ -998,14 +1023,8 @@ impl<B: TdBindings> TelegramTransport for TdlibJson<B> {
             .request("logOut", json!({ "@type": "logOut" }), timeout)
             .await?;
         inner.wait_raw(client, auth::CLOSED, timeout).await?;
-        inner.client_id.store(0, Ordering::Release);
-        *lock(&inner.me_cache) = None;
-        *lock(&inner.folders) = None;
-        let result = inner.open().await;
-        if result.is_err() {
-            inner.close_client().await;
-        }
-        result
+        inner.forget_client();
+        inner.open_or_fail().await
     }
 
     async fn me(&self) -> Result<Me, TransportError> {
@@ -1073,10 +1092,34 @@ impl<B: TdBindings> TelegramTransport for TdlibJson<B> {
         self.inner.ping_proxy(proxy).await
     }
 
+    /// Under the lifecycle lock, and only while no client runs after a failed start: TDLib
+    /// never has the files open when they are deleted. Then the same start as `start`.
+    async fn reset_session(&self) -> Result<(), TransportError> {
+        let inner = &self.inner;
+        let _lifecycle = inner.lifecycle.lock().await;
+        let failed = matches!(*inner.auth.watch.borrow(), AuthState::StartFailed(_));
+        if inner.current_client() != 0 || !failed {
+            return Err(TransportError::SessionInUse);
+        }
+        match session::reset(&inner.config.dir) {
+            Ok(removed) => tracing::info!(
+                event = "session_reset",
+                removed = removed.join(","),
+                "local Telegram session deleted, starting again"
+            ),
+            Err(error) => {
+                tracing::warn!(event = "session_reset", error_code = error.code_and_params().0, error = %error, "local Telegram session could not be deleted");
+                return Err(error);
+            }
+        }
+        inner.auth.publish_wait(AuthState::Starting).await;
+        inner.open_or_fail().await
+    }
+
     async fn shutdown(&self) {
         let inner = &self.inner;
         let _lifecycle = inner.lifecycle.lock().await;
-        inner.close_client().await;
+        inner.close_client(AuthState::Closed).await;
         inner.stop_receiver().await;
     }
 }

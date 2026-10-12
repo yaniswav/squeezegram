@@ -631,7 +631,7 @@ mod tests {
         assert_eq!(start_code(&allowed).await, Some("TG_LIB_MISSING"));
         assert!(matches!(
             *allowed.transport.auth_state().borrow(),
-            AuthState::Closed
+            AuthState::StartFailed(TransportError::LibMissing(_))
         ));
         allowed.transport.shutdown().await;
         // Nothing was created in the TDLib folder (no key, no database).

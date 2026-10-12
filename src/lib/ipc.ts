@@ -566,6 +566,7 @@ export type AuthStateName =
   | "ready"
   | "logging_out"
   | "closed"
+  | "start_failed"
   | "other_step"
 
 /** `MePayload` (camelCase). */
@@ -593,6 +594,10 @@ export interface AuthState {
   passwordHint?: string
   me?: AuthMe
   otherStep?: string
+  /** `start_failed`: why Telegram did not start, as a command error reports it. */
+  error?: { code: string; params: JsonObject }
+  /** `start_failed`: `auth_reset_session` may fix it (the local session can't be opened). */
+  canResetSession?: boolean
 }
 
 /**
@@ -1275,6 +1280,7 @@ const authStateDecoder = d.object<AuthState>({
     ready: true,
     logging_out: true,
     closed: true,
+    start_failed: true,
     other_step: true,
   }),
   transport: d.literals<TransportKind>({ mock: true, tdlib: true, none: true }),
@@ -1291,6 +1297,13 @@ const authStateDecoder = d.object<AuthState>({
     }),
   ),
   otherStep: d.optional(d.string),
+  error: d.optional(
+    d.object<{ code: string; params: JsonObject }>({
+      code: d.string,
+      params: d.params,
+    }),
+  ),
+  canResetSession: d.optional(d.boolean),
 })
 
 const destinationCheckDecoder = d.object<DestinationCheck>({
@@ -1554,6 +1567,15 @@ export function authSubmit(input: AuthInput): Promise<void> {
 
 export function authLogout(): Promise<void> {
   return call("auth_logout", d.nothing)
+}
+
+/**
+ * After a failed start only: deletes the local Telegram session of the identity in use and
+ * starts Telegram again (the user signs in anew). The queue, history and settings stay.
+ * Rejects with `TG_SESSION_IN_USE` while a session runs.
+ */
+export function authResetSession(): Promise<void> {
+  return call("auth_reset_session", d.nothing)
 }
 
 /** Default device name and personal API identity (never the stored `api_hash`). */
