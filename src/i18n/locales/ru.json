@@ -581,7 +581,7 @@
     },
     "watch": {
       "title": "Watched folders",
-      "hint": "New photos and videos that appear in these folders are added to the queue as pending. Nothing is sent until you approve each one. Files already in a folder when you add it are left alone, and so are files that arrive while squeezegram is closed.",
+      "hint": "New photos and videos that appear in these folders are added to the queue as pending, including those that arrived while squeezegram was closed. Nothing is sent until you approve each one. Files already in a folder when you add it are left alone.",
       "locked": "Included with squeezegram Premium. Folders listed here stay saved, but none is watched until then.",
       "empty": "No folder is watched yet.",
       "folder": "Folder to watch",

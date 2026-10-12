@@ -84,7 +84,7 @@ fn watched_items(queue: &Orchestrator) -> Vec<String> {
 fn take(tracker: &mut Tracker, dir: &Path, now: Instant, stable: Duration) -> Vec<Found> {
     let found = tracker.scan(1, dir, now, stable).unwrap();
     for file in &found {
-        tracker.taken(&file.name);
+        tracker.taken(file);
     }
     found
 }
@@ -323,7 +323,7 @@ fn found_files_wait_in_pending_review_and_never_run_by_themselves() {
 }
 
 #[test]
-fn a_restart_adds_nothing_again() {
+fn a_restart_adds_nothing_again_but_what_came_while_closed() {
     let dir = TestDir::new("watch-restart");
     let watched = dir.path().join("in");
     std::fs::create_dir(&watched).unwrap();
@@ -350,10 +350,12 @@ fn a_restart_adds_nothing_again() {
         queue
             .clear(crate::queue::store::ClearScope::Finished)
             .unwrap();
-        // Still waiting to be complete when the app closes.
+        // Still waiting to be complete when the app closes: not taken, so not seen.
         std::fs::write(watched.join("late.mp4"), b"3").unwrap();
         engine.poll(t0 + secs(18), STABLE);
     }
+    // Arrives while the app is closed.
+    std::fs::write(watched.join("closed.mp4"), b"4").unwrap();
 
     let queue = orchestrator(Store::open(&dir.path().join("squeezegram.db")).unwrap());
     let mut engine = Engine::new(queue.clone(), switch);
@@ -361,13 +363,197 @@ fn a_restart_adds_nothing_again() {
     for step in 0..5 {
         engine.poll(t1 + secs(step * 10), STABLE);
     }
-    assert_eq!(watched_items(&queue), ["kept.mp4"]);
+    assert_eq!(
+        watched_items(&queue),
+        ["kept.mp4", "closed.mp4", "late.mp4"],
+        "kept.mp4 and removed.mp4 were taken before; closed.mp4 and late.mp4 were not (listed by name)"
+    );
+    for item in queue.list().unwrap().iter().skip(1) {
+        assert_eq!(item.state, State::PendingReview, "never sent unasked");
+    }
 
     // Watching goes on after the restart.
-    std::fs::write(watched.join("next.mp4"), b"4").unwrap();
+    std::fs::write(watched.join("next.mp4"), b"5").unwrap();
     engine.poll(t1 + secs(60), STABLE);
     engine.poll(t1 + secs(75), STABLE);
-    assert_eq!(watched_items(&queue), ["kept.mp4", "next.mp4"]);
+    assert_eq!(
+        watched_items(&queue),
+        ["kept.mp4", "closed.mp4", "late.mp4", "next.mp4"]
+    );
+}
+
+/// A start of the app on the database file in `dir`: a new queue and engine, polled until
+/// everything stable has been taken.
+fn start_and_settle(dir: &TestDir, t: Instant) -> (Orchestrator, Engine) {
+    let switch = Arc::new(Switch::default());
+    switch.set(true);
+    let queue = orchestrator(Store::open(&dir.path().join("squeezegram.db")).unwrap());
+    let mut engine = Engine::new(queue.clone(), switch);
+    for step in 0..5 {
+        engine.poll(t + secs(step * 10), STABLE);
+    }
+    (queue, engine)
+}
+
+/// A watched folder in `dir/in` holding `files`, as a database from before the seen list
+/// left it: configured, never seeded.
+fn folder_with(dir: &TestDir, files: &[(&str, &[u8])]) -> (PathBuf, WatchFolder) {
+    let watched = dir.path().join("in");
+    std::fs::create_dir(&watched).unwrap();
+    for (name, content) in files {
+        std::fs::write(watched.join(name), content).unwrap();
+    }
+    let mut store = open_store(dir);
+    let destination_id = first_destination(&store);
+    let folder = store
+        .add_watch_folder(&watched.to_string_lossy(), destination_id, None)
+        .unwrap();
+    (watched, folder)
+}
+
+fn seen_names(queue: &Orchestrator, folder: &WatchFolder) -> Option<Vec<String>> {
+    let seen = queue
+        .with_store(|store| store.watch_seen(folder.id))
+        .unwrap()?;
+    let mut names: Vec<String> = seen.into_iter().map(|file| file.name).collect();
+    names.sort_unstable();
+    Some(names)
+}
+
+#[test]
+fn a_folder_that_existed_before_the_seen_list_is_seeded_not_flooded() {
+    let dir = TestDir::new("watch-upgrade");
+    let (watched, folder) = folder_with(&dir, &[("old1.mp4", b"1"), ("old2.mp4", b"2")]);
+    let t0 = Instant::now();
+    let (queue, _engine) = start_and_settle(&dir, t0);
+    assert!(
+        watched_items(&queue).is_empty(),
+        "no flood after an upgrade"
+    );
+    assert_eq!(
+        seen_names(&queue, &folder),
+        Some(vec!["old1.mp4".into(), "old2.mp4".into()])
+    );
+    drop(queue);
+
+    // The next start compares with that list: the old files stay out, a new one comes in.
+    std::fs::write(watched.join("new.mp4"), b"3").unwrap();
+    let (queue, _engine) = start_and_settle(&dir, t0 + secs(100));
+    assert_eq!(watched_items(&queue), ["new.mp4"]);
+    assert_eq!(queue.list().unwrap()[0].state, State::PendingReview);
+}
+
+#[test]
+fn a_changed_file_is_new_and_a_gone_one_is_forgotten() {
+    let dir = TestDir::new("watch-changed");
+    let (watched, folder) = folder_with(
+        &dir,
+        &[
+            ("same.mp4", b"1"),
+            ("grown.mp4", b"1"),
+            ("gone.mp4", b"1"),
+            ("notes.txt", b"1"),
+        ],
+    );
+    let t0 = Instant::now();
+    let (queue, _engine) = start_and_settle(&dir, t0);
+    assert_eq!(
+        seen_names(&queue, &folder).unwrap(),
+        ["gone.mp4", "grown.mp4", "same.mp4"],
+        "only what a poll could take"
+    );
+    drop(queue);
+
+    std::fs::write(watched.join("grown.mp4"), b"1, and more").unwrap();
+    std::fs::remove_file(watched.join("gone.mp4")).unwrap();
+    let (queue, _engine) = start_and_settle(&dir, t0 + secs(100));
+    assert_eq!(watched_items(&queue), ["grown.mp4"]);
+    assert_eq!(
+        seen_names(&queue, &folder).unwrap(),
+        ["grown.mp4", "same.mp4"]
+    );
+}
+
+#[test]
+fn a_disabled_folder_starts_over_at_the_next_start_too() {
+    let dir = TestDir::new("watch-disabled-restart");
+    let (watched, folder) = folder_with(&dir, &[("old.mp4", b"1")]);
+    let t0 = Instant::now();
+    let (queue, _engine) = start_and_settle(&dir, t0);
+    let set_enabled = |enabled| {
+        queue
+            .with_store(|store| {
+                store.update_watch_folder(
+                    folder.id,
+                    &crate::queue::store::WatchFolderPatch {
+                        enabled: Some(enabled),
+                        ..Default::default()
+                    },
+                )
+            })
+            .unwrap();
+    };
+    set_enabled(false);
+    std::fs::write(watched.join("meanwhile.mp4"), b"2").unwrap();
+    set_enabled(true);
+    drop(queue);
+    let (queue, _engine) = start_and_settle(&dir, t0 + secs(100));
+    assert!(
+        watched_items(&queue).is_empty(),
+        "what came while the folder was off is left alone, as before"
+    );
+}
+
+#[test]
+fn nothing_is_listed_or_seeded_before_the_license_applies() {
+    let dir = TestDir::new("watch-unlicensed-seed");
+    let (_watched, folder) = folder_with(&dir, &[("old.mp4", b"1")]);
+    let queue = orchestrator(Store::open(&dir.path().join("squeezegram.db")).unwrap());
+    let switch = Arc::new(Switch::default());
+    let mut engine = Engine::new(queue.clone(), switch.clone());
+    let t0 = Instant::now();
+    engine.poll(t0, STABLE);
+    assert_eq!(seen_names(&queue, &folder), None, "not listed, not seeded");
+    // The license applies later: that listing is the baseline.
+    switch.set(true);
+    engine.poll(t0 + secs(3), STABLE);
+    engine.poll(t0 + secs(20), STABLE);
+    assert!(watched_items(&queue).is_empty());
+    assert_eq!(seen_names(&queue, &folder), Some(vec!["old.mp4".into()]));
+}
+
+#[test]
+fn a_seen_list_that_cannot_be_saved_is_tried_again() {
+    let dir = TestDir::new("watch-save-retry");
+    let (_watched, folder) = folder_with(&dir, &[("old.mp4", b"1")]);
+    let store = Store::open(&dir.path().join("squeezegram.db")).unwrap();
+    // The table is missing, as when the database is locked or damaged.
+    store
+        .conn()
+        .execute_batch("ALTER TABLE watch_seen RENAME TO watch_seen_off")
+        .unwrap();
+    let queue = orchestrator(store);
+    let switch = Arc::new(Switch::default());
+    switch.set(true);
+    let mut engine = Engine::new(queue.clone(), switch);
+    let t0 = Instant::now();
+    engine.poll(t0, STABLE);
+    assert!(
+        engine.trackers[&folder.id].unsaved,
+        "kept for the next poll"
+    );
+
+    queue
+        .with_store(|store| {
+            store
+                .conn()
+                .execute_batch("ALTER TABLE watch_seen_off RENAME TO watch_seen")?;
+            Ok(())
+        })
+        .unwrap();
+    engine.poll(t0 + secs(3), STABLE);
+    assert!(!engine.trackers[&folder.id].unsaved);
+    assert_eq!(seen_names(&queue, &folder), Some(vec!["old.mp4".into()]));
 }
 
 #[test]

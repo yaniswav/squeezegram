@@ -9,7 +9,7 @@ use super::{QueueError, Result};
 
 /// Migrations in order: entry `i` brings the schema to version `i + 1`.
 const MIGRATIONS: &[&str] = &[
-    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
+    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7,
 ];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
@@ -164,6 +164,27 @@ const SCHEMA_V6: &str = "
 ALTER TABLE items ADD COLUMN encoding_override TEXT;
 ";
 
+/// v7: what the watcher has already dealt with in a watched folder, so a file that arrives
+/// while the app is closed is found at the next start (`watch::`).
+/// - `watch_folders.seeded`: the folder's files at that time were recorded in `watch_seen`.
+///   0 until the watcher first lists the folder (and again when the folder is disabled).
+/// - `watch_seen`: one row per file left alone or taken: name, size and modification time
+///   (seconds) as the directory listing showed them.
+///
+/// No backfill: the folder's files are only known by listing it, so an existing folder starts
+/// with `seeded = 0` and is seeded from its content at the first listing after the upgrade.
+/// Every file already there is then left alone, as the per-start baseline did before.
+const SCHEMA_V7: &str = "
+ALTER TABLE watch_folders ADD COLUMN seeded INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE watch_seen (
+  folder_id INTEGER NOT NULL REFERENCES watch_folders(id) ON DELETE CASCADE,
+  name      TEXT NOT NULL,
+  size      INTEGER NOT NULL,
+  mtime     INTEGER NOT NULL,
+  PRIMARY KEY (folder_id, name)
+) WITHOUT ROWID;
+";
+
 /// `%APPDATA%\squeezegram\squeezegram.db`.
 pub fn default_path() -> Result<PathBuf> {
     let app_data = std::env::var_os("APPDATA").ok_or(QueueError::NoAppData)?;
@@ -257,7 +278,7 @@ mod tests {
     #[test]
     fn fresh_database_gets_the_latest_schema() {
         let conn = open_in_memory().unwrap();
-        assert_eq!(schema_version(&conn).unwrap(), 6);
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
         assert_eq!(
             tables(&conn),
             [
@@ -269,7 +290,8 @@ mod tests {
                 "items_destination",
                 "items_state_pos",
                 "meta",
-                "watch_folders"
+                "watch_folders",
+                "watch_seen"
             ]
         );
         let fk: i64 = conn
@@ -530,7 +552,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let conn = open(&path).unwrap();
-        assert_eq!(schema_version(&conn).unwrap(), 6);
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
         let row: (String, Option<i64>, bool, Option<String>) = conn
             .query_row(
                 "SELECT path, destination_id, enabled, send_mode FROM watch_folders WHERE id = 1",
@@ -620,7 +642,6 @@ mod tests {
         }
         let mut store = Store::open(&path).unwrap();
         assert_eq!(schema_version(store.conn()).unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 6);
         let items = store.list_items().unwrap();
         assert_eq!(items.len(), 2);
         for item in &items {
@@ -648,6 +669,90 @@ mod tests {
         drop(store);
         let conn = open(&path).unwrap();
         assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+    }
+
+    /// A v6 database moves to v7 in place: a watched folder keeps its row and flags and is not
+    /// seeded yet (the watcher seeds it from the folder's content at its first listing, which
+    /// is what keeps an upgrade from queueing every file already there); the new table
+    /// follows the folder when it is removed.
+    #[test]
+    fn v6_database_migrates_to_v7() {
+        let dir = TestDir::new("db-v6-v7");
+        let path = dir.path().join("squeezegram.db");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for sql in [
+                SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
+            ] {
+                tx.execute_batch(sql).unwrap();
+            }
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '6')",
+                [],
+            )
+            .unwrap();
+            tx.execute_batch(
+                "INSERT INTO destinations (id, peer_kind, peer_id, title)
+                 VALUES (1, 'user', 7, 'Saved Messages');
+                 INSERT INTO watch_folders (id, path, destination_id, enabled, send_mode)
+                 VALUES (1, 'C:\\Videos\\OBS', 1, 1, 'document'),
+                        (2, 'C:\\Videos\\Off', 1, 0, NULL);",
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let conn = open(&path).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, path, destination_id, enabled, send_mode, seeded
+                 FROM watch_folders ORDER BY id",
+            )
+            .unwrap();
+        type Row = (i64, String, Option<i64>, bool, Option<String>, bool);
+        let rows: Vec<Row> = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                (
+                    1,
+                    r"C:\Videos\OBS".to_owned(),
+                    Some(1),
+                    true,
+                    Some("document".to_owned()),
+                    false
+                ),
+                (2, r"C:\Videos\Off".to_owned(), Some(1), false, None, false)
+            ]
+        );
+        drop(stmt);
+        let seen = |conn: &Connection| -> i64 {
+            conn.query_row("SELECT COUNT(*) FROM watch_seen", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(seen(&conn), 0, "nothing is invented for an old folder");
+        conn.execute(
+            "INSERT INTO watch_seen (folder_id, name, size, mtime) VALUES (1, 'a.mp4', 1, 2)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM watch_folders WHERE id = 1", [])
+            .unwrap();
+        assert_eq!(seen(&conn), 0, "removed with its folder");
     }
 
     #[test]

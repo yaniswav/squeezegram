@@ -19,15 +19,20 @@
 //! (`PARTIAL_SUFFIXES`, `~$…`), hidden and system files, folders, links and files that are not
 //! media (`queue::intake::is_media`) are never taken. Subfolders are not listed.
 //!
-//! **Which files.** Those present when watching starts are never taken: the first listing is a
-//! baseline, listed at the first poll the license allows after the app starts, a folder is
-//! added or enabled again. A restart therefore never adds again a file that was there before
-//! it (queued, sent, removed from the queue or ignored), with nothing stored besides the
-//! folder. The price: a file that arrives while the app is closed, the folder disabled, or
-//! before the license first applies, is not taken; the user adds it by hand. A name that
-//! leaves the folder and comes back is a new file. A path still waiting or running in the
-//! queue is not queued twice (`Store::add_watched_item`), and content already sent to the
-//! destination is held as a duplicate when probed, as for a manual add.
+//! **Which files.** Those the watcher has not dealt with yet. Each folder keeps a list of the
+//! files it left alone or took (`watch_seen`: name, size, modification time as listed), saved
+//! in the database. The first listing of a folder, when it has no list yet, is a baseline: all
+//! its files are recorded and none is taken, at the first poll the license allows after the
+//! folder is added or enabled again. That is also what an upgrade does for a folder that
+//! existed before the list did, so it never floods the queue. Later, the first listing after a
+//! start compares the folder with the saved list: a file that is not in it (new name, or the
+//! same name with another size or time) arrived while the app was closed and is taken like any
+//! other, once complete. Taken means queued, whatever happens to the item afterwards (sent,
+//! removed, ignored): a restart never adds it again. A folder that is disabled starts over,
+//! so what came meanwhile is left alone. A name that leaves the folder and comes back is a new
+//! file. A path still waiting or running in the queue is not queued twice
+//! (`Store::add_watched_item`), and content already sent to the destination is held as a
+//! duplicate when probed, as for a manual add.
 //!
 //! **Gate.** Nothing is listed unless `Entitlements::allows(WatchedFolder)`, asked at every
 //! poll: the verdict follows the license and the signed-in account. The license commands and
@@ -37,11 +42,12 @@
 //! again. Only a folder removed or disabled is forgotten, and starts a new baseline.
 //!
 //! **Thread.** A thread of its own: listing a network share can block for seconds. The queue's
-//! lock is taken only to read the folders and to insert an item.
+//! lock is taken only to read the folders and the seen lists, to insert an item and to save a
+//! seen list.
 //!
-//! Journal: `watch_active`, `watch_inactive`, `watch_folder_baseline`, `watch_folder_error`,
-//! `watch_folder_recovered`, `watch_file_added`, `watch_file_skipped`, `watch_file_ignored`
-//! (debug), `watch_stopped`, `watch_stop_timeout`.
+//! Journal: `watch_active`, `watch_inactive`, `watch_folder_baseline`, `watch_folder_resumed`,
+//! `watch_folder_error`, `watch_folder_recovered`, `watch_file_added`, `watch_file_skipped`,
+//! `watch_file_ignored` (debug), `watch_stopped`, `watch_stop_timeout`.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
@@ -56,7 +62,7 @@ use crate::entitlements::{Entitlements, Feature};
 use crate::logging;
 use crate::queue::intake;
 use crate::queue::orchestrator::Orchestrator;
-use crate::queue::store::{NewItem, WatchFolder};
+use crate::queue::store::{NewItem, SeenFile, WatchFolder};
 use crate::settings::SettingsStore;
 
 /// Time between two listings of the watched folders.
@@ -181,6 +187,19 @@ struct Waiting {
     refused: bool,
 }
 
+/// Size and modification time (seconds since the Unix epoch) of a file as the directory listing
+/// shows them: what `watch_seen` compares.
+type Stamp = (u64, i64);
+
+fn stamp(metadata: &fs::Metadata) -> Stamp {
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |age| age.as_secs() as i64);
+    (metadata.len(), modified)
+}
+
 /// A complete file, to queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
@@ -190,6 +209,8 @@ pub struct Found {
     pub size: u64,
     /// Seconds since the Unix epoch, as `items.source_mtime`.
     pub modified_s: i64,
+    /// What the listing showed, recorded in the seen list once the queue has the file.
+    stamp: Stamp,
     /// From the first listing that showed it.
     pub waited: Duration,
     /// The queue refused it at an earlier poll.
@@ -207,9 +228,44 @@ struct Tracker {
     waiting: HashMap<String, Waiting>,
     /// The last listing failed: its error was journaled once.
     failing: bool,
+    /// The files left alone or taken that are worth remembering across a restart (media the
+    /// baseline found, files taken), kept in step with `watch_seen`.
+    seen: HashMap<String, Stamp>,
+    /// `seen` has changed since it was saved.
+    unsaved: bool,
+    /// Saving failed: journaled once, tried again at every poll.
+    save_failing: bool,
+    /// The saved list of an earlier run, compared with the first listing. `None` for a folder
+    /// never seeded, whose first listing is a baseline.
+    saved: Option<HashMap<String, Stamp>>,
 }
 
 impl Tracker {
+    /// A folder whose seen list was saved by an earlier run.
+    fn resuming(saved: Vec<SeenFile>) -> Self {
+        Self {
+            saved: Some(
+                saved
+                    .into_iter()
+                    .map(|file| (file.name, (file.size as u64, file.mtime)))
+                    .collect(),
+            ),
+            ..Self::default()
+        }
+    }
+
+    /// The seen list as stored.
+    fn seen_files(&self) -> Vec<SeenFile> {
+        self.seen
+            .iter()
+            .map(|(name, &(size, mtime))| SeenFile {
+                name: name.clone(),
+                size: size as i64,
+                mtime,
+            })
+            .collect()
+    }
+
     /// One listing of `dir` at `now`; returns the files that became complete.
     fn scan(
         &mut self,
@@ -224,19 +280,59 @@ impl Tracker {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
         if !self.started {
+            self.started = true;
+            let Some(saved) = self.saved.take() else {
+                // Only files a poll could take are worth remembering: the others are ignored
+                // again by name at the next start.
+                self.seen = entries
+                    .iter()
+                    .filter_map(|entry| {
+                        let (listed, kind) = (entry.metadata().ok()?, entry.file_type().ok()?);
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        ignored(&name, kind.is_dir(), kind.is_symlink(), attributes(&listed))
+                            .is_none()
+                            .then(|| (name, stamp(&listed)))
+                    })
+                    .collect();
+                self.unsaved = true;
+                tracing::info!(
+                    event = "watch_folder_baseline",
+                    folder_id,
+                    path = %dir.display(),
+                    files = names.len(),
+                    "watching a folder; the files already in it are left alone"
+                );
+                self.known = names;
+                return Ok(Vec::new());
+            };
+            // A file counts as seen only if it is the one that was seen: another size or time
+            // is a file that arrived (or was replaced) while the app was closed.
+            for entry in &entries {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let listed = entry.metadata().ok().map(|listed| stamp(&listed));
+                if let Some(listed) = listed
+                    && saved.get(&name) == Some(&listed)
+                {
+                    self.known.insert(name.clone());
+                    self.seen.insert(name, listed);
+                }
+            }
+            // Dropped from the list: gone from the folder, or changed.
+            self.unsaved = self.seen.len() != saved.len();
             tracing::info!(
-                event = "watch_folder_baseline",
+                event = "watch_folder_resumed",
                 folder_id,
                 path = %dir.display(),
+                known = self.known.len(),
                 files = names.len(),
-                "watching a folder; the files already in it are left alone"
+                "watching a folder; files that came while the app was closed are taken once complete"
             );
-            self.known = names;
-            self.started = true;
-            return Ok(Vec::new());
         }
         self.known.retain(|name| names.contains(name));
         self.waiting.retain(|name, _| names.contains(name));
+        let before = self.seen.len();
+        self.seen.retain(|name, _| names.contains(name));
+        self.unsaved |= self.seen.len() != before;
 
         let mut found = Vec::new();
         for entry in entries {
@@ -251,6 +347,7 @@ impl Tracker {
                 continue;
             };
             let attributes = attributes(&listed);
+            let listing = stamp(&listed);
             if !self.waiting.contains_key(&name)
                 && let Some(reason) = ignored(&name, kind.is_dir(), kind.is_symlink(), attributes)
             {
@@ -307,6 +404,7 @@ impl Tracker {
                 modified_s: modified
                     .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
                     .map_or(0, |age| age.as_secs() as i64),
+                stamp: listing,
                 waited,
                 retry,
             });
@@ -314,10 +412,13 @@ impl Tracker {
         Ok(found)
     }
 
-    /// The queue has the file (added, or already there): never taken again under this name.
-    fn taken(&mut self, name: &str) {
-        self.waiting.remove(name);
-        self.known.insert(name.to_owned());
+    /// The queue has the file (added, or already there): never taken again under this name,
+    /// not even after a restart.
+    fn taken(&mut self, file: &Found) {
+        self.waiting.remove(&file.name);
+        self.known.insert(file.name.clone());
+        self.seen.insert(file.name.clone(), file.stamp);
+        self.unsaved = true;
     }
 
     /// The queue refused the file (database busy, destination gone): tried at the next poll.
@@ -414,7 +515,24 @@ impl Engine {
             self.active = Some(true);
         }
         for folder in &watched {
-            let tracker = self.trackers.entry(folder.id).or_default();
+            if !self.trackers.contains_key(&folder.id) {
+                // A folder seeded by an earlier run is compared with its saved list; a read
+                // that fails leaves the folder to the next poll rather than baselining blind.
+                let saved = self.queue.with_store(|store| store.watch_seen(folder.id));
+                match saved {
+                    Ok(saved) => {
+                        let tracker = saved.map_or_else(Tracker::default, Tracker::resuming);
+                        self.trackers.insert(folder.id, tracker);
+                    }
+                    Err(error) => {
+                        tracing::error!(event = "queue_error", error_code = error.code(), error = %error, "could not read the files already seen in a watched folder");
+                        continue;
+                    }
+                }
+            }
+            let Some(tracker) = self.trackers.get_mut(&folder.id) else {
+                continue;
+            };
             match tracker.scan(folder.id, Path::new(&folder.path), now, stable) {
                 Ok(found) => {
                     if tracker.failing {
@@ -427,13 +545,13 @@ impl Engine {
                         );
                     }
                     for file in found {
-                        let name = file.name.clone();
-                        if queue_file(&self.queue, folder, file) {
-                            tracker.taken(&name);
+                        if queue_file(&self.queue, folder, &file) {
+                            tracker.taken(&file);
                         } else {
-                            tracker.refused(&name);
+                            tracker.refused(&file.name);
                         }
                     }
+                    save_seen(&self.queue, folder, tracker);
                 }
                 Err(error) => {
                     if !tracker.failing {
@@ -454,8 +572,27 @@ impl Engine {
     }
 }
 
+/// Saves the seen list when it changed. A failure is journaled once and retried at every poll.
+fn save_seen(queue: &Orchestrator, folder: &WatchFolder, tracker: &mut Tracker) {
+    if !tracker.unsaved {
+        return;
+    }
+    let files = tracker.seen_files();
+    match queue.with_store(|store| store.save_watch_seen(folder.id, &files)) {
+        Ok(_) => {
+            tracker.unsaved = false;
+            tracker.save_failing = false;
+        }
+        Err(error) if !tracker.save_failing => {
+            tracker.save_failing = true;
+            tracing::error!(event = "queue_error", folder_id = folder.id, error_code = error.code(), error = %error, "could not save the files already seen in a watched folder, tried again at the next poll");
+        }
+        Err(_) => {}
+    }
+}
+
 /// Whether the queue has the file now (added, or already there).
-fn queue_file(queue: &Orchestrator, folder: &WatchFolder, file: Found) -> bool {
+fn queue_file(queue: &Orchestrator, folder: &WatchFolder, file: &Found) -> bool {
     let Some(destination_id) = folder.destination_id else {
         return false;
     };

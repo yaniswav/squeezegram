@@ -242,6 +242,17 @@ pub struct WatchFolderPatch {
     pub send_mode: Option<Option<SendMode>>,
 }
 
+/// A file of a watched folder the watcher has dealt with (`watch_seen`, schema v7): left alone
+/// when the folder was first listed, or taken. Size and time are those of the directory
+/// listing, so the same file lists the same at the next start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeenFile {
+    pub name: String,
+    pub size: i64,
+    /// Modification time in seconds since the Unix epoch, as `items.source_mtime`.
+    pub mtime: i64,
+}
+
 const WATCH_FOLDER_COLUMNS: &str = "id, path, destination_id, enabled, send_mode";
 
 fn watch_folder_from_row(row: &Row<'_>) -> rusqlite::Result<WatchFolder> {
@@ -1390,6 +1401,14 @@ impl Store {
                 "UPDATE watch_folders SET enabled = ?1 WHERE id = ?2",
                 params![enabled, id],
             )?;
+            if !enabled {
+                // Enabled again, the folder starts over: what came meanwhile is left alone.
+                tx.execute(
+                    "UPDATE watch_folders SET seeded = 0 WHERE id = ?1",
+                    params![id],
+                )?;
+                tx.execute("DELETE FROM watch_seen WHERE folder_id = ?1", params![id])?;
+            }
         }
         if let Some(destination_id) = patch.destination_id {
             destination_exists(&tx, destination_id)?;
@@ -1406,6 +1425,58 @@ impl Store {
         }
         tx.commit()?;
         self.get_watch_folder(id)
+    }
+
+    /// The files the watcher dealt with in this folder, or `None` while the folder has not been
+    /// seeded yet (never listed, or disabled since): its first listing is then a baseline.
+    pub fn watch_seen(&self, folder_id: i64) -> Result<Option<Vec<SeenFile>>> {
+        let seeded: Option<bool> = self
+            .conn
+            .query_row(
+                "SELECT seeded FROM watch_folders WHERE id = ?1",
+                [folder_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if seeded != Some(true) {
+            return Ok(None);
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, size, mtime FROM watch_seen WHERE folder_id = ?1")?;
+        let rows = stmt.query_map([folder_id], |row| {
+            Ok(SeenFile {
+                name: row.get(0)?,
+                size: row.get(1)?,
+                mtime: row.get(2)?,
+            })
+        })?;
+        Ok(Some(rows.collect::<rusqlite::Result<_>>()?))
+    }
+
+    /// Replaces the folder's seen files with `files` and marks it seeded. Returns `false`,
+    /// writing nothing, when the folder was removed or disabled since the watcher listed it:
+    /// a disabled folder starts over, so stale rows must not outlive that.
+    pub fn save_watch_seen(&mut self, folder_id: i64, files: &[SeenFile]) -> Result<bool> {
+        let tx = self.conn.transaction()?;
+        let updated = tx.execute(
+            "UPDATE watch_folders SET seeded = 1 WHERE id = ?1 AND enabled = 1",
+            [folder_id],
+        )?;
+        if updated == 0 {
+            return Ok(false);
+        }
+        tx.execute("DELETE FROM watch_seen WHERE folder_id = ?1", [folder_id])?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO watch_seen (folder_id, name, size, mtime) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for file in files {
+                insert.execute(params![folder_id, file.name, file.size, file.mtime])?;
+            }
+        }
+        tx.commit()?;
+        Ok(true)
     }
 
     /// Stops watching; the items already found stay in the queue.
@@ -2459,6 +2530,55 @@ mod tests {
             store.update_watch_folder(folder.id, &WatchFolderPatch::default()),
             Err(QueueError::WatchFolderNotFound(_))
         ));
+    }
+
+    #[test]
+    fn seen_files_are_replaced_as_a_whole_and_forgotten_with_the_folder_state() {
+        let mut store = memory_store();
+        let destination_id = first_destination(&store);
+        let folder = store
+            .add_watch_folder(r"C:\In", destination_id, None)
+            .unwrap();
+        let file = |name: &str, size| SeenFile {
+            name: name.into(),
+            size,
+            mtime: 7,
+        };
+        assert_eq!(store.watch_seen(folder.id).unwrap(), None, "not seeded yet");
+
+        // An empty folder is seeded too: it is not the same as "never listed".
+        assert!(store.save_watch_seen(folder.id, &[]).unwrap());
+        assert_eq!(store.watch_seen(folder.id).unwrap(), Some(vec![]));
+
+        let files = [file("a.mp4", 1), file("b.mp4", 2)];
+        assert!(store.save_watch_seen(folder.id, &files).unwrap());
+        assert!(
+            store
+                .save_watch_seen(folder.id, &[file("b.mp4", 3)])
+                .unwrap()
+        );
+        assert_eq!(
+            store.watch_seen(folder.id).unwrap(),
+            Some(vec![file("b.mp4", 3)]),
+            "replaced, not merged"
+        );
+
+        // Disabled: the folder starts over, and a listing that was already under way cannot
+        // bring the old rows back.
+        let patch: WatchFolderPatch = serde_json::from_str(r#"{"enabled": false}"#).unwrap();
+        store.update_watch_folder(folder.id, &patch).unwrap();
+        assert_eq!(store.watch_seen(folder.id).unwrap(), None);
+        assert!(!store.save_watch_seen(folder.id, &files).unwrap());
+        assert_eq!(store.watch_seen(folder.id).unwrap(), None);
+
+        // Another folder is not touched.
+        let other = store
+            .add_watch_folder(r"C:\Other", destination_id, None)
+            .unwrap();
+        store.save_watch_seen(other.id, &files).unwrap();
+        store.update_watch_folder(folder.id, &patch).unwrap();
+        assert_eq!(store.watch_seen(other.id).unwrap().unwrap().len(), 2);
+        assert!(!store.save_watch_seen(999, &files).unwrap());
     }
 
     #[test]
