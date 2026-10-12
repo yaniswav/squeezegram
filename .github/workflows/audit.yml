@@ -47,6 +47,7 @@ jobs:
           node-version-file: .node-version
 
       # Audits the lockfile against the registry advisory database.
-      # Fails on any known vulnerability.
+      # Fails on any known vulnerability in what ships (--prod): the dev tools
+      # never reach the app, so their advisories must not block a release.
       - name: Audit JavaScript dependencies
-        run: pnpm audit
+        run: pnpm audit --prod

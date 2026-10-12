@@ -55,7 +55,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
-          toolchain: stable
+          toolchain: 1.99.0
           components: clippy, rustfmt
 
       # Restore only: a build that saw the release secrets never writes a cache.
