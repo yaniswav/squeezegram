@@ -639,6 +639,75 @@ async fn flood_wait_waits_then_resumes() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn pause_during_a_flood_wait_puts_the_item_back_and_resuming_honours_the_wait() {
+    let h = Harness::new("orch-pause-flood", Treatment::Encode);
+    h.send_steps(&[SendStep::FloodWait(7200), SendStep::Sent]);
+    let id = h.add("a.mp4");
+    h.orch.start();
+    h.wait_state(id, WaitingServer).await;
+    let waiting = h.item(id);
+    let due = waiting.next_run_at.clone().unwrap();
+
+    h.orch.pause();
+    h.wait_state(id, Encoded).await;
+    let parked = h.item(id);
+    assert_eq!(parked.next_run_at.as_deref(), Some(due.as_str()));
+    assert_eq!(parked.last_error.as_deref(), Some("TG_FLOOD_WAIT"));
+    assert_eq!(parked.progress_phase, None);
+
+    // Two hours pass while paused: nothing is sent.
+    h.idle(7300).await;
+    assert_eq!(h.item(id).state, Encoded);
+    assert_eq!(h.send.calls_for(id).len(), 1);
+
+    // Resumed after the wait is over: the upload goes at once.
+    h.orch.start();
+    h.wait_state(id, Sent).await;
+    assert_eq!(h.send.calls_for(id).len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn resuming_after_a_pause_in_a_flood_wait_waits_for_what_remains() {
+    let h = Harness::new("orch-pause-flood-remaining", Treatment::Encode);
+    h.send_steps(&[SendStep::FloodWait(600), SendStep::Sent]);
+    let id = h.add("a.mp4");
+    h.orch.start();
+    h.wait_state(id, WaitingServer).await;
+    h.orch.pause();
+    h.wait_state(id, Encoded).await;
+
+    h.idle(100).await;
+    h.orch.start();
+    h.idle(300).await;
+    assert_eq!(h.item(id).state, Encoded, "400 s into a 600 s wait");
+    assert_eq!(h.send.calls_for(id).len(), 1);
+
+    h.wait_state(id, Sent).await;
+    let calls = h.send.calls_for(id);
+    assert!(
+        calls[1] - calls[0] >= Duration::from_secs(599),
+        "{:?}",
+        calls[1] - calls[0]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn pause_requested_during_the_upload_that_ends_in_a_flood_wait() {
+    let h = Harness::new("orch-pause-then-flood", Treatment::Encode);
+    h.send_steps(&[SendStep::FloodWait(3600), SendStep::Sent]);
+    let id = h.add("a.mp4");
+    h.orch.start();
+    h.send.entered.notified().await;
+    // Paused while the upload runs; it then ends in a FLOOD_WAIT.
+    h.orch.pause();
+    h.wait_state(id, Encoded).await;
+    assert_eq!(h.send.calls_for(id).len(), 1);
+    assert!(h.item(id).next_run_at.is_some());
+    h.idle(4000).await;
+    assert_eq!(h.send.calls_for(id).len(), 1, "paused: nothing is sent");
+}
+
+#[tokio::test(start_paused = true)]
 async fn cancel_during_encoding() {
     let h = Harness::new("orch-cancel-encode", Treatment::Encode);
     h.encode_steps(&[MediaStep::WaitCancel]);

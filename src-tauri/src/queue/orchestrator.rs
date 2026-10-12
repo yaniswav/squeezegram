@@ -536,7 +536,8 @@ impl Orchestrator {
         self.inner.wake.notify_one();
     }
 
-    /// Takes effect after the current item.
+    /// Takes effect after the current item; an item only waiting for the server (FLOOD_WAIT)
+    /// is put back to `encoded` at once.
     pub fn pause(&self) {
         self.set_running(false);
     }
@@ -1194,8 +1195,10 @@ impl Orchestrator {
         }
         loop {
             let item = self.get(id)?;
-            if !self.wait_before_upload(&item, *last_sent, cancel).await {
-                return self.finish_cancelled(id);
+            match self.wait_before_upload(&item, *last_sent, cancel).await {
+                Wait::Done => {}
+                Wait::Cancelled => return self.finish_cancelled(id),
+                Wait::Paused => return self.park_paused(&item),
             }
             self.change(
                 id,
@@ -1323,13 +1326,38 @@ impl Orchestrator {
         Ok(true)
     }
 
-    /// Waits for `next_run_at` and for the pause between sends. False if cancelled.
+    /// The queue was paused while the item waited for the server: it goes back to `encoded`
+    /// with its `next_run_at` (and the FLOOD_WAIT that explains it) untouched, so the loop
+    /// does not sit on it for the rest of a wait that may last hours, and resuming honours
+    /// whatever remains of the wait.
+    fn park_paused(&self, item: &Item) -> Result<()> {
+        tracing::info!(
+            event = "upload_wait_paused",
+            next_run_at = item.next_run_at.as_deref().unwrap_or(""),
+            "queue paused during the wait; item put back, its schedule kept"
+        );
+        if item.state == State::WaitingServer {
+            self.change(
+                item.id,
+                State::Encoded,
+                Changes::new()
+                    .clear(Column::ProgressPhase)
+                    .reason("paused_during_wait"),
+            )?;
+            self.emit_changed(&[item.id]);
+        }
+        Ok(())
+    }
+
+    /// Waits for `next_run_at` and for the pause between sends. A wait for the server also
+    /// ends when the queue is paused (the short pause between sends does not: pausing takes
+    /// effect after the current item).
     async fn wait_before_upload(
         &self,
         item: &Item,
         last_sent: Option<Instant>,
         cancel: &CancellationToken,
-    ) -> bool {
+    ) -> Wait {
         let server_wait = item
             .next_run_at
             .as_deref()
@@ -1361,16 +1389,33 @@ impl Orchestrator {
             );
         }
         if cancel.is_cancelled() {
-            return false;
+            return Wait::Cancelled;
         }
         if wait.is_zero() {
-            return true;
+            return Wait::Done;
         }
+        let mut running = self.inner.running.subscribe();
         tokio::select! {
-            _ = tokio::time::sleep(wait) => !cancel.is_cancelled(),
-            _ = cancel.cancelled() => false,
+            _ = tokio::time::sleep(wait) => {
+                if cancel.is_cancelled() { Wait::Cancelled } else { Wait::Done }
+            }
+            _ = cancel.cancelled() => Wait::Cancelled,
+            _ = queue_paused(&mut running), if !server_wait.is_zero() => Wait::Paused,
         }
     }
+}
+
+/// How `wait_before_upload` ended.
+enum Wait {
+    Done,
+    Cancelled,
+    Paused,
+}
+
+/// Completes when the queue is (or becomes) paused.
+async fn queue_paused(running: &mut watch::Receiver<bool>) {
+    // An error means the sender is gone, which cannot happen while the orchestrator lives.
+    let _ = running.wait_for(|running| !*running).await;
 }
 
 /// Sleeps for `duration`, or forever without one (a `select!` branch that never fires).
