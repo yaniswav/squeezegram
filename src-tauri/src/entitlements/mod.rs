@@ -26,7 +26,8 @@ pub const PURCHASE_URL: &str = "https://t.me/squeezegram_bot";
 pub enum Feature {
     /// Maximum resolution and audio bitrate of an encode (`settings.advanced_encoding`).
     AdvancedEncoding,
-    /// Declared, not wired to anything yet.
+    /// More than one destination (chats or forum topics) for one `queue_add`: one item per file
+    /// and destination, one encode per file. Refused in `commands::add_files` without it.
     MultiDestination,
     /// Declared, not wired to anything yet.
     WatchedFolder,

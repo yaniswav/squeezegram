@@ -90,7 +90,7 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
     try {
       const created = await queueAdd(
         paths,
-        Number(chosen),
+        [Number(chosen)],
         mode === "default" ? undefined : mode,
         caption.trim() === "" ? undefined : caption,
       )

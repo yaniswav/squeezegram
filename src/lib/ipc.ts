@@ -1144,15 +1144,19 @@ const sentCandidateDecoder = d.object<SentCandidate>({
 
 // --- commands (argument names: Tauri maps camelCase keys to the snake_case Rust parameters) ---
 
+/**
+ * One item per file and destination. More than one destination needs the `multi_destination`
+ * feature: without it the core refuses with `FEATURE_NOT_LICENSED` and queues nothing.
+ */
 export function queueAdd(
   paths: string[],
-  destinationId: number,
+  destinationIds: number[],
   sendMode?: SendMode,
   caption?: string,
 ): Promise<number[]> {
   return call("queue_add", d.array(d.number), {
     paths,
-    destinationId,
+    destinationIds,
     sendMode,
     caption,
   })

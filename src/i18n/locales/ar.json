@@ -97,7 +97,8 @@
     "LIC_UNKNOWN_KID": "وُقّع هذا الترخيص بمفتاح لا يعرفه هذا الإصدار من squeezegram. حدّث التطبيق ثم حاول مجددًا.",
     "LIC_BAD_SIGNATURE": "لم يجتز هذا الترخيص فحص توقيعه. انسخه من رسالة البوت مجددًا دون أي تغيير.",
     "LIC_WRONG_ACCOUNT": "هذا الترخيص يخص حساب Telegram آخر. سجّل الدخول بالحساب الذي اشتُري الترخيص له.",
-    "LIC_NO_ACCOUNT": "سجّل الدخول إلى Telegram للتحقق من هذا الترخيص."
+    "LIC_NO_ACCOUNT": "سجّل الدخول إلى Telegram للتحقق من هذا الترخيص.",
+    "FEATURE_NOT_LICENSED": "This feature is included with squeezegram Premium. Add a license in Settings, then try again."
   },
   "sidecars": {
     "missingTitle": "يحتاج ffmpeg لضغط مقاطع الفيديو",

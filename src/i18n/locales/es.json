@@ -94,7 +94,8 @@
     "LIC_UNKNOWN_KID": "Esta licencia está firmada con una clave que esta versión de squeezegram no reconoce. Actualice la aplicación e inténtelo de nuevo.",
     "LIC_BAD_SIGNATURE": "La licencia no superó la comprobación de firma. Cópiela de nuevo desde el mensaje del bot, sin modificarla.",
     "LIC_WRONG_ACCOUNT": "Esta licencia pertenece a otra cuenta de Telegram. Inicie sesión con la cuenta para la que se compró.",
-    "LIC_NO_ACCOUNT": "Inicie sesión en Telegram para comprobar esta licencia."
+    "LIC_NO_ACCOUNT": "Inicie sesión en Telegram para comprobar esta licencia.",
+    "FEATURE_NOT_LICENSED": "This feature is included with squeezegram Premium. Add a license in Settings, then try again."
   },
   "sidecars": {
     "missingTitle": "Se necesita ffmpeg para comprimir vídeos",

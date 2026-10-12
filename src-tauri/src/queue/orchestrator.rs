@@ -298,11 +298,21 @@ impl Orchestrator {
 
     pub fn add(&self, items: &[NewItem]) -> Result<Vec<i64>> {
         let ids = self.with_store(|store| store.add_items(items))?;
-        let added = json!({ "item_ids": ids }).to_string();
+        let mut destinations: Vec<i64> = Vec::new();
+        for item in items {
+            if !destinations.contains(&item.destination_id) {
+                destinations.push(item.destination_id);
+            }
+        }
+        let added = json!({ "item_ids": ids, "destination_ids": destinations }).to_string();
         tracing::info!(
             event = "items_added",
             count = ids.len(),
-            destination_id = items.first().map(|item| item.destination_id),
+            // The top-level key names one destination; a batch for several lists them.
+            destination_id = match destinations[..] {
+                [single] => Some(single),
+                _ => None,
+            },
             json = added.as_str(),
             "items added to the queue"
         );

@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::entitlements::store::StoreError;
-use crate::entitlements::{self, EntitlementStatus, Entitlements, LicenseEntitlements};
+use crate::entitlements::{self, EntitlementStatus, Entitlements, Feature, LicenseEntitlements};
 use crate::limit::{EffectiveLimit, LimitResolver};
 use crate::logging::{self, export, frontend};
 use crate::media::stage::{FfmpegStage, GpuFailure};
@@ -78,6 +78,14 @@ impl CommandError {
         Self {
             code: "IO_ERROR",
             params: json!({}),
+        }
+    }
+
+    /// A paid feature the license in effect does not grant (`{ feature }`, its license name).
+    fn not_licensed(feature: Feature) -> Self {
+        Self {
+            code: "FEATURE_NOT_LICENSED",
+            params: json!({ "feature": feature.as_str() }),
         }
     }
 }
@@ -337,49 +345,94 @@ fn source_file(path: &str) -> Result<(i64, i64), QueueError> {
 // --- queue ---
 
 /// Files and folders (walked recursively, non-media files skipped with a `FILES_SKIPPED`
-/// alert per folder). All or nothing: an unreadable path refuses the whole call.
+/// alert per folder), for each of `destination_ids`. All or nothing: an unreadable path or an
+/// unknown destination refuses the whole call. More than one destination is a paid feature.
 #[tauri::command]
 pub fn queue_add(
     state: State<'_, AppState>,
     paths: Vec<String>,
-    destination_id: i64,
+    destination_ids: Vec<i64>,
     send_mode: Option<SendMode>,
     caption: Option<String>,
 ) -> CommandResult<Vec<i64>> {
-    let call = Call::new("queue_add")
-        .destination(destination_id)
+    add_files(
+        &state.queue,
+        state.entitlements.as_ref(),
+        &paths,
+        &destination_ids,
+        send_mode,
+        caption.as_deref(),
+    )
+}
+
+/// Body of `queue_add`, testable without a window. One item per file and destination, file
+/// by file: the items of one file follow each other, so its encoded file serves every
+/// destination in turn (`Store::reusable_output`) and is deleted early. Without a mode, each
+/// destination uses its own default.
+///
+/// The license is asked here, in the core: a page that offers more than one destination
+/// without `Feature::MultiDestination` gets `FEATURE_NOT_LICENSED` and nothing is queued.
+pub(crate) fn add_files(
+    queue: &Orchestrator,
+    entitlements: &dyn Entitlements,
+    paths: &[String],
+    destination_ids: &[i64],
+    send_mode: Option<SendMode>,
+    caption: Option<&str>,
+) -> CommandResult<Vec<i64>> {
+    let mut destinations: Vec<i64> = Vec::with_capacity(destination_ids.len());
+    for &id in destination_ids {
+        if !destinations.contains(&id) {
+            destinations.push(id);
+        }
+    }
+    let mut call = Call::new("queue_add")
         .arg("paths", paths.len())
+        .arg("destinations", destinations.len())
         .arg("send_mode", send_mode.map(SendMode::as_str))
-        .arg(
-            "has_caption",
-            caption.as_deref().is_some_and(|c| !c.is_empty()),
-        );
+        .arg("has_caption", caption.is_some_and(|c| !c.is_empty()));
+    match destinations[..] {
+        [id] => call = call.destination(id),
+        _ => call = call.arg("destination_ids", destinations.clone()),
+    }
     let result = (|| -> CommandResult<Vec<i64>> {
-        let mode = match send_mode {
-            Some(mode) => mode,
-            None => {
-                state
-                    .queue
-                    .with_store(|store| store.get_destination(destination_id))?
-                    .default_mode
-            }
-        };
-        let expanded = intake::expand(&paths)?;
-        let mut items = Vec::with_capacity(expanded.files.len());
+        if destinations.len() > 1 && !entitlements.allows(Feature::MultiDestination) {
+            return Err(CommandError::not_licensed(Feature::MultiDestination));
+        }
+        if destinations.is_empty() {
+            // Nothing to queue the files for: the page always sends one.
+            return Err(QueueError::DestinationNotFound(0).into());
+        }
+        let mut targets = Vec::with_capacity(destinations.len());
+        for &destination_id in &destinations {
+            let mode = match send_mode {
+                Some(mode) => mode,
+                None => {
+                    queue
+                        .with_store(|store| store.get_destination(destination_id))?
+                        .default_mode
+                }
+            };
+            targets.push((destination_id, mode));
+        }
+        let expanded = intake::expand(paths)?;
+        let mut items = Vec::with_capacity(expanded.files.len() * targets.len());
         for path in expanded.files {
             let (size, mtime) = source_file(&path)?;
-            items.push(NewItem {
-                source_path: path,
-                source_size: size,
-                source_mtime: mtime,
-                destination_id,
-                send_mode: mode,
-                caption: caption.clone().unwrap_or_default(),
-            });
+            for &(destination_id, mode) in &targets {
+                items.push(NewItem {
+                    source_path: path.clone(),
+                    source_size: size,
+                    source_mtime: mtime,
+                    destination_id,
+                    send_mode: mode,
+                    caption: caption.unwrap_or_default().to_owned(),
+                });
+            }
         }
-        let ids = state.queue.add(&items)?;
+        let ids = queue.add(&items)?;
         for skipped in expanded.skipped {
-            state.queue.alert(
+            queue.alert(
                 None,
                 "FILES_SKIPPED",
                 json!({ "path": skipped.folder, "count": skipped.count }),
@@ -1009,5 +1062,127 @@ mod tests {
         assert!(!value.to_string().contains("4242") && !value.to_string().contains("SECRET"));
         let plain = settings_for_report(&Settings::default());
         assert!(plain["telegram"]["api_override"].is_null());
+    }
+
+    use crate::entitlements::{EntitlementSource, FreeOnly, Plan};
+    use crate::queue::events::recorder::Recorder;
+    use crate::queue::orchestrator::{PauseRange, Unavailable};
+    use crate::queue::test_util::{TestDir, destination, first_destination, memory_store};
+    use std::time::Duration;
+
+    /// A license that grants every feature.
+    struct Licensed;
+
+    impl Entitlements for Licensed {
+        fn allows(&self, _feature: Feature) -> bool {
+            true
+        }
+
+        fn status(&self) -> EntitlementStatus {
+            EntitlementStatus {
+                plan: Plan::Lifetime,
+                source: EntitlementSource::License,
+                features: Feature::ALL.to_vec(),
+                account_matches: Some(true),
+                reason: None,
+            }
+        }
+    }
+
+    /// A queue whose loop never runs: added items stay `ready`.
+    fn idle_queue() -> Orchestrator {
+        Orchestrator::new(
+            memory_store(),
+            Arc::new(Unavailable),
+            Arc::new(Unavailable),
+            Arc::new(Recorder::default()),
+            PauseRange {
+                min: Duration::ZERO,
+                max: Duration::ZERO,
+            },
+        )
+    }
+
+    #[test]
+    fn several_destinations_need_the_license_and_are_queued_file_by_file() {
+        let dir = TestDir::new("commands-multi");
+        let paths = [dir.file("a.mp4", b"a"), dir.file("b.mp4", b"bb")];
+        let queue = idle_queue();
+        let (chat, topic) = queue
+            .with_store(|store| {
+                let topic = store.upsert_destination(&destination(77, 4))?;
+                let patch = DestinationPatch {
+                    default_mode: Some(SendMode::Document),
+                    ..Default::default()
+                };
+                store.update_destination(topic, &patch)?;
+                Ok((first_destination(store), topic))
+            })
+            .unwrap();
+
+        let refused = add_files(&queue, &FreeOnly, &paths, &[chat, topic], None, None).unwrap_err();
+        assert_eq!(refused.code, "FEATURE_NOT_LICENSED");
+        assert_eq!(refused.params, json!({ "feature": "multi_destination" }));
+        assert!(queue.list().unwrap().is_empty(), "nothing queued");
+        // The same destination twice is one destination: no license needed.
+        let single = add_files(&queue, &FreeOnly, &paths[..1], &[chat, chat], None, None).unwrap();
+        assert_eq!(single.len(), 1);
+        queue.clear(ClearScope::All).unwrap();
+
+        let ids = add_files(&queue, &Licensed, &paths, &[chat, topic], None, Some("hi")).unwrap();
+        let items = queue.list().unwrap();
+        assert_eq!(items.iter().map(|item| item.id).collect::<Vec<_>>(), ids);
+        let queued: Vec<(&str, i64, SendMode, &str)> = items
+            .iter()
+            .map(|item| {
+                let name = item.source_path.rsplit(['\\', '/']).next().unwrap();
+                (
+                    name,
+                    item.destination_id,
+                    item.send_mode,
+                    item.caption.as_str(),
+                )
+            })
+            .collect();
+        // File by file, each destination with its own default mode.
+        assert_eq!(
+            queued,
+            [
+                ("a.mp4", chat, SendMode::Video, "hi"),
+                ("a.mp4", topic, SendMode::Document, "hi"),
+                ("b.mp4", chat, SendMode::Video, "hi"),
+                ("b.mp4", topic, SendMode::Document, "hi"),
+            ]
+        );
+        assert!(items.iter().all(|item| item.state == ItemState::Ready));
+
+        // A mode chosen for the batch applies to every destination.
+        let ids = add_files(
+            &queue,
+            &Licensed,
+            &paths[..1],
+            &[chat, topic],
+            Some(SendMode::Video),
+            None,
+        )
+        .unwrap();
+        let modes: Vec<SendMode> = ids
+            .iter()
+            .map(|&id| {
+                queue
+                    .with_store(|store| store.get_item(id))
+                    .unwrap()
+                    .send_mode
+            })
+            .collect();
+        assert_eq!(modes, [SendMode::Video, SendMode::Video]);
+
+        // An unknown destination refuses the whole call.
+        let before = queue.list().unwrap().len();
+        let unknown = add_files(&queue, &Licensed, &paths, &[chat, 404], None, None).unwrap_err();
+        assert_eq!(unknown.code, "DESTINATION_NOT_FOUND");
+        assert_eq!(queue.list().unwrap().len(), before);
+        let none = add_files(&queue, &Licensed, &paths, &[], None, None).unwrap_err();
+        assert_eq!(none.code, "DESTINATION_NOT_FOUND");
     }
 }
