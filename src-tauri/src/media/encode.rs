@@ -817,15 +817,23 @@ pub async fn strip(job: &Job<'_>) -> Result<Produced> {
 /// kept (all audio tracks, subtitles) and the chapters too (titles the author wrote, not
 /// where or with what the video was shot). Gone: the file's metadata (location, make, model),
 /// each stream's (creation time, a handler name a camera may fill with its model) and the
-/// data tracks, where action cameras record their GPS telemetry. The cost: a track's language
-/// label goes with its metadata.
+/// data tracks, where action cameras record their GPS telemetry. Each track's language is not
+/// private and is written back from the probe (`Plan::stream_languages`, codes checked there);
+/// titles are not, being free text.
 fn strip_video_args(job: &Job<'_>, part: &Path) -> Args {
-    common_start()
+    let mut args = common_start()
         .arg("-i")
         .arg(job.input)
         .all(&["-map", "0", "-map", "-0:d", "-ignore_unknown", "-c", "copy"])
-        .all(&["-map_metadata", "-1", "-map_metadata:s", "-1"])
-        .all(&["-movflags", "+faststart", "-f", "mp4"])
+        .all(&["-map_metadata", "-1", "-map_metadata:s", "-1"]);
+    for (index, language) in job.plan.stream_languages.iter().enumerate() {
+        if let Some(language) = language {
+            args = args
+                .arg(format!("-metadata:s:{index}"))
+                .arg(format!("language={language}"));
+        }
+    }
+    args.all(&["-movflags", "+faststart", "-f", "mp4"])
         .arg(part)
 }
 
@@ -1246,6 +1254,7 @@ mod tests {
         Plan {
             limit_bytes: limit,
             target_bytes: target,
+            stream_languages: Vec::new(),
             video_codec: codec,
             audio_kbps: None,
             audio_index: None,
@@ -1466,6 +1475,7 @@ mod tests {
             video_codec: VideoCodec::H264,
             preset: EncodePreset::Balanced,
             target_bytes: None,
+            stream_languages: Vec::new(),
         }
     }
 

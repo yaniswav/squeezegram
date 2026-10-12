@@ -1029,7 +1029,8 @@ async fn a_compliant_mp4_with_a_location_keeps_every_stream_and_loses_its_metada
     let Some(mut env) = Env::new(50) else { return };
     let subtitles = env.path("lines.srt");
     std::fs::write(&subtitles, "1\n00:00:00,000 --> 00:00:01,000\nhello\n").unwrap();
-    // Two audio tracks, a subtitle track, a location and a camera serial in a stream tag.
+    // Two audio tracks and a subtitle track with their languages, a location and a camera
+    // serial in a stream tag.
     let src = env.path("walk.mp4");
     let encoder = h264_encoder(&env.ffmpeg);
     generate(
@@ -1071,6 +1072,12 @@ async fn a_compliant_mp4_with_a_location_keeps_every_stream_and_loses_its_metada
             "location=+48.8584+002.2945/",
             "-metadata:s:v",
             "handler_name=FAKE-CAMERA-SN-0042",
+            "-metadata:s:a:0",
+            "language=eng",
+            "-metadata:s:a:1",
+            "language=fra",
+            "-metadata:s:s:0",
+            "language=deu",
             "-movflags",
             "+faststart",
             src.to_str().unwrap(),
@@ -1092,12 +1099,18 @@ async fn a_compliant_mp4_with_a_location_keeps_every_stream_and_loses_its_metada
     assert_eq!(
         stream_kinds(&env.ffmpeg, &output),
         stream_kinds(&env.ffmpeg, &src),
-        "every stream kept"
+        "every stream kept, with its language"
     );
-    assert_eq!(
-        stream_kinds(&env.ffmpeg, &output),
-        ["video", "audio", "audio", "subtitle"]
-    );
+    let kept: Vec<(String, String)> = [
+        ("video", "und"),
+        ("audio", "eng"),
+        ("audio", "fra"),
+        ("subtitle", "deu"),
+    ]
+    .iter()
+    .map(|(kind, language)| ((*kind).to_owned(), (*language).to_owned()))
+    .collect();
+    assert_eq!(stream_kinds(&env.ffmpeg, &output), kept);
     assert!(!env.ffprobe(&output).await.private_tags, "no location left");
     let data = std::fs::read(&output).unwrap();
     for secret in [b"48.8584".as_slice(), b"FAKE-CAMERA-SN-0042"] {
@@ -1113,8 +1126,8 @@ async fn a_compliant_mp4_with_a_location_keeps_every_stream_and_loses_its_metada
     assert_eq!(probe.unwrap().treatment, Treatment::Skip);
 }
 
-/// `codec_type` of every stream, in order.
-fn stream_kinds(ffmpeg: &Path, path: &Path) -> Vec<String> {
+/// `codec_type` and language of every stream, in order.
+fn stream_kinds(ffmpeg: &Path, path: &Path) -> Vec<(String, String)> {
     let out = std::process::Command::new(ffmpeg.join("ffprobe.exe"))
         .args(["-v", "error", "-show_streams", "-of", "json"])
         .arg(path)
@@ -1125,6 +1138,14 @@ fn stream_kinds(ffmpeg: &Path, path: &Path) -> Vec<String> {
         .as_array()
         .unwrap()
         .iter()
-        .map(|stream| stream["codec_type"].as_str().unwrap().to_owned())
+        .map(|stream| {
+            (
+                stream["codec_type"].as_str().unwrap().to_owned(),
+                stream["tags"]["language"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        })
         .collect()
 }

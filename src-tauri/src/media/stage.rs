@@ -161,6 +161,7 @@ fn with_privacy(
     let private = plan::PrivateData {
         image: plan.kind == Kind::Skip && strippable_image(source, item.source_size),
         video_tags: info.is_some_and(|info| info.private_tags),
+        languages: info.map(plan::copied_languages).unwrap_or_default(),
     };
     plan::without_private_data(plan, source, private)
 }
@@ -1194,6 +1195,7 @@ mod tests {
             video_codec: VideoCodec::H264,
             preset: plan::EncodePreset::Balanced,
             target_bytes: None,
+            stream_languages: Vec::new(),
         }
     }
 

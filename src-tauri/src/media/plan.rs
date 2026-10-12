@@ -242,6 +242,10 @@ pub struct Plan {
     /// Size the user asked for, below `limit_bytes`; `None`: the encode fills the limit.
     #[serde(default)]
     pub target_bytes: Option<u64>,
+    /// `PRIVATE_TAGS` copy: the language of each stream it writes, in output order (`None`:
+    /// none to give back).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stream_languages: Vec<Option<String>>,
 }
 
 impl Plan {
@@ -325,6 +329,7 @@ fn empty_plan(kind: Kind, input: &PlanInput<'_>, ext: &str) -> Plan {
         video_codec: VideoCodec::default(),
         preset: EncodePreset::default(),
         target_bytes: None,
+        stream_languages: Vec::new(),
     }
 }
 
@@ -447,12 +452,29 @@ fn plan_photo(video: &VideoInfo, input: &PlanInput<'_>) -> Result<Plan, PlanErro
 
 /// What a file the plan sends as it is (`Skip`) holds that "Remove location and camera data"
 /// takes out; the stage finds it (first bytes, ffprobe tags), the plan stays free of I/O.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PrivateData {
     /// A JPEG, PNG or WebP (`metadata::sniff`), small enough to be read whole.
     pub image: bool,
     /// The file names a place or a camera, or carries a data track (`MediaInfo::private_tags`).
     pub video_tags: bool,
+    /// The language of each stream the copy keeps (`copied_languages`).
+    pub languages: Vec<Option<String>>,
+}
+
+/// The streams the `PRIVATE_TAGS` copy writes (`encode::strip_video_args`: data tracks and
+/// streams of an unknown kind are left out), each with its language, in output order.
+pub fn copied_languages(info: &MediaInfo) -> Vec<Option<String>> {
+    info.streams
+        .iter()
+        .filter(|stream| {
+            matches!(
+                stream.kind.as_str(),
+                "video" | "audio" | "subtitle" | "attachment"
+            )
+        })
+        .map(|stream| stream.language.clone())
+        .collect()
 }
 
 /// `Plan::note` of a video sent as it is but for its metadata (`encode::strip`).
@@ -478,6 +500,7 @@ pub fn without_private_data(mut plan: Plan, source: &Path, private: PrivateData)
     );
     if video {
         plan.note = Some(PRIVATE_TAGS.into());
+        plan.stream_languages = private.languages;
     }
     plan
 }
@@ -543,6 +566,7 @@ mod tests {
                 bit_rate: None,
             }),
             private_tags: false,
+            streams: Vec::new(),
         }
     }
 
@@ -900,18 +924,19 @@ mod tests {
     fn private_data_turns_only_a_sent_as_is_plan_into_a_copy_or_a_remux() {
         let image = PrivateData {
             image: true,
-            video_tags: false,
+            ..PrivateData::default()
         };
         let tags = PrivateData {
-            image: false,
             video_tags: true,
+            languages: vec![None, Some("eng".into())],
+            ..PrivateData::default()
         };
         // A photo sent as a file keeps its name.
         let photo = PathBuf::from(r"C:\in\IMG_0042.JPG");
         let mut doc = input(&photo, MIB);
         doc.send_mode = SendMode::Document;
         let skip = build_plan(None, &doc).unwrap();
-        let stripped = without_private_data(skip.clone(), &photo, image);
+        let stripped = without_private_data(skip.clone(), &photo, image.clone());
         assert_eq!(
             (stripped.kind, stripped.output_name.as_str()),
             (Kind::Strip, "IMG_0042.JPG")
@@ -925,18 +950,22 @@ mod tests {
         let mut doc_video = input(&clip, MIB);
         doc_video.send_mode = SendMode::Document;
         let skip = build_plan(None, &doc_video).unwrap();
-        assert_eq!(without_private_data(skip.clone(), &clip, tags), skip);
+        assert_eq!(
+            without_private_data(skip.clone(), &clip, tags.clone()),
+            skip
+        );
 
         // A compliant MP4 with a location is copied without it, without one it is sent as is.
         let compliant = info(video("h264", "High", "yuv420p"), Some("aac"), Some(10.0));
         let skip = build_plan(Some(&compliant), &input(&clip, MIB)).unwrap();
         assert_eq!(skip.kind, Kind::Skip);
-        let copy = without_private_data(skip.clone(), &clip, tags);
+        let copy = without_private_data(skip.clone(), &clip, tags.clone());
         assert_eq!(
             (copy.kind, copy.note.as_deref(), copy.output_name.as_str()),
             (Kind::Strip, Some(PRIVATE_TAGS), "clip.mp4"),
             "same streams, same name"
         );
+        assert_eq!(copy.stream_languages, [None, Some("eng".to_owned())]);
         assert_eq!(
             without_private_data(skip.clone(), &clip, PrivateData::default()),
             skip

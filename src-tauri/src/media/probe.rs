@@ -89,6 +89,25 @@ pub struct MediaInfo {
     /// it existed.
     #[serde(default)]
     pub private_tags: bool,
+    /// Every stream, in order: its kind and its language when it has a valid one. Language
+    /// labels are not private; `plan` carries them through a copy that drops all metadata.
+    #[serde(default)]
+    pub streams: Vec<StreamInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamInfo {
+    /// ffprobe's `codec_type`: `video`, `audio`, `subtitle`, `data`, `attachment`…
+    pub kind: String,
+    pub language: Option<String>,
+}
+
+/// An ISO 639 code as ffmpeg writes it (`eng`, `fra`, `pt`): letters only, at most 8. Anything
+/// else is not passed back to ffmpeg.
+fn language_code(value: &serde_json::Value) -> Option<String> {
+    let code = value.as_str()?;
+    (!code.is_empty() && code.len() <= 8 && code.bytes().all(|b| b.is_ascii_alphabetic()))
+        .then(|| code.to_owned())
 }
 
 // --- raw ffprobe JSON ---
@@ -238,6 +257,14 @@ pub fn parse(json: &str) -> Result<MediaInfo, serde_json::Error> {
             channels: s.channels,
             bit_rate: bits(&s.bit_rate),
         }),
+        streams: raw
+            .streams
+            .iter()
+            .map(|stream| StreamInfo {
+                kind: stream.codec_type.clone().unwrap_or_default(),
+                language: stream.tags.get("language").and_then(language_code),
+            })
+            .collect(),
         // A data track (GoPro GPMF, timed metadata) may record the GPS track itself.
         private_tags: raw.format.tags.keys().any(|key| private_tag(key))
             || raw.streams.iter().any(|stream| {
@@ -446,6 +473,31 @@ mod tests {
         assert_eq!(video.rotation, -90);
         assert_eq!(video.rotated_size(), (2160, 3840));
         assert!(!video.has_alpha());
+    }
+
+    #[test]
+    fn stream_languages_are_kept_when_they_are_codes() {
+        let json = r#"{"streams":[
+            {"index":0,"codec_type":"video","codec_name":"h264","tags":{"language":"und"}},
+            {"index":1,"codec_type":"audio","codec_name":"aac","tags":{"language":"eng"}},
+            {"index":2,"codec_type":"audio","codec_name":"aac","tags":{"language":"x; rm"}},
+            {"index":3,"codec_type":"subtitle","codec_name":"mov_text","tags":{"language":"toolongcode"}},
+            {"index":4,"codec_type":"data"}],"format":{}}"#;
+        let streams = parse(json).unwrap().streams;
+        let seen: Vec<(&str, Option<&str>)> = streams
+            .iter()
+            .map(|s| (s.kind.as_str(), s.language.as_deref()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("video", Some("und")),
+                ("audio", Some("eng")),
+                ("audio", None),
+                ("subtitle", None),
+                ("data", None)
+            ]
+        );
     }
 
     #[test]
