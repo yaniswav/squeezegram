@@ -8,6 +8,7 @@ pub mod plan;
 pub mod probe;
 pub mod procs;
 pub mod stage;
+pub mod thumb;
 
 #[cfg(test)]
 mod integration_tests;

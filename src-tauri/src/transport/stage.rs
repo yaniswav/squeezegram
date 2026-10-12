@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use super::service::{check_destination, item_kind, mode_kind, plan_of, target_of};
 use super::{
@@ -22,6 +23,8 @@ use crate::caption;
 use crate::limit;
 use crate::media::plan::{Kind, Plan};
 use crate::media::probe::MediaInfo;
+use crate::media::stage::temp_root;
+use crate::media::thumb::Thumbnails;
 use crate::queue::events::{self, Phase as QueuePhase};
 use crate::queue::orchestrator::{SendError, SendOutcome, SendStage, StageContext, StageError};
 use crate::queue::store::{Destination, Item};
@@ -38,22 +41,94 @@ const CAP_SHORT: f64 = 1080.0;
 /// this, but a chat is never trusted across the minutes an encode takes.
 const PREFLIGHT_TTL: Duration = Duration::from_secs(30);
 
+/// The picture written for one upload attempt.
+struct TempThumbnail {
+    path: PathBuf,
+    /// The item's folder was there before the picture: it is not ours to remove.
+    dir_existed: bool,
+}
+
+impl TempThumbnail {
+    fn remove(&self) {
+        crate::queue::store::remove_quietly(&self.path.to_string_lossy());
+        if let Some(dir) = self.path.parent().filter(|_| !self.dir_existed) {
+            // Only when empty: nothing else in there is deleted.
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+}
+
 /// What a check found out: the refusal, or `None` when the destination takes the item.
 type Refusal = Option<(&'static str, Value)>;
 
 pub struct TransportStage {
     transport: Arc<dyn TelegramTransport>,
     settings: Arc<SettingsStore>,
+    thumbnails: Arc<dyn Thumbnails>,
     /// Recent checks, by chat (topic included) and media kind.
     checks: Mutex<HashMap<(Target, MediaKind), (Instant, Refusal)>>,
 }
 
 impl TransportStage {
-    pub fn new(transport: Arc<dyn TelegramTransport>, settings: Arc<SettingsStore>) -> Self {
+    pub fn new(
+        transport: Arc<dyn TelegramTransport>,
+        settings: Arc<SettingsStore>,
+        thumbnails: Arc<dyn Thumbnails>,
+    ) -> Self {
         Self {
             transport,
             settings,
+            thumbnails,
             checks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Gives a video its preview picture, written in the item's temp folder. Never fails the
+    /// send: Telegram makes its own preview of a video that arrives without one.
+    async fn attach_thumbnail(
+        &self,
+        item: &Item,
+        request: &mut UploadRequest,
+        cancel: &CancellationToken,
+    ) -> Option<TempThumbnail> {
+        let Payload::Video {
+            duration_s,
+            thumbnail,
+            ..
+        } = &mut request.payload
+        else {
+            return None;
+        };
+        let dir = temp_root(&self.settings.get().temp).join(item.id.to_string());
+        let duration = (*duration_s > 0).then_some(f64::from(*duration_s));
+        let dir_existed = dir.exists();
+        match self
+            .thumbnails
+            .video(&request.path, duration, &dir, cancel)
+            .await
+        {
+            Ok(made) => {
+                let file = TempThumbnail {
+                    path: made.path.clone(),
+                    dir_existed,
+                };
+                tracing::debug!(
+                    event = "thumbnail_made",
+                    width = made.width,
+                    height = made.height,
+                    "video thumbnail made"
+                );
+                *thumbnail = Some(made);
+                Some(file)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    event = "thumbnail_failed",
+                    error = %error,
+                    "no thumbnail: the video is sent without one"
+                );
+                None
+            }
         }
     }
 
@@ -387,6 +462,7 @@ impl SendStage for TransportStage {
                 limit::resolve(&self.settings.get().limit, limit::account(&auth.borrow()));
             request.limit_bytes = Some(effective.limit_bytes);
         }
+        let thumbnail = self.attach_thumbnail(item, &mut request, &ctx.cancel).await;
         let started = std::time::Instant::now();
         let size = request.size;
         tracing::info!(
@@ -432,6 +508,11 @@ impl SendStage for TransportStage {
                 }
             }
         };
+        // Sent or not, the picture has done its job; the item's folder goes with it when it is
+        // empty (a skipped item has no other file there).
+        if let Some(file) = thumbnail {
+            file.remove();
+        }
         let dur_ms = crate::logging::ms_since(started);
         match &result {
             Ok(sent) => tracing::info!(
@@ -473,7 +554,42 @@ mod tests {
     use crate::queue::test_util::TestDir;
     use crate::transport::mock::{MOCK_READ_ONLY_CHANNEL, MOCK_SAVED, MockTransport};
     use crate::transport::service::refresh_destinations;
-    use crate::transport::{Forbidden, Peer};
+    use crate::transport::{Forbidden, Peer, Thumbnail};
+
+    /// Writes a small file where the real one would write its JPEG, and remembers what it was
+    /// asked: the video, its duration and the folder.
+    #[derive(Default)]
+    struct FakeThumbs {
+        fail: std::sync::atomic::AtomicBool,
+        asked: Mutex<Vec<(PathBuf, Option<f64>, PathBuf)>>,
+    }
+
+    #[async_trait]
+    impl Thumbnails for FakeThumbs {
+        async fn video(
+            &self,
+            video: &Path,
+            duration_s: Option<f64>,
+            out_dir: &Path,
+            _: &CancellationToken,
+        ) -> Result<Thumbnail, crate::media::MediaError> {
+            self.asked
+                .lock()
+                .unwrap()
+                .push((video.to_owned(), duration_s, out_dir.to_owned()));
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(crate::media::MediaError::failed("FFMPEG_FAILED", "boom"));
+            }
+            std::fs::create_dir_all(out_dir).unwrap();
+            let path = out_dir.join("thumb.jpg");
+            std::fs::write(&path, b"jpeg").unwrap();
+            Ok(Thumbnail {
+                path,
+                width: 320,
+                height: 180,
+            })
+        }
+    }
 
     /// Sends the source as is (no ffmpeg in these tests); counts the items it was asked to
     /// probe, which is where the media work of an item begins.
@@ -509,6 +625,7 @@ mod tests {
         queue: Orchestrator,
         mock: Arc<MockTransport>,
         media: Arc<AsIs>,
+        thumbs: Arc<FakeThumbs>,
         sink: Arc<Recorder>,
         dir: TestDir,
         settings: Arc<SettingsStore>,
@@ -528,10 +645,19 @@ mod tests {
         let mock = Arc::new(mock);
         let sink = Arc::new(Recorder::default());
         let media = Arc::new(AsIs::default());
+        let thumbs = Arc::new(FakeThumbs::default());
+        // Item folders under the test's own directory, not the user's temp folder.
+        settings
+            .set(&json!({ "temp": { "dir": dir.path().join("tmp").to_string_lossy() } }))
+            .unwrap();
         let queue = Orchestrator::new(
             Store::open_in_memory().unwrap(),
             media.clone(),
-            Arc::new(TransportStage::new(mock.clone(), settings.clone())),
+            Arc::new(TransportStage::new(
+                mock.clone(),
+                settings.clone(),
+                thumbs.clone(),
+            )),
             sink.clone(),
             PauseRange {
                 min: Duration::ZERO,
@@ -545,6 +671,7 @@ mod tests {
             queue,
             mock,
             media,
+            thumbs,
             sink,
             dir,
             settings,
@@ -568,6 +695,10 @@ mod tests {
         }
 
         fn add_captioned(&self, name: &str, peer: Peer, caption: &str) -> i64 {
+            self.add_as(name, peer, caption, SendMode::Video)
+        }
+
+        fn add_as(&self, name: &str, peer: Peer, caption: &str, mode: SendMode) -> i64 {
             static SIZE: AtomicI64 = AtomicI64::new(100);
             let size = SIZE.fetch_add(1, Ordering::SeqCst);
             let path = self.dir.file(name, &vec![1u8; size as usize]);
@@ -577,7 +708,7 @@ mod tests {
                     source_size: size,
                     source_mtime: 1,
                     destination_id: self.destination(peer),
-                    send_mode: SendMode::Video,
+                    send_mode: mode,
                     caption: caption.into(),
                 }])
                 .unwrap()[0]
@@ -792,6 +923,76 @@ mod tests {
             "the media work started"
         );
         assert_eq!(h.mock.checks(), 0);
+    }
+
+    /// The folder of an item under the test's temp root.
+    fn item_dir(h: &Harness, id: i64) -> PathBuf {
+        h.dir.path().join("tmp").join(id.to_string())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_video_goes_out_with_its_thumbnail_which_is_deleted_afterwards() {
+        let h = harness("stage-thumb", MockTransport::authorized()).await;
+        let id = h.add("a.mp4", MOCK_SAVED);
+        h.queue.start();
+        h.wait_state(id, State::Sent).await;
+        assert_eq!(h.mock.thumbnails(), [Some((320, 180, true))]);
+        let asked = h.thumbs.asked.lock().unwrap();
+        assert_eq!(asked.len(), 1);
+        let (video, _, folder) = &asked[0];
+        assert_eq!(
+            video,
+            Path::new(&h.item(id).source_path),
+            "the file that is sent"
+        );
+        assert_eq!(folder, &item_dir(&h, id), "in the item's temp folder");
+        assert!(!folder.exists(), "picture and empty folder are gone");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_thumbnail_is_deleted_when_the_upload_fails_and_a_shared_folder_stays() {
+        let h = harness("stage-thumb-failed", MockTransport::authorized()).await;
+        h.mock.push_failure(TransportError::Other {
+            code: 400,
+            message: "MEDIA_EMPTY".into(),
+        });
+        let id = h.add("a.mp4", MOCK_SAVED);
+        // The folder already holds the item's encoded file: it must stay.
+        let folder = item_dir(&h, id);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("a_sq.mp4"), b"x").unwrap();
+        h.queue.start();
+        h.wait_state(id, State::Failed).await;
+        assert_eq!(h.mock.thumbnails().len(), 1);
+        assert!(!folder.join("thumb.jpg").exists());
+        assert!(folder.join("a_sq.mp4").exists());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_thumbnail_that_cannot_be_made_never_fails_the_send() {
+        let h = harness("stage-thumb-none", MockTransport::authorized()).await;
+        h.thumbs.fail.store(true, Ordering::SeqCst);
+        let id = h.add("a.mp4", MOCK_SAVED);
+        h.queue.start();
+        h.wait_state(id, State::Sent).await;
+        assert_eq!(h.mock.thumbnails(), [None], "sent without a thumbnail");
+        assert!(
+            h.sink.alert_codes().is_empty(),
+            "nothing for the user to do"
+        );
+    }
+
+    /// Only a video sent as a video has one: a file is shown by its name, a photo is a photo.
+    #[tokio::test(start_paused = true)]
+    async fn documents_and_photos_get_no_thumbnail() {
+        let h = harness("stage-thumb-modes", MockTransport::authorized()).await;
+        let file = h.add_as("a.mp4", MOCK_SAVED, "", SendMode::Document);
+        let photo = h.add_as("b.jpg", MOCK_SAVED, "", SendMode::Photo);
+        h.queue.start();
+        h.wait_state(file, State::Sent).await;
+        h.wait_state(photo, State::Sent).await;
+        assert!(h.thumbs.asked.lock().unwrap().is_empty());
+        assert!(h.mock.thumbnails().is_empty());
     }
 
     #[tokio::test(start_paused = true)]

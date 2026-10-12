@@ -18,9 +18,9 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    AuthInput, AuthState, ChatFolder, ChatKind, Dialog, Forbidden, Me, MediaKind, Peer, PeerKind,
-    Progress, SendCheck, Sent, SentCandidate, SentProbe, SlowMode, Target, TelegramTransport,
-    Topic, TransportError, UploadRequest, Verdict,
+    AuthInput, AuthState, ChatFolder, ChatKind, Dialog, Forbidden, Me, MediaKind, Payload, Peer,
+    PeerKind, Progress, SendCheck, Sent, SentCandidate, SentProbe, SlowMode, Target,
+    TelegramTransport, Topic, TransportError, UploadRequest, Verdict,
 };
 
 pub const MOCK_CODE: &str = "12345";
@@ -200,6 +200,8 @@ struct MockState {
     uploads: usize,
     /// Calls to `can_send`.
     checks: usize,
+    /// The thumbnail of each video upload: its size and whether the file was there.
+    thumbnails: Vec<Option<(u32, u32, bool)>>,
     /// Chats whose rights were taken away after the start (`revoke_write`).
     revoked: Vec<(Peer, Forbidden)>,
 }
@@ -231,6 +233,7 @@ impl MockTransport {
                 next_message_id: 1,
                 uploads: 0,
                 checks: 0,
+                thumbnails: Vec::new(),
                 revoked: Vec::new(),
             }),
             step_delay: Duration::from_millis(200),
@@ -334,6 +337,12 @@ impl MockTransport {
     /// Calls to `can_send`: what a pre-send check costs in TDLib requests.
     pub fn checks(&self) -> usize {
         self.lock().checks
+    }
+
+    /// For each video upload, the thumbnail it carried (width, height, file present at the
+    /// time of the upload), `None` for a video sent without one.
+    pub fn thumbnails(&self) -> Vec<Option<(u32, u32, bool)>> {
+        self.lock().thumbnails.clone()
     }
 
     /// From now on `peer` refuses messages (rights lost, topic closed, paid messages…), as a
@@ -722,6 +731,13 @@ impl TelegramTransport for MockTransport {
     ) -> Result<Sent, TransportError> {
         self.lock().uploads += 1;
         self.ensure_ready()?;
+        if let Payload::Video { thumbnail, .. } = &req.payload {
+            self.lock().thumbnails.push(
+                thumbnail
+                    .as_ref()
+                    .map(|t| (t.width, t.height, t.path.is_file())),
+            );
+        }
         let media = req.payload.media_kind();
         if let Verdict::Denied(forbidden) = self.current_check(&req.target, media)?.verdict {
             return Err(TransportError::WriteForbidden(forbidden));

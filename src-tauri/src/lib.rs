@@ -139,7 +139,11 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         limits.clone(),
         entitlements.clone(),
     ));
-    let send = Arc::new(TransportStage::new(transport.clone(), settings.clone()));
+    let send = Arc::new(TransportStage::new(
+        transport.clone(),
+        settings.clone(),
+        Arc::new(media::thumb::FfmpegThumbnails::new(sidecars.clone())),
+    ));
     let queue = Orchestrator::new(
         store,
         media.clone(),

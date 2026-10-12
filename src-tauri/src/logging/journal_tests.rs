@@ -112,7 +112,11 @@ async fn no_secret_reaches_the_journal() {
     let queue = Orchestrator::new(
         Store::open_in_memory().unwrap(),
         Arc::new(AsIs),
-        Arc::new(TransportStage::new(mock.clone(), settings.clone())),
+        Arc::new(TransportStage::new(
+            mock.clone(),
+            settings.clone(),
+            Arc::new(crate::media::thumb::Unavailable),
+        )),
         Arc::new(Recorder::default()),
         PauseRange {
             min: Duration::ZERO,

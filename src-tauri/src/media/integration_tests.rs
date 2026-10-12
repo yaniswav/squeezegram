@@ -642,6 +642,127 @@ async fn cpu_fallback_encoders_smoke() {
     }
 }
 
+/// Average brightness (0-255) of a picture, read back with ffmpeg.
+fn mean_luma(dir: &Path, picture: &Path) -> u8 {
+    let out = std::process::Command::new(dir.join("ffmpeg.exe"))
+        .args(["-hide_banner", "-nostdin", "-loglevel", "error", "-i"])
+        .arg(picture)
+        .args([
+            "-vf",
+            "scale=1:1",
+            "-pix_fmt",
+            "gray",
+            "-f",
+            "rawvideo",
+            "-",
+        ])
+        .output()
+        .expect("ffmpeg starts");
+    out.stdout[0]
+}
+
+/// 0.5 s of black, then 9.5 s of white at `sar`: a thumbnail of the first frame is black.
+fn black_then_white(dir: &Path, out: &Path, sar: &str) {
+    let graph = format!("[0][1]concat=n=2:v=1:a=0,setsar={sar}");
+    generate(
+        dir,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=1920x1080:d=0.5:r=25",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=white:s=1920x1080:d=9.5:r=25",
+            "-filter_complex",
+            &graph,
+            "-c:v",
+            "mpeg4",
+            &out.to_string_lossy(),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn the_thumbnail_is_a_small_jpeg_of_a_frame_past_the_black_opening() {
+    let Some(ffmpeg) = ffmpeg_dir() else { return };
+    let dir = TestDir::new("thumb-it");
+    let clip = dir.path().join("clip.mp4");
+    black_then_white(&ffmpeg, &clip, "1");
+    let thumb = super::thumb::generate(
+        &ffmpeg.join("ffmpeg.exe"),
+        &clip,
+        Some(10.0),
+        &dir.path().join("out"),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!((thumb.width, thumb.height), (320, 180));
+    let size = std::fs::metadata(&thumb.path).unwrap().len();
+    assert!(size > 0 && size <= super::thumb::MAX_BYTES, "{size} bytes");
+    let bytes = std::fs::read(&thumb.path).unwrap();
+    assert_eq!(bytes[..2], [0xFF, 0xD8], "a JPEG");
+    assert!(
+        mean_luma(&ffmpeg, &thumb.path) > 200,
+        "the frame at 10 % (1 s) is white, not the black opening"
+    );
+}
+
+#[tokio::test]
+async fn the_thumbnail_has_the_shape_the_player_shows() {
+    let Some(ffmpeg) = ffmpeg_dir() else { return };
+    let dir = TestDir::new("thumb-sar-it");
+    let clip = dir.path().join("wide.mp4");
+    // 1920x1080 pixels shown twice as wide: 3840x1080 on screen.
+    black_then_white(&ffmpeg, &clip, "2");
+    let thumb = super::thumb::generate(
+        &ffmpeg.join("ffmpeg.exe"),
+        &clip,
+        Some(10.0),
+        dir.path(),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!((thumb.width, thumb.height), (320, 90));
+}
+
+/// A duration that overstates the video puts the frame past its end: the first one is used.
+#[tokio::test]
+async fn the_thumbnail_falls_back_to_the_first_frame_and_reports_a_broken_file() {
+    let Some(ffmpeg) = ffmpeg_dir() else { return };
+    let dir = TestDir::new("thumb-short-it");
+    let clip = dir.path().join("short.mp4");
+    generate(
+        &ffmpeg,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=s=160x120:d=1:r=25",
+            "-c:v",
+            "mpeg4",
+            &clip.to_string_lossy(),
+        ],
+    );
+    let exe = ffmpeg.join("ffmpeg.exe");
+    let cancel = CancellationToken::new();
+    let thumb = super::thumb::generate(&exe, &clip, Some(500.0), dir.path(), &cancel)
+        .await
+        .unwrap();
+    assert_eq!((thumb.width, thumb.height), (160, 120), "not enlarged");
+
+    let broken = dir.path().join("broken.mp4");
+    std::fs::write(&broken, b"not a video").unwrap();
+    assert!(
+        super::thumb::generate(&exe, &broken, None, dir.path(), &cancel)
+            .await
+            .is_err()
+    );
+}
+
 /// Run on demand: `cargo test --lib -- --ignored blake3_speed`.
 #[test]
 #[ignore = "writes and hashes a 1 GiB file"]
