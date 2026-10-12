@@ -7,6 +7,11 @@ use super::{Result, State};
 /// At startup: interrupted media work goes back to `ready` (its temporary file is deleted),
 /// an interrupted upload becomes `unknown`, a server wait goes back to `encoded` with its
 /// `next_run_at`. Returns the ids that changed.
+///
+/// Only the temporary file of interrupted work is deleted: it belongs to that item alone. An
+/// encoded file is never deleted here, since items of the same source can share it (one per
+/// destination) and the `unknown`, `encoded` and `ready` items left by the recovery may still
+/// send it.
 pub fn on_startup(store: &mut Store) -> Result<Vec<i64>> {
     let mut changed = Vec::new();
     let media = store.items_in_states(&[State::Probing, State::Encoding, State::Remuxing])?;
@@ -133,6 +138,75 @@ mod tests {
         assert_eq!(history[0].status, "unknown");
 
         assert!(on_startup(&mut store).unwrap().is_empty(), "idempotent");
+    }
+
+    /// One file queued for several destinations shares one encoded file: the recovery keeps it
+    /// for every item left able to send it, and applies the F18 rules to each.
+    #[test]
+    fn startup_keeps_an_encoded_file_shared_by_destinations() {
+        let dir = TestDir::new("recovery-shared");
+        let mut store = memory_store();
+        let source = dir.file("clip.mp4", b"src");
+        let output = dir.file("clip_sq.mp4", b"out");
+        let temp = dir.file("clip_sq.mp4.part", b"part");
+        let ids: Vec<i64> = (0..5).map(|_| add_item(&mut store, &source)).collect();
+        let [sent, uploading, waiting, encoding, probing] = ids[..] else {
+            unreachable!()
+        };
+        for (id, state) in [
+            (sent, State::Sent),
+            (uploading, State::Uploading),
+            (waiting, State::WaitingServer),
+        ] {
+            force_state(&store, id, state);
+            store
+                .conn()
+                .execute(
+                    "UPDATE items SET output_path = ?1, output_size = 3, content_id = 'c',
+                                      next_run_at = '2030-01-01T00:00:00.000Z' WHERE id = ?2",
+                    params![output, id],
+                )
+                .unwrap();
+        }
+        // Another plan for the same file, encoding its own.
+        force_state(&store, encoding, State::Encoding);
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET temp_path = ?1 WHERE id = ?2",
+                params![temp, encoding],
+            )
+            .unwrap();
+        force_state(&store, probing, State::Probing);
+
+        let changed = on_startup(&mut store).unwrap();
+        assert_eq!(changed.len(), 4);
+        let state = |id| store.get_item(id).unwrap().state;
+        assert_eq!(state(sent), State::Sent);
+        assert_eq!(state(uploading), State::Unknown);
+        assert_eq!(state(waiting), State::Encoded);
+        assert_eq!(
+            store.get_item(waiting).unwrap().next_run_at.as_deref(),
+            Some("2030-01-01T00:00:00.000Z")
+        );
+        assert_eq!(state(encoding), State::Ready);
+        assert_eq!(state(probing), State::Ready);
+        assert!(
+            Path::new(&output).exists(),
+            "the shared encoded file is kept"
+        );
+        assert!(
+            !Path::new(&temp).exists(),
+            "the interrupted encode's own file goes"
+        );
+        assert!(Path::new(&source).exists());
+        assert_eq!(
+            store
+                .items_in_states(&[State::Uploading, State::Probing, State::Encoding])
+                .unwrap(),
+            [],
+            "nothing restarted"
+        );
     }
 
     #[test]

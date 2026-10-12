@@ -22,7 +22,7 @@ use super::events::{
 use super::state::{Changes, Column};
 use super::store::{
     ClearOutcome, ClearScope, Destination, HistoryEntry, HistoryFilter, HistoryStatus, Item,
-    ItemPatch, NewItem, Store, discard_files, remove_quietly,
+    ItemPatch, NewItem, Store, remove_quietly,
 };
 use super::{QueueError, Result, State, iso, now_iso, parse_iso, recovery};
 
@@ -363,7 +363,7 @@ impl Orchestrator {
             ResolveAction::MarkSent => {
                 require_state(store, id, State::Unknown, State::Sent)?;
                 let item = store.mark_sent(id, message_id)?;
-                discard_files(&item);
+                store.discard_files(&item)?;
                 Ok(State::Sent)
             }
             ResolveAction::Retry => {
@@ -709,6 +709,7 @@ impl Orchestrator {
                 store.hold_duplicate(id, &probe.content_id, probe.identity_weak)
             })?;
             self.emit_changed(&[id]);
+            self.release_outputs(id)?;
             return Ok(false);
         }
 
@@ -717,6 +718,35 @@ impl Orchestrator {
             .set(Column::IdentityWeak, probe.identity_weak)
             .set(Column::MediaJson, probe.media_json.clone())
             .set(Column::PlanJson, probe.plan_json.clone());
+        // The same file queued for another destination with the same plan was already
+        // encoded: its file is sent again rather than encoded a second time.
+        if probe.treatment != Treatment::Skip
+            && let Some(reused) = self.with_store(|store| {
+                store.reusable_output(
+                    id,
+                    &probe.content_id,
+                    item.send_mode,
+                    probe.plan_json.as_deref(),
+                )
+            })?
+        {
+            tracing::info!(
+                event = "encode_reused",
+                from_item_id = reused.item_id,
+                output_size = reused.output_size,
+                "encoded file of another item reused"
+            );
+            self.change(
+                id,
+                State::Encoded,
+                identity
+                    .set(Column::OutputPath, reused.output_path)
+                    .set(Column::OutputSize, reused.output_size)
+                    .clear(Column::ProgressPhase)
+                    .reason("encode_reused"),
+            )?;
+            return Ok(true);
+        }
         let (to, phase, name) = match probe.treatment {
             Treatment::Skip => {
                 self.change(
@@ -728,6 +758,7 @@ impl Orchestrator {
                         .clear(Column::ProgressPhase)
                         .reason("sendable_as_is"),
                 )?;
+                self.release_outputs(id)?;
                 return Ok(true);
             }
             Treatment::Encode => (State::Encoding, Phase::Encoding, "encoding"),
@@ -741,6 +772,8 @@ impl Orchestrator {
                 .set(Column::ProgressPhase, name.to_owned())
                 .reason("probed"),
         )?;
+        // Encoding its own file: an earlier encode of its source kept for it is not needed.
+        self.release_outputs(id)?;
 
         let item = self.get(id)?;
         let ctx = self.context(id, phase, cancel);
@@ -781,9 +814,18 @@ impl Orchestrator {
                     "media_failed",
                 )?;
                 self.alert(Some(id), &code, params);
-                Ok(())
+                self.release_outputs(id)
             }
         }
+    }
+
+    /// `Store::release_outputs` for an item that left `probing` without taking over an
+    /// encoded file of its source.
+    fn release_outputs(&self, id: i64) -> Result<()> {
+        self.with_store(|store| {
+            let item = store.get_item(id)?;
+            store.release_outputs(&item)
+        })
     }
 
     /// Upload, with `waiting_server` rounds on FLOOD_WAIT, until a final state.
@@ -823,10 +865,12 @@ impl Orchestrator {
                             .clear(Column::ProgressPhase)
                             .reason("sent"),
                     )?;
-                    let item = self.get(id)?;
-                    self.with_store(|store| store.record_history(&item, HistoryStatus::Sent))?;
-                    discard_files(&item);
                     *last_sent = Some(Instant::now());
+                    let item = self.get(id)?;
+                    self.with_store(|store| {
+                        store.record_history(&item, HistoryStatus::Sent)?;
+                        store.discard_files(&item)
+                    })?;
                     return Ok(());
                 }
                 Ok(SendOutcome::FloodWait { retry_after }) => {

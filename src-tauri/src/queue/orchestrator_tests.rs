@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use super::*;
 use crate::queue::events::recorder::Recorder;
 use crate::queue::store::{ClearScope, HOLD_DUPLICATE, SendMode};
-use crate::queue::test_util::{TestDir, first_destination, memory_store};
+use crate::queue::test_util::{TestDir, destination, first_destination, memory_store};
 
 /// Counts stages running at the same time, across media and send.
 #[derive(Default)]
@@ -75,7 +75,8 @@ impl MediaStage for FakeMedia {
             content_id: format!("{}:{name}", item.source_size),
             identity_weak: false,
             media_json: Some("{}".into()),
-            plan_json: Some("{}".into()),
+            // The mode changes the plan, as in the real stage: no reuse across modes.
+            plan_json: Some(json!({ "mode": item.send_mode.as_str() }).to_string()),
             treatment: self.treatment,
             temp_path: Some(format!("{}.part", sq_path(&item.source_path))),
         })
@@ -293,6 +294,37 @@ impl Harness {
                 caption: String::new(),
             }])
             .unwrap()[0]
+    }
+
+    /// Writes one file and queues it for each `(destination, mode)` in one call, as a
+    /// multi-destination batch does.
+    fn add_to(&self, name: &str, targets: &[(i64, SendMode)]) -> Vec<i64> {
+        let path = self.dir.file(name, b"source");
+        let items: Vec<NewItem> = targets
+            .iter()
+            .map(|&(destination_id, send_mode)| NewItem {
+                source_path: path.clone(),
+                source_size: 6,
+                source_mtime: 1,
+                destination_id,
+                send_mode,
+                caption: String::new(),
+            })
+            .collect();
+        self.orch.add(&items).unwrap()
+    }
+
+    /// The fixture chat, then new ones (peer ids from 77).
+    fn chats(&self, count: i64) -> Vec<i64> {
+        self.orch
+            .with_store(|s| {
+                let mut ids = vec![first_destination(s)];
+                for peer in 77..76 + count {
+                    ids.push(s.upsert_destination(&destination(peer, 0))?);
+                }
+                Ok(ids)
+            })
+            .unwrap()
     }
 
     fn item(&self, id: i64) -> Item {
@@ -879,4 +911,112 @@ async fn clearing_the_history_lifts_the_duplicate_hold() {
     let free = h.add("a.mp4");
     h.wait_state(free, Sent).await;
     assert_eq!(h.send.order().len(), sends + 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn one_encode_serves_every_destination_of_a_file() {
+    let h = Harness::new("orch-multi", Treatment::Encode);
+    h.send_steps(&[SendStep::Sent, SendStep::Gate]);
+    let chats = h.chats(2);
+    let ids = h.add_to(
+        "a.mp4",
+        &[(chats[0], SendMode::Video), (chats[1], SendMode::Video)],
+    );
+    h.orch.start();
+    h.wait_state(ids[0], Sent).await;
+    h.wait_state(ids[1], Uploading).await;
+    let output = h.item(ids[0]).output_path.unwrap();
+    assert_eq!(h.item(ids[1]).output_path.as_deref(), Some(output.as_str()));
+    assert!(
+        Path::new(&output).exists(),
+        "kept for the second destination"
+    );
+
+    h.send.gate.notify_one();
+    h.wait_state(ids[1], Sent).await;
+    assert_eq!(h.media.encodes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        h.sink.states_of(ids[1]),
+        [Ready, Probing, Encoded, Uploading, Sent]
+    );
+    assert!(!Path::new(&output).exists(), "deleted after its last send");
+    assert!(Path::new(&h.item(ids[0]).source_path).exists());
+    let history = h.orch.history(&HistoryFilter::default()).unwrap();
+    let mut sent: Vec<(i64, &str, bool)> = history
+        .iter()
+        .map(|entry| (entry.destination_id, entry.status.as_str(), entry.encoded))
+        .collect();
+    sent.sort();
+    assert_eq!(sent, [(chats[0], "sent", true), (chats[1], "sent", true)]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_shared_file_stays_until_its_last_destination_is_done() {
+    let h = Harness::new("orch-multi-lifetime", Treatment::Encode);
+    h.send_steps(&[SendStep::Fail, SendStep::Sent, SendStep::Sent]);
+    let chats = h.chats(3);
+    let ids = h.add_to(
+        "a.mp4",
+        &chats
+            .iter()
+            .map(|&chat| (chat, SendMode::Video))
+            .collect::<Vec<_>>(),
+    );
+    h.orch.start();
+    h.wait_state(ids[2], Sent).await;
+    assert_eq!(h.item(ids[0]).state, Failed);
+    assert_eq!(h.item(ids[1]).state, Sent);
+    assert_eq!(h.media.encodes.load(Ordering::SeqCst), 1);
+    let output = h.item(ids[0]).output_path.unwrap();
+    assert!(
+        Path::new(&output).exists(),
+        "kept for the failed item's retry"
+    );
+
+    h.orch.cancel(ids[0]).unwrap();
+    assert!(!Path::new(&output).exists(), "no item uses it any more");
+}
+
+#[tokio::test(start_paused = true)]
+async fn another_mode_is_encoded_on_its_own() {
+    let h = Harness::new("orch-multi-modes", Treatment::Encode);
+    let chats = h.chats(2);
+    let ids = h.add_to(
+        "a.mp4",
+        &[(chats[0], SendMode::Video), (chats[1], SendMode::Document)],
+    );
+    h.orch.start();
+    h.wait_state(ids[1], Sent).await;
+    assert_eq!(h.item(ids[0]).state, Sent);
+    assert_eq!(h.media.encodes.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        h.sink.states_of(ids[1]),
+        [Ready, Probing, Encoding, Encoded, Uploading, Sent]
+    );
+    assert!(!Path::new(&h.item(ids[1]).output_path.unwrap()).exists());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_file_already_sent_to_one_destination_is_new_to_another() {
+    let h = Harness::new("orch-multi-duplicate", Treatment::Encode);
+    let chats = h.chats(2);
+    let ids = h.add_to(
+        "a.mp4",
+        &[(chats[0], SendMode::Video), (chats[1], SendMode::Video)],
+    );
+    // Same content already sent to the first destination only.
+    let mut previous = h.item(ids[0]);
+    previous.content_id = Some("6:a.mp4".into());
+    h.orch
+        .with_store(|s| s.record_history(&previous, HistoryStatus::Sent))
+        .unwrap();
+
+    h.orch.start();
+    h.wait_state(ids[1], Sent).await;
+    let held = h.item(ids[0]);
+    assert_eq!(held.state, PendingReview);
+    assert_eq!(held.hold_reason.as_deref(), Some(HOLD_DUPLICATE));
+    assert_eq!(h.item(ids[1]).hold_reason, None);
+    assert_eq!(h.send.order(), [ids[1]]);
+    assert_eq!(h.media.encodes.load(Ordering::SeqCst), 1);
 }

@@ -375,6 +375,92 @@ fn path_key(path: &str) -> String {
     path.replace('\\', "/").to_lowercase()
 }
 
+/// An encoded file that `Store::reusable_output` found, and the item that made it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReusableOutput {
+    pub item_id: i64,
+    pub output_path: String,
+    pub output_size: i64,
+}
+
+/// Whether two plans (`plan_json`) give the same file. The encoder is left out: it is picked
+/// per run (a GPU that stopped earlier in the session is skipped) and every one makes H.264
+/// under the same limit, bitrate, scaling and audio, which are what the settings decided.
+fn same_plan(a: &str, b: &str) -> bool {
+    let without_encoder = |text: &str| {
+        let mut plan: serde_json::Value = serde_json::from_str(text).ok()?;
+        if let Some(fields) = plan.as_object_mut() {
+            fields.remove("encoder");
+        }
+        Some(plan)
+    };
+    match (without_encoder(a), without_encoder(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// The same file as queued: path, size and modification time.
+fn same_source(a: &Item, b: &Item) -> bool {
+    a.source_size == b.source_size
+        && a.source_mtime == b.source_mtime
+        && path_key(&a.source_path) == path_key(&b.source_path)
+}
+
+/// The encoded files of `released` (and of the other items of their sources) that no item of
+/// `items` needs any more. Several items of one source can share one encoded file (one per
+/// destination of a batch), so a file stays while an item that is neither sent nor cancelled
+/// holds it (a failed or unknown one keeps it for a retry, F15), or while an item of the same
+/// source and mode is still `ready` or `probing`: its probing takes the file over when the plan
+/// matches (`Store::reusable_output`), which finds it through the rows of `items` that name it.
+/// A path that is the source of an item is never returned.
+fn unneeded_outputs(items: &[&Item], released: &[&Item]) -> Vec<String> {
+    let everyone = || items.iter().chain(released).copied();
+    let sources: HashSet<String> = everyone().map(|item| path_key(&item.source_path)).collect();
+    let output_key = |item: &Item| item.output_path.as_deref().map(path_key);
+    let mut seen = HashSet::new();
+    let mut unneeded = Vec::new();
+    for item in released {
+        let related = everyone().filter(|other| same_source(item, other));
+        for path in item
+            .output_path
+            .iter()
+            .chain(related.filter_map(|other| other.output_path.as_ref()))
+        {
+            let key = path_key(path);
+            if sources.contains(&key) || !seen.insert(key.clone()) {
+                continue;
+            }
+            // A removed row cannot be found by `reusable_output`: its file is reused by no one.
+            let owners: Vec<&Item> = items
+                .iter()
+                .copied()
+                .filter(|owner| output_key(owner).as_ref() == Some(&key))
+                .collect();
+            let needed = items.iter().any(|other| {
+                let holds = output_key(other).as_ref() == Some(&key)
+                    && !matches!(other.state, State::Sent | State::Cancelled);
+                let may_reuse = matches!(other.state, State::Ready | State::Probing)
+                    && owners.iter().any(|owner| {
+                        owner.send_mode == other.send_mode && same_source(owner, other)
+                    });
+                holds || may_reuse
+            });
+            if needed {
+                tracing::debug!(
+                    event = "encoded_file_kept",
+                    item_id = item.id,
+                    path = path.as_str(),
+                    "encoded file kept: another item still uses it"
+                );
+            } else {
+                unneeded.push(path.clone());
+            }
+        }
+    }
+    unneeded
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -708,7 +794,8 @@ impl Store {
         Ok(changed)
     }
 
-    /// Cancels an item that is not being processed, deletes its temporary and encoded files.
+    /// Cancels an item that is not being processed, deletes its temporary file and its encoded
+    /// file unless another item still uses it.
     pub fn cancel(&mut self, id: i64) -> Result<()> {
         let item = self.get_item(id)?;
         self.transition(
@@ -720,7 +807,26 @@ impl Store {
                 .clear(Column::NextRunAt)
                 .reason("cancelled"),
         )?;
-        discard_files(&item);
+        self.discard_files(&item)
+    }
+
+    /// Deletes `item`'s temporary file (its own) and the encoded files of its source that no
+    /// item needs any more (`unneeded_outputs`); never a source.
+    pub fn discard_files(&self, item: &Item) -> Result<()> {
+        if let Some(temp) = &item.temp_path {
+            remove_quietly(temp);
+        }
+        self.release_outputs(item)
+    }
+
+    /// Deletes the encoded files of `item`'s source that no item needs any more, once `item`
+    /// has left a state that kept them (sent, cancelled, or probed without taking them over).
+    pub fn release_outputs(&self, item: &Item) -> Result<()> {
+        let items = self.list_items()?;
+        let items: Vec<&Item> = items.iter().collect();
+        for path in unneeded_outputs(&items, &[item]) {
+            remove_quietly(&path);
+        }
         Ok(())
     }
 
@@ -728,7 +834,8 @@ impl Store {
     /// transaction. `current` is the item the orchestrator holds (it may still be `encoded`
     /// while it waits for its turn to upload): never removed. Their temporary and encoded
     /// files go too, once the rows are gone; a path that is the source of any item, or the
-    /// file of an item that stays, is never deleted.
+    /// file of an item that stays, is never deleted, nor an encoded file that an item that
+    /// stays may still take over (`unneeded_outputs`).
     pub fn clear_items(&mut self, scope: ClearScope, current: Option<i64>) -> Result<ClearOutcome> {
         let tx = self.conn.transaction()?;
         let items: Vec<Item> = {
@@ -760,15 +867,13 @@ impl Store {
                     .map(path_key),
             )
             .collect();
-        for item in &removed {
-            for path in [item.temp_path.as_deref(), item.output_path.as_deref()]
-                .into_iter()
-                .flatten()
-            {
-                if !protected.contains(&path_key(path)) {
-                    remove_quietly(path);
-                }
+        for temp in removed.iter().filter_map(|item| item.temp_path.as_deref()) {
+            if !protected.contains(&path_key(temp)) {
+                remove_quietly(temp);
             }
+        }
+        for path in unneeded_outputs(&kept, &removed) {
+            remove_quietly(&path);
         }
         Ok(ClearOutcome {
             removed: removed.iter().map(|item| item.id).collect(),
@@ -850,6 +955,44 @@ impl Store {
         let item = self.get_item(id)?;
         self.record_history(&item, HistoryStatus::Sent)?;
         Ok(item)
+    }
+
+    /// The encoded file of another item that item `id` can send as its own: same content, same
+    /// mode, a plan that gives the same file (`same_plan`), still on disk. The newest wins.
+    pub fn reusable_output(
+        &self,
+        id: i64,
+        content_id: &str,
+        send_mode: SendMode,
+        plan_json: Option<&str>,
+    ) -> Result<Option<ReusableOutput>> {
+        let Some(plan_json) = plan_json else {
+            return Ok(None);
+        };
+        let mut stmt = self.conn.prepare(
+            "SELECT id, output_path, output_size, plan_json FROM items
+             WHERE id <> ?1 AND content_id = ?2 AND send_mode = ?3 AND plan_json IS NOT NULL
+               AND output_path IS NOT NULL AND output_size IS NOT NULL
+               AND output_path <> source_path
+             ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map(params![id, content_id, send_mode.as_str()], |row| {
+            Ok((
+                ReusableOutput {
+                    item_id: row.get(0)?,
+                    output_path: row.get(1)?,
+                    output_size: row.get(2)?,
+                },
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (candidate, other_plan) = row?;
+            if same_plan(plan_json, &other_plan) && Path::new(&candidate.output_path).is_file() {
+                return Ok(Some(candidate));
+            }
+        }
+        Ok(None)
     }
 
     /// True when this content was already sent to this destination.
@@ -995,18 +1138,6 @@ impl Store {
             });
         }
         Ok(deltas)
-    }
-}
-
-/// Deletes the temporary file and the encoded output (never the source).
-pub fn discard_files(item: &Item) {
-    if let Some(temp) = &item.temp_path {
-        remove_quietly(temp);
-    }
-    if let Some(output) = &item.output_path
-        && *output != item.source_path
-    {
-        remove_quietly(output);
     }
 }
 
@@ -1323,6 +1454,181 @@ mod tests {
             "a source is never deleted"
         );
         assert!(Path::new(&skipped_source).exists());
+    }
+
+    /// One file queued for three destinations: `first` and `second` in video mode, `third` as
+    /// a document. Returns the store, the ids, and the source and encoded paths.
+    fn one_file_three_destinations(dir: &TestDir) -> (Store, [i64; 3], String, String) {
+        let mut store = memory_store();
+        let chats = [
+            first_destination(&store),
+            store.upsert_destination(&destination(77, 0)).unwrap(),
+            store.upsert_destination(&destination(78, 3)).unwrap(),
+        ];
+        let source = dir.file("clip.mp4", b"src");
+        let output = dir.file("clip_sq.mp4", b"out");
+        let new = |destination_id, send_mode| NewItem {
+            source_path: source.clone(),
+            source_size: 3,
+            source_mtime: 1,
+            destination_id,
+            send_mode,
+            caption: String::new(),
+        };
+        let ids = store
+            .add_items(&[
+                new(chats[0], SendMode::Video),
+                new(chats[1], SendMode::Video),
+                new(chats[2], SendMode::Document),
+            ])
+            .unwrap();
+        (store, [ids[0], ids[1], ids[2]], source, output)
+    }
+
+    fn set_output(store: &Store, id: i64, output: &str) {
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET output_path = ?1, output_size = 3 WHERE id = ?2",
+                params![output, id],
+            )
+            .unwrap();
+    }
+
+    fn release(store: &Store, id: i64) {
+        store.release_outputs(&store.get_item(id).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_shared_encoded_file_stays_until_no_item_can_use_it() {
+        let dir = TestDir::new("store-shared-output");
+        let (store, [first, second, document], source, output) = one_file_three_destinations(&dir);
+        set_output(&store, first, &output);
+        force_state(&store, first, State::Sent);
+        release(&store, first);
+        assert!(Path::new(&output).exists(), "second may still reuse it");
+        force_state(&store, second, State::Probing);
+        release(&store, first);
+        assert!(Path::new(&output).exists(), "second is probing");
+
+        // Second took it over and its upload failed: kept for a retry.
+        set_output(&store, second, &output);
+        force_state(&store, second, State::Failed);
+        release(&store, first);
+        assert!(Path::new(&output).exists());
+
+        // The document item, still waiting, never reuses a video encode.
+        force_state(&store, second, State::Cancelled);
+        assert_eq!(store.get_item(document).unwrap().state, State::Ready);
+        release(&store, second);
+        assert!(!Path::new(&output).exists(), "no item can use it any more");
+        assert!(Path::new(&source).exists());
+    }
+
+    #[test]
+    fn cancel_and_clear_spare_an_encoded_file_another_destination_still_uses() {
+        let dir = TestDir::new("store-shared-cancel");
+        let (mut store, [first, second, _], source, output) = one_file_three_destinations(&dir);
+        for id in [first, second] {
+            set_output(&store, id, &output);
+            force_state(&store, id, State::Encoded);
+        }
+        store.cancel(first).unwrap();
+        assert!(Path::new(&output).exists(), "second still sends it");
+        force_state(&store, second, State::Unknown);
+        let outcome = store.clear_items(ClearScope::Finished, None).unwrap();
+        assert_eq!(outcome.removed, [first]);
+        assert!(Path::new(&output).exists(), "second may be retried");
+        force_state(&store, second, State::Sent);
+        // The document item that stays never reuses a video encode.
+        let outcome = store.clear_items(ClearScope::Finished, None).unwrap();
+        assert_eq!(outcome.removed, [second]);
+        assert!(!Path::new(&output).exists());
+        assert!(Path::new(&source).exists());
+    }
+
+    #[test]
+    fn clear_drops_an_encoded_file_whose_rows_are_gone() {
+        let dir = TestDir::new("store-shared-clear");
+        let (mut store, [first, second, _], _, output) = one_file_three_destinations(&dir);
+        set_output(&store, first, &output);
+        force_state(&store, first, State::Sent);
+        store
+            .release_outputs(&store.get_item(first).unwrap())
+            .unwrap();
+        assert!(Path::new(&output).exists());
+        // Without the sent row, nothing can find the file to reuse it.
+        store.clear_items(ClearScope::Finished, None).unwrap();
+        assert!(!Path::new(&output).exists());
+        assert_eq!(store.get_item(second).unwrap().state, State::Ready);
+    }
+
+    #[test]
+    fn reusable_output_needs_the_same_content_mode_and_plan_and_the_file() {
+        let dir = TestDir::new("store-reusable");
+        let (store, [first, second, document], source, output) = one_file_three_destinations(&dir);
+        let plan = |encoder: &str, limit: u64| {
+            serde_json::json!({ "kind": "encode", "encoder": encoder, "limit_bytes": limit })
+                .to_string()
+        };
+        set_output(&store, first, &output);
+        force_state(&store, first, State::Sent);
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET content_id = '3:abc', plan_json = ?1 WHERE id = ?2",
+                params![plan("h264_nvenc", 100), first],
+            )
+            .unwrap();
+        let found = |id, content: &str, mode, plan: &str| {
+            store
+                .reusable_output(id, content, mode, Some(plan))
+                .unwrap()
+                .map(|reused| (reused.item_id, reused.output_path))
+        };
+        // Another encoder (a GPU that stopped this session) gives the same file.
+        assert_eq!(
+            found(second, "3:abc", SendMode::Video, &plan("libx264", 100)),
+            Some((first, output.clone()))
+        );
+        assert_eq!(
+            found(second, "3:abc", SendMode::Video, &plan("h264_nvenc", 200)),
+            None,
+            "another limit"
+        );
+        assert_eq!(
+            found(
+                document,
+                "3:abc",
+                SendMode::Document,
+                &plan("h264_nvenc", 100)
+            ),
+            None,
+            "another mode"
+        );
+        assert_eq!(
+            found(second, "3:xyz", SendMode::Video, &plan("h264_nvenc", 100)),
+            None,
+            "another content"
+        );
+        assert_eq!(
+            found(first, "3:abc", SendMode::Video, &plan("h264_nvenc", 100)),
+            None,
+            "not its own file"
+        );
+        // Sent as is: the output is the source, nothing to reuse.
+        set_output(&store, first, &source);
+        assert_eq!(
+            found(second, "3:abc", SendMode::Video, &plan("h264_nvenc", 100)),
+            None
+        );
+        set_output(&store, first, &output);
+        std::fs::remove_file(&output).unwrap();
+        assert_eq!(
+            found(second, "3:abc", SendMode::Video, &plan("h264_nvenc", 100)),
+            None,
+            "file gone"
+        );
     }
 
     #[test]
