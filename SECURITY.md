@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-squeezegram is in alpha and has no release. Only the latest commit on the `main` branch is supported.
+Only the latest release published on the [Releases page](https://github.com/yaniswav/squeezegram/releases) is supported, and the latest commit on the `main` branch. Older releases do not receive fixes: update to the latest one (the installer does it for you).
 
 ## Reporting a vulnerability
 

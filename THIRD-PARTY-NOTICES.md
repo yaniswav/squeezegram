@@ -41,4 +41,4 @@ The generation fails when a crate of the Windows build is missing from the Rust 
 
 The license analysis here is a reading of the license texts by the developer, not legal advice. H.264 patent licensing for commercial distribution has not been reviewed. A legal review is planned before any commercial release.
 
-The generated file has not been checked inside a built installer yet, because no release has been built: the installer receives it as a Tauri resource in the same way as `tdjson.dll`.
+The installer receives the generated file as a Tauri resource, in the same way as `tdjson.dll`. Before publishing a release, check that `THIRD-PARTY-NOTICES.txt` is present next to the executable in the built installer and in the portable zip.
