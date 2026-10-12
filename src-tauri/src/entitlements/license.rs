@@ -1,4 +1,4 @@
-//! License key format (`docs/LICENSE-KEY.md`): `SQZ1.<base64url(payload)>.<base64url(sig)>`.
+//! License key format: `SQZ1.<base64url(payload)>.<base64url(sig)>`.
 //!
 //! - base64url without padding, strict: `=` padding, the standard alphabet or non-canonical
 //!   trailing bits are malformed.
