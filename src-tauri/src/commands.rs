@@ -746,11 +746,18 @@ pub fn license_clear(
     call.finish(result.map_err(Into::into))
 }
 
+/// `explorer.exe` from the Windows folder. A bare name would be looked up in the working
+/// directory and the PATH first, where a planted `explorer.exe` would run instead.
+fn explorer_exe() -> std::path::PathBuf {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    std::path::PathBuf::from(root).join("explorer.exe")
+}
+
 /// Opens the purchase bot in the browser. The address is fixed in the core.
 #[tauri::command]
 pub fn license_open_purchase() -> CommandResult<()> {
     let call = Call::new("license_open_purchase");
-    let result = std::process::Command::new("explorer.exe")
+    let result = std::process::Command::new(explorer_exe())
         .arg(entitlements::PURCHASE_URL)
         .spawn()
         .map(|_| ())
@@ -846,7 +853,7 @@ pub async fn update_install(app: AppHandle, state: State<'_, AppState>) -> Comma
 #[tauri::command]
 pub fn update_open_page() -> CommandResult<()> {
     let call = Call::new("update_open_page");
-    let result = std::process::Command::new("explorer.exe")
+    let result = std::process::Command::new(explorer_exe())
         .arg(update::RELEASES_PAGE)
         .spawn()
         .map(|_| ())
@@ -885,7 +892,7 @@ pub fn log_path() -> CommandResult<String> {
 pub fn log_open_dir() -> CommandResult<()> {
     let call = Call::new("log_open_dir");
     let result = match logging::dir() {
-        Some(dir) => std::process::Command::new("explorer.exe")
+        Some(dir) => std::process::Command::new(explorer_exe())
             .arg(dir)
             .spawn()
             .map(|_| ())
@@ -981,6 +988,13 @@ pub async fn debug_export(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explorer_is_taken_from_the_windows_folder() {
+        let exe = super::explorer_exe();
+        assert!(exe.is_absolute());
+        assert!(exe.ends_with("explorer.exe"));
+    }
+
     use super::*;
     use crate::settings::{ApiOverride, Settings};
 
