@@ -44,6 +44,7 @@ const PLAN_TONE: Record<PlanKind, Tone> = {
   encode: "attention",
   remux: "neutral",
   remux_audio: "neutral",
+  strip: "success",
   photo: "neutral",
 }
 

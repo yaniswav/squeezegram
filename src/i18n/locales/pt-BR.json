@@ -93,6 +93,7 @@
     "PROXY_INVALID_username": "The user name is too long or contains a line break.",
     "PROXY_INVALID_password": "The password is too long or contains a line break.",
     "PROXY_INVALID_secret": "This MTProto secret is not valid. Copy it exactly as given with the proxy (hexadecimal or base64url).",
+    "METADATA_STRIP_FAILED": "The location and camera data of this file couldn't be removed (the file looks damaged), so it was not sent. To send it as it is, turn off \"Remove location and camera data\" in Settings.",
     "CANCELLED": "Cancelado.",
     "FILES_SKIPPED_one": "{{count}} arquivo que não é vídeo nem foto foi ignorado nesta pasta.",
     "FILES_SKIPPED_many": "{{count}} arquivos que não são vídeos nem fotos foram ignorados nesta pasta.",
@@ -321,7 +322,8 @@
       "encode": "Compressão planejada",
       "remux": "Apenas remux",
       "remux_audio": "Remux, áudio convertido",
-      "photo": "Conversão de foto"
+      "photo": "Conversão de foto",
+      "strip": "Ready as is, location removed"
     },
     "step": {
       "prepare": "Preparar",
@@ -676,6 +678,13 @@
       "title": "Default caption",
       "hint": "Prefills the caption when you add files. Leave it empty for no caption.",
       "label": "Caption template"
+    },
+    "privacy": {
+      "title": "Privacy",
+      "strip": {
+        "label": "Remove location and camera data from photos",
+        "hint": "Photos sent without re-encoding (as files, for example) go out without their GPS position, camera serial numbers or editing history; their pixels and orientation are kept. Compliant MP4 videos lose their recorded location the same way. HEIC files are sent unchanged."
+      }
     },
     "temp": {
       "title": "Arquivos temporários",

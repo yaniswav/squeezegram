@@ -248,7 +248,9 @@ export interface HistoryFilter {
 // --- media (src-tauri/src/media/plan.rs, probe.rs), stored as JSON text in the item ---
 
 /** `plan::Kind`. */
-export type PlanKind = "encode" | "remux" | "remux_audio" | "skip" | "photo"
+/** `strip`: sent as it is, from a copy without its location and camera data. */
+export type PlanKind =
+  "encode" | "remux" | "remux_audio" | "skip" | "photo" | "strip"
 
 /** The fields of `plan::Plan` the UI reads. */
 export interface Plan {
@@ -277,6 +279,7 @@ const planDecoder = d.object<Plan>({
     remux_audio: true,
     skip: true,
     photo: true,
+    strip: true,
   }),
   limit_bytes: d.number,
   duration_s: d.nullable(d.number),
@@ -366,6 +369,8 @@ export interface Settings {
   background: { close_action: CloseAction }
   /** Changed only through `proxySet`: `settings_set` refuses this section. */
   network: { proxy: ProxySettings | null }
+  /** Remove location and camera data from files sent without re-encoding. */
+  privacy: { strip_metadata: boolean }
 }
 
 /** `transport::proxy::ProxyKind`. */
@@ -1083,6 +1088,7 @@ const settingsDecoder = d.object<Settings>({
   network: d.object<Settings["network"]>({
     proxy: d.nullable(proxySettingsDecoder),
   }),
+  privacy: d.object<Settings["privacy"]>({ strip_metadata: d.boolean }),
 })
 
 const proxyViewDecoder = d.object<ProxyView>({

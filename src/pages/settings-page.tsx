@@ -130,6 +130,7 @@ interface Draft {
   theme: ThemeSetting
   language: string
   checkAutomatically: boolean
+  stripMetadata: boolean
 }
 
 type ErrorKey =
@@ -194,6 +195,7 @@ function toDraft(settings: Settings): Draft {
     theme: themeOf(settings.ui.theme),
     language: settings.ui.language,
     checkAutomatically: settings.updates.check_automatically,
+    stripMetadata: settings.privacy.strip_metadata,
   }
 }
 
@@ -345,6 +347,9 @@ function toPatch(draft: Draft, settings: Settings): SettingsPatch {
 
   if (draft.checkAutomatically !== saved.checkAutomatically)
     patch.updates = { check_automatically: draft.checkAutomatically }
+
+  if (draft.stripMetadata !== saved.stripMetadata)
+    patch.privacy = { strip_metadata: draft.stripMetadata }
 
   return patch
 }
@@ -2059,6 +2064,31 @@ function SettingsForm({
           )}
         </Field>
         <CaptionHelp />
+      </Section>
+
+      <Section title={t("settings.privacy.title")}>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0 space-y-1">
+            <label
+              htmlFor={`${ids}-strip-metadata`}
+              className="block text-sm font-medium"
+            >
+              {t("settings.privacy.strip.label")}
+            </label>
+            <p
+              id={`${ids}-strip-metadata-hint`}
+              className="text-xs text-muted-foreground"
+            >
+              {t("settings.privacy.strip.hint")}
+            </p>
+          </div>
+          <Switch
+            id={`${ids}-strip-metadata`}
+            aria-describedby={`${ids}-strip-metadata-hint`}
+            checked={draft.stripMetadata}
+            onCheckedChange={(checked) => update("stripMetadata", checked)}
+          />
+        </div>
       </Section>
 
       <Section title={t("settings.temp.title")}>
