@@ -1,0 +1,25 @@
+squeezegram.exe is built from the Rust crates listed below (Windows x86_64 target, as
+resolved by src-tauri/Cargo.lock). Each licence text is given once, followed by the crates
+distributed under exactly that text. The copyright notices are part of the texts, as
+published by the authors of each crate. A crate offered under a choice of licences
+("MIT OR Apache-2.0") is listed under the one chosen here. Build tools (proc macros, build
+scripts) are listed too, although they do not end up in the executable.
+
+Crates per licence (a crate under several licences is counted under each):
+{{#each overview}}
+  {{count}} x {{{name}}}
+{{/each}}
+
+{{#each licenses}}
+------------------------------------------------------------------------------------------
+{{{name}}}
+------------------------------------------------------------------------------------------
+
+Used by:
+{{#each used_by}}
+  - {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

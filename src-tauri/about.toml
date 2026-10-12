@@ -1,0 +1,33 @@
+# cargo-about configuration (0.9.2, pinned in scripts/generate-notices.ps1).
+# Used by scripts/generate-notices.ps1: `cargo about generate --locked --fail about.hbs`.
+# The accepted list mirrors [licenses] allow in deny.toml: a crate under any other licence
+# fails the generation as well as `cargo deny check`.
+
+accepted = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "Zlib",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "BSL-1.0",
+  "0BSD",
+  "OpenSSL",
+]
+
+# Only the Windows build is shipped (same target as deny.toml).
+targets = ["x86_64-pc-windows-msvc"]
+
+# Dev-dependencies (test helpers) never reach the installer. Build-dependencies and
+# proc-macros are kept on purpose: they do not end up in the binary, but listing them is
+# harmless and avoids arguing about it.
+ignore-dev-dependencies = true
+ignore-build-dependencies = false
+
+# The application crate has publish = false and its own licence (PolyForm Noncommercial).
+private = { ignore = true }

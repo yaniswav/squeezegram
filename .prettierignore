@@ -9,3 +9,5 @@ src-tauri/Cargo.lock
 docs
 legacy
 README.md
+# cargo-about template: Prettier's Handlebars formatting would rewrite the licence layout
+src-tauri/about.hbs
