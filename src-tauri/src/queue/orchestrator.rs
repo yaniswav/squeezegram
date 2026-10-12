@@ -732,11 +732,12 @@ impl Orchestrator {
         // encoded: its file is sent again rather than encoded a second time.
         if probe.treatment != Treatment::Skip
             && let Some(reused) = self.with_store(|store| {
-                store.reusable_output(
+                store.take_over_output(
                     id,
                     &probe.content_id,
                     item.send_mode,
                     probe.plan_json.as_deref(),
+                    identity.clone(),
                 )
             })?
         {
@@ -746,15 +747,7 @@ impl Orchestrator {
                 output_size = reused.output_size,
                 "encoded file of another item reused"
             );
-            self.change(
-                id,
-                State::Encoded,
-                identity
-                    .set(Column::OutputPath, reused.output_path)
-                    .set(Column::OutputSize, reused.output_size)
-                    .clear(Column::ProgressPhase)
-                    .reason("encode_reused"),
-            )?;
+            self.emit_changed(&[id]);
             return Ok(true);
         }
         let (to, phase, name) = match probe.treatment {

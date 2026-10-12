@@ -995,6 +995,32 @@ impl Store {
         Ok(None)
     }
 
+    /// `probing` → `encoded` on the file `reusable_output` finds, with `identity` (the probe's
+    /// columns). Found and taken in one call on the store: no `cancel` or `queue_clear` can
+    /// delete the file in between, which would leave the item `encoded` on a missing file.
+    pub fn take_over_output(
+        &mut self,
+        id: i64,
+        content_id: &str,
+        send_mode: SendMode,
+        plan_json: Option<&str>,
+        identity: Changes,
+    ) -> Result<Option<ReusableOutput>> {
+        let Some(reused) = self.reusable_output(id, content_id, send_mode, plan_json)? else {
+            return Ok(None);
+        };
+        self.transition(
+            id,
+            State::Encoded,
+            &identity
+                .set(Column::OutputPath, reused.output_path.clone())
+                .set(Column::OutputSize, reused.output_size)
+                .clear(Column::ProgressPhase)
+                .reason("encode_reused"),
+        )?;
+        Ok(Some(reused))
+    }
+
     /// True when this content was already sent to this destination.
     pub fn is_duplicate(&self, content_id: &str, destination_id: i64) -> Result<bool> {
         Ok(self.conn.query_row(
@@ -1561,6 +1587,46 @@ mod tests {
         store.clear_items(ClearScope::Finished, None).unwrap();
         assert!(!Path::new(&output).exists());
         assert_eq!(store.get_item(second).unwrap().state, State::Ready);
+    }
+
+    /// A `queue_clear` of the item that made the file, on either side of the take-over: the
+    /// probing item either finds nothing (and encodes its own) or holds the file, never an
+    /// `encoded` item on a deleted file.
+    #[test]
+    fn take_over_and_clear_never_leave_an_item_on_a_missing_file() {
+        let plan = r#"{"kind":"encode","encoder":"h264_nvenc"}"#;
+        let identity = || Changes::new().set(Column::ContentId, "3:abc".to_owned());
+        for clear_first in [true, false] {
+            let dir = TestDir::new("store-take-over");
+            let (mut store, [first, second, _], _, output) = one_file_three_destinations(&dir);
+            set_output(&store, first, &output);
+            force_state(&store, first, State::Sent);
+            force_state(&store, second, State::Probing);
+            store
+                .conn()
+                .execute(
+                    "UPDATE items SET content_id = '3:abc', plan_json = ?1 WHERE id = ?2",
+                    params![plan, first],
+                )
+                .unwrap();
+            let take = |store: &mut Store| {
+                store
+                    .take_over_output(second, "3:abc", SendMode::Video, Some(plan), identity())
+                    .unwrap()
+            };
+            if clear_first {
+                store.clear_items(ClearScope::Finished, None).unwrap();
+                assert_eq!(take(&mut store), None);
+                assert_eq!(store.get_item(second).unwrap().state, State::Probing);
+            } else {
+                assert_eq!(take(&mut store).unwrap().item_id, first);
+                store.clear_items(ClearScope::Finished, None).unwrap();
+                let item = store.get_item(second).unwrap();
+                assert_eq!(item.state, State::Encoded);
+                assert_eq!(item.output_path.as_deref(), Some(output.as_str()));
+                assert!(Path::new(&output).exists(), "held by the item that took it");
+            }
+        }
     }
 
     #[test]
