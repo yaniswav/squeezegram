@@ -9,7 +9,10 @@
 //! - only direct children of the root that are folders named like an item id (digits): the
 //!   root may be a folder the user picked, and `detect` or anything the user keeps there is not
 //!   ours;
-//! - never a folder an item points to (`source_path`, `temp_path` or `output_path` inside it);
+//! - never a folder an item points to (`source_path`, `temp_path` or `output_path` inside it),
+//!   except that an EMPTY one is removed when only finished (`sent`, `cancelled`) items point
+//!   to it: its files were deleted with the send or the cancel, and nothing else would ever
+//!   remove it while the row exists;
 //! - never through a symlink or a junction (a reparse point on Windows): they are skipped, so
 //!   a link can not lead the deletion outside the root;
 //! - never the root itself, and only files directly inside a folder (the layout the encoder
@@ -19,6 +22,7 @@
 use std::fs::{self, Metadata};
 use std::path::{Path, PathBuf};
 
+use super::State;
 use super::store::Store;
 
 /// What a sweep did, for the journal line.
@@ -32,17 +36,32 @@ pub struct Sweep {
     pub skipped: usize,
 }
 
+/// The paths the items point to: those of items that may still need them, and those of items
+/// that are over (`sent`, `cancelled`).
+#[derive(Debug, Default)]
+struct Referenced {
+    active: Vec<PathBuf>,
+    finished: Vec<PathBuf>,
+}
+
 /// Every path the items point to, in any state; `None` when the items can not be read.
-fn referenced_paths(store: &Store) -> Option<Vec<PathBuf>> {
+fn referenced_paths(store: &Store) -> Option<Referenced> {
     let items = store.list_items().ok()?;
-    Some(
-        items
-            .into_iter()
-            .flat_map(|item| [Some(item.source_path), item.temp_path, item.output_path])
-            .flatten()
-            .map(PathBuf::from)
-            .collect(),
-    )
+    let mut referenced = Referenced::default();
+    for item in items {
+        let list = if matches!(item.state, State::Sent | State::Cancelled) {
+            &mut referenced.finished
+        } else {
+            &mut referenced.active
+        };
+        list.extend(
+            [Some(item.source_path), item.temp_path, item.output_path]
+                .into_iter()
+                .flatten()
+                .map(PathBuf::from),
+        );
+    }
+    Some(referenced)
 }
 
 /// Sweeps the app's default temp root. A folder the user picked is never swept: it may hold
@@ -70,7 +89,7 @@ pub fn sweep_orphans(root: &Path, store: &Store) -> Sweep {
         );
         return Sweep::default();
     };
-    let outcome = sweep(root, &referenced);
+    let outcome = sweep_with(root, &referenced.active, &referenced.finished);
     tracing::info!(
         event = "temp_sweep",
         removed = outcome.removed,
@@ -81,8 +100,14 @@ pub fn sweep_orphans(root: &Path, store: &Store) -> Sweep {
     outcome
 }
 
-/// The sweep itself, with the referenced paths given.
+/// The sweep itself, with the paths of the items that may still need them.
 pub fn sweep(root: &Path, referenced: &[PathBuf]) -> Sweep {
+    sweep_with(root, referenced, &[])
+}
+
+/// `sweep`, with the paths of finished items too: a folder only they point to goes when it is
+/// empty, never when something is left in it.
+fn sweep_with(root: &Path, referenced: &[PathBuf], finished: &[PathBuf]) -> Sweep {
     let mut outcome = Sweep::default();
     // A root that is a link is not walked: it could point anywhere.
     match fs::symlink_metadata(root) {
@@ -93,6 +118,12 @@ pub fn sweep(root: &Path, referenced: &[PathBuf]) -> Sweep {
         return outcome;
     };
     let referenced: Vec<String> = referenced.iter().map(|path| normalize(path)).collect();
+    let finished: Vec<String> = finished.iter().map(|path| normalize(path)).collect();
+    let points_into = |paths: &[String], own: &str| {
+        paths
+            .iter()
+            .any(|used| used == own || used.starts_with(&format!("{own}\\")))
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         let Ok(meta) = fs::symlink_metadata(&path) else {
@@ -108,11 +139,18 @@ pub fn sweep(root: &Path, referenced: &[PathBuf]) -> Sweep {
             continue;
         }
         let own = normalize(&path);
-        if referenced
-            .iter()
-            .any(|used| used == &own || used.starts_with(&format!("{own}\\")))
-        {
+        if points_into(&referenced, &own) {
             outcome.kept += 1;
+            continue;
+        }
+        if points_into(&finished, &own) {
+            // Only items that are over point here: an empty folder is a leftover, anything
+            // else is not ours to judge.
+            if fs::remove_dir(&path).is_ok() {
+                outcome.removed += 1;
+            } else {
+                outcome.kept += 1;
+            }
             continue;
         }
         if remove_flat_folder(&path) {
@@ -122,6 +160,20 @@ pub fn sweep(root: &Path, referenced: &[PathBuf]) -> Sweep {
         }
     }
     outcome
+}
+
+/// After a file of an item was deleted: its folder (`<root>\<id>`) goes too when nothing is
+/// left in it, so a finished item does not leave an empty folder behind for as long as its row
+/// exists. Only a folder named like an item id, never a link, and `remove_dir` itself refuses
+/// a folder that holds anything.
+pub(super) fn remove_empty_item_folder(file: &Path) {
+    let Some(dir) = file.parent() else { return };
+    if !dir.file_name().is_some_and(is_item_folder_name) {
+        return;
+    }
+    if matches!(fs::symlink_metadata(dir), Ok(meta) if meta.is_dir() && !is_link(&meta)) {
+        let _ = fs::remove_dir(dir);
+    }
 }
 
 /// Folders the encoder makes are named by the item id.
@@ -228,6 +280,108 @@ mod tests {
         assert!(root.exists(), "the root is never deleted");
 
         assert_eq!(sweep(&root, &[used.join("a.mp4")]).removed, 0, "idempotent");
+    }
+
+    #[test]
+    fn an_empty_folder_of_a_finished_item_goes_but_never_a_non_empty_one() {
+        let dir = TestDir::new("sweep-finished");
+        let root = dir.path().join("tmp");
+        let sent = folder_with(&root, "1", &[]);
+        let cancelled = folder_with(&root, "2", &[]);
+        let leftover = folder_with(&root, "3", &["thumb.jpg"]);
+        let active = folder_with(&root, "4", &[]);
+        let both = folder_with(&root, "5", &[]);
+
+        let outcome = sweep_with(
+            &root,
+            &[active.join("a_sq.mp4"), both.join("b_sq.mp4")],
+            &[
+                sent.join("a_sq.mp4"),
+                cancelled.join("a.part"),
+                leftover.join("c_sq.mp4"),
+                both.join("b_sq.mp4"),
+            ],
+        );
+
+        assert_eq!(
+            outcome,
+            Sweep {
+                removed: 2,
+                kept: 3,
+                skipped: 0
+            }
+        );
+        assert!(!sent.exists() && !cancelled.exists());
+        assert!(leftover.join("thumb.jpg").exists(), "not empty: kept");
+        assert!(
+            active.exists(),
+            "an item that may still run keeps its folder"
+        );
+        assert!(both.exists(), "one active item is enough to keep it");
+    }
+
+    #[test]
+    fn the_sweep_removes_the_empty_folder_of_a_sent_item_from_the_store() {
+        let dir = TestDir::new("sweep-sent-row");
+        let root = dir.path().join("tmp");
+        let folder = folder_with(&root, "1", &[]);
+        let mut store = memory_store();
+        let id = add_item(&mut store, r"C:\videos\a.mp4");
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET state = 'sent', output_path = ?1 WHERE id = ?2",
+                rusqlite::params![folder.join("a_sq.mp4").to_string_lossy(), id],
+            )
+            .unwrap();
+
+        let outcome = sweep_orphans(&root, &store);
+
+        assert_eq!(outcome.removed, 1);
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn discarding_the_files_of_a_sent_item_leaves_no_folder_behind() {
+        let dir = TestDir::new("sweep-discard");
+        let root = dir.path().join("tmp");
+        let folder = folder_with(&root, "7", &["a_sq.mp4"]);
+        let mut store = memory_store();
+        let id = add_item(&mut store, r"C:\videos\a.mp4");
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET state = 'sent', output_path = ?1 WHERE id = ?2",
+                rusqlite::params![folder.join("a_sq.mp4").to_string_lossy(), id],
+            )
+            .unwrap();
+
+        store.discard_files(&store.get_item(id).unwrap()).unwrap();
+
+        assert!(!folder.exists(), "the file and its now empty folder");
+        assert!(root.exists());
+    }
+
+    #[test]
+    fn deleting_the_last_file_of_an_item_folder_removes_the_folder() {
+        let dir = TestDir::new("sweep-after-delete");
+        let root = dir.path().join("tmp");
+        let item = folder_with(&root, "12", &["a_sq.mp4", "thumb.jpg"]);
+        let not_an_item = folder_with(&root, "clips", &["a.mp4"]);
+
+        fs::remove_file(item.join("a_sq.mp4")).unwrap();
+        remove_empty_item_folder(&item.join("a_sq.mp4"));
+        assert!(item.join("thumb.jpg").exists(), "something left: kept");
+
+        fs::remove_file(item.join("thumb.jpg")).unwrap();
+        remove_empty_item_folder(&item.join("thumb.jpg"));
+        assert!(!item.exists());
+        assert!(root.exists(), "never the root");
+
+        // A folder that is not named like an item id is not ours, even empty.
+        fs::remove_file(not_an_item.join("a.mp4")).unwrap();
+        remove_empty_item_folder(&not_an_item.join("a.mp4"));
+        assert!(not_an_item.exists());
     }
 
     #[test]

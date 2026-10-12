@@ -1716,17 +1716,23 @@ impl Store {
     }
 }
 
+/// Deletes a queue file (temporary or encoded, never a source), then its item folder if that
+/// is now empty.
 pub fn remove_quietly(path: &str) {
     match std::fs::remove_file(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => tracing::warn!(
-            event = "file_delete_failed",
-            path,
-            error = %error,
-            "could not delete a queue file"
-        ),
+        Err(error) => {
+            tracing::warn!(
+                event = "file_delete_failed",
+                path,
+                error = %error,
+                "could not delete a queue file"
+            );
+            return;
+        }
     }
+    super::sweep::remove_empty_item_folder(std::path::Path::new(path));
 }
 
 #[cfg(test)]
