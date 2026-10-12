@@ -8,6 +8,7 @@ pub mod orchestrator;
 pub mod recovery;
 pub mod state;
 pub mod store;
+pub mod sweep;
 
 #[cfg(test)]
 pub(crate) mod test_util;

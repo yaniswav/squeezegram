@@ -47,6 +47,17 @@ struct Cached {
     detection: Detection,
 }
 
+/// Custom temp dir, else `%LOCALAPPDATA%\squeezegram\tmp`. Each item encodes in `<root>\<id>`.
+/// Shared with the startup sweep of `queue::sweep`, which must look in the same place.
+pub fn temp_root(temp: &crate::settings::Temp) -> PathBuf {
+    if let Some(dir) = temp.dir.as_ref().filter(|d| !d.trim().is_empty()) {
+        return PathBuf::from(dir);
+    }
+    std::env::var_os("LOCALAPPDATA")
+        .map(|local| PathBuf::from(local).join("squeezegram").join("tmp"))
+        .unwrap_or_else(|| std::env::temp_dir().join("squeezegram"))
+}
+
 pub struct FfmpegStage {
     sidecars: Arc<SidecarService>,
     settings: Arc<SettingsStore>,
@@ -324,20 +335,8 @@ impl FfmpegStage {
         self.gpu.failure()
     }
 
-    /// Custom temp dir, else `%LOCALAPPDATA%\squeezegram\tmp`.
     fn temp_base(&self) -> PathBuf {
-        if let Some(dir) = self
-            .settings
-            .get()
-            .temp
-            .dir
-            .filter(|d| !d.trim().is_empty())
-        {
-            return PathBuf::from(dir);
-        }
-        std::env::var_os("LOCALAPPDATA")
-            .map(|local| PathBuf::from(local).join("squeezegram").join("tmp"))
-            .unwrap_or_else(|| std::env::temp_dir().join("squeezegram"))
+        temp_root(&self.settings.get().temp)
     }
 
     fn item_dir(&self, item: &Item) -> PathBuf {
