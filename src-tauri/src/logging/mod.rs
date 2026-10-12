@@ -289,15 +289,44 @@ pub(crate) mod testing {
     //! thread, so its spawned tasks are covered too).
 
     use super::*;
-    use tracing::subscriber::DefaultGuard;
+    use tracing::subscriber::{DefaultGuard, Interest};
+    use tracing::{Dispatch, Event, Metadata, Subscriber, span};
 
     pub struct TestJournal {
         pub dir: PathBuf,
         _guard: DefaultGuard,
     }
 
+    /// Enables nothing, but answers "ask me per event" for every callsite. `tracing` caches
+    /// each callsite's interest across all live dispatchers; a callsite first hit on another
+    /// test's thread while this journal registers can be cached as "never" and its events
+    /// lost here (seen in CI). Kept alive for the whole run, this dispatcher keeps every
+    /// cached interest at "sometimes", so each event asks the thread's own subscriber.
+    struct Undecided;
+
+    impl Subscriber for Undecided {
+        fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
+            Interest::sometimes()
+        }
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            false
+        }
+        fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+        fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
+        fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
+        fn event(&self, _: &Event<'_>) {}
+        fn enter(&self, _: &span::Id) {}
+        fn exit(&self, _: &span::Id) {}
+    }
+
+    static UNDECIDED: OnceLock<Dispatch> = OnceLock::new();
+
     impl TestJournal {
         pub fn new(dir: &Path, level: &str) -> Self {
+            // Creating the dispatch registers it and rebuilds every cached interest.
+            UNDECIDED.get_or_init(|| Dispatch::new(Undecided));
             let file = RollingFile::open(dir.to_path_buf(), Retention::default()).unwrap();
             let output = Output::new(file, false);
             let subscriber = tracing_subscriber::registry()
