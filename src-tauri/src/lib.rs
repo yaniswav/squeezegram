@@ -101,7 +101,7 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
     let recovered = queue::recovery::on_startup(&mut store)?;
     // After recovery, so the temp files of interrupted items are already gone and only what no
     // item points to is left to remove.
-    queue::sweep::sweep_orphans(&media::stage::temp_root(&settings.get().temp), &store);
+    queue::sweep::sweep_default_root(&settings.get().temp, &store);
     // `SQUEEZEGRAM_TRANSPORT`, identity and `tdjson.dll`; logs `transport_selected`. Nothing
     // touches the network here.
     let transport::select::Selection {

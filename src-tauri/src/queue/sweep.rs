@@ -5,6 +5,7 @@
 //! items point to; a crash, a removed item or a changed setting can still leave a folder that no
 //! item references. This removes those, and nothing else:
 //!
+//! - only in the app's default root: a folder the user picked is never swept;
 //! - only direct children of the root that are folders named like an item id (digits): the
 //!   root may be a folder the user picked, and `detect` or anything the user keeps there is not
 //!   ours;
@@ -42,6 +43,21 @@ fn referenced_paths(store: &Store) -> Option<Vec<PathBuf>> {
             .map(PathBuf::from)
             .collect(),
     )
+}
+
+/// Sweeps the app's default temp root. A folder the user picked is never swept: it may hold
+/// their own digit-named folders of loose files (a "2024" folder of photos looks exactly like an
+/// item folder), and deleting those would destroy their files.
+pub fn sweep_default_root(temp: &crate::settings::Temp, store: &Store) -> Sweep {
+    if temp.dir.as_ref().is_some_and(|dir| !dir.trim().is_empty()) {
+        tracing::info!(
+            event = "temp_sweep_skipped",
+            reason = "custom_root",
+            "temp folder chosen by the user, not swept"
+        );
+        return Sweep::default();
+    }
+    sweep_orphans(&crate::media::stage::temp_root(temp), store)
 }
 
 /// Sweeps `root` against the items of `store` and journals one line with the counts. Items
@@ -260,6 +276,20 @@ mod tests {
 
         assert_eq!((outcome.removed, outcome.kept), (1, 1));
         assert!(kept.join("a_sq.mp4").exists() && !orphan.exists());
+    }
+
+    #[test]
+    fn a_temp_folder_chosen_by_the_user_is_never_swept() {
+        let dir = TestDir::new("sweep-custom");
+        let root = dir.path().join("Videos");
+        let year = folder_with(&root, "2024", &["holiday.mp4"]);
+        let temp = crate::settings::Temp {
+            dir: Some(root.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+
+        assert_eq!(sweep_default_root(&temp, &memory_store()), Sweep::default());
+        assert!(year.join("holiday.mp4").exists());
     }
 
     /// A junction needs no privilege on Windows; the test is skipped where `mklink` fails.
