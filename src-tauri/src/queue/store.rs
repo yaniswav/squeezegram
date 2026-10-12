@@ -894,10 +894,13 @@ impl Store {
     }
 
     /// Holds an `encoded` item until `at` (the end of its destination's minimum interval): it
-    /// keeps its file and its state, and `next_runnable` skips it until then.
+    /// keeps its file and its state, and `next_runnable` skips it until then. The wait is now
+    /// the interval's: a `TG_FLOOD_WAIT` left from before a restart is over, and kept it would
+    /// both say "Telegram asked to wait" and hold the whole queue.
     pub fn defer(&mut self, id: i64, at: DateTime<Utc>) -> Result<()> {
         let updated = self.conn.execute(
-            "UPDATE items SET next_run_at = ?1, updated_at = ?2 WHERE id = ?3 AND state = ?4",
+            "UPDATE items SET next_run_at = ?1, last_error = NULL, updated_at = ?2
+             WHERE id = ?3 AND state = ?4",
             params![iso(at), now_iso(), id, State::Encoded.as_str()],
         )?;
         if updated == 0 {
@@ -2971,6 +2974,22 @@ mod tests {
         assert_eq!(store.next_scheduled(now).unwrap(), Some(due));
         assert_eq!(store.next_runnable(due).unwrap().map(|i| i.id), Some(held));
         assert_eq!(store.next_scheduled(due).unwrap(), None, "nothing after it");
+
+        // A FLOOD_WAIT that ended before the interval did is no longer the reason it waits.
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET last_error = 'TG_FLOOD_WAIT' WHERE id = ?1",
+                [held],
+            )
+            .unwrap();
+        store.defer(held, due).unwrap();
+        assert_eq!(store.get_item(held).unwrap().last_error, None);
+        assert_eq!(
+            store.next_runnable(now).unwrap().map(|i| i.id),
+            Some(behind),
+            "an interval wait holds its destination only"
+        );
 
         // Only an encoded item is held this way.
         let error = store.defer(behind, due).unwrap_err();
