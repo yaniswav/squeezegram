@@ -17,7 +17,17 @@ import {
   type Json,
   type JsonObject,
 } from "./json"
+import {
+  entitlementStatusDecoder,
+  type EntitlementStatus,
+} from "./entitlements"
 import type { ClearScope } from "./queue-clear"
+
+export type {
+  EntitlementPlan,
+  EntitlementSource,
+  EntitlementStatus,
+} from "./entitlements"
 
 // --- queue (src-tauri/src/queue/state.rs, store.rs) ---
 
@@ -1266,6 +1276,14 @@ export function encoderStatus(): Promise<EncoderStatus> {
  */
 export function limitStatus(): Promise<LimitStatus> {
   return call("limit_status", limitStatusDecoder)
+}
+
+/**
+ * The plan in effect (`entitlements_status`): always `free` from the `build` in the public
+ * source. Nothing in the UI reads it yet.
+ */
+export function entitlementsStatus(): Promise<EntitlementStatus> {
+  return call("entitlements_status", entitlementStatusDecoder)
 }
 
 /** Long: downloads about 170 MB, progress on `sidecars://progress`. */

@@ -14,6 +14,7 @@ use serde_json::{Map, Value, json};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::entitlements::{EntitlementStatus, Entitlements};
 use crate::limit::{EffectiveLimit, LimitResolver};
 use crate::logging::{self, export, frontend};
 use crate::media::stage::{FfmpegStage, GpuFailure};
@@ -51,6 +52,8 @@ pub struct AppState {
     pub media: Arc<FfmpegStage>,
     /// Effective upload limit (`limit_status`); the media stage holds the same resolver.
     pub limits: Arc<LimitResolver>,
+    /// Paid features (`entitlements_status`); `FreeOnly` in the public build.
+    pub entitlements: Arc<dyn Entitlements>,
     /// Items changed by the startup recovery, announced once the page has loaded.
     pub recovered: Mutex<Vec<i64>>,
 }
@@ -651,6 +654,13 @@ pub fn encoder_status(state: State<'_, AppState>) -> EncoderStatus {
 #[tauri::command]
 pub fn limit_status(state: State<'_, AppState>) -> EffectiveLimit {
     Call::quiet("limit_status").done(state.limits.current())
+}
+
+/// Not in SPEC section 4: the plan in effect (`{ plan, source }`, plan `free` | `lifetime`,
+/// source `build` | `none` | `license` | `rejected`). Always `free`/`build` in the public build.
+#[tauri::command]
+pub fn entitlements_status(state: State<'_, AppState>) -> EntitlementStatus {
+    Call::quiet("entitlements_status").done(state.entitlements.status())
 }
 
 /// Downloads and installs the pinned ffmpeg build; progress goes out on `sidecars://progress`.

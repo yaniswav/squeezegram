@@ -12,8 +12,10 @@
 //! - `settings`: versioned settings
 //! - `limit`: the effective upload limit (settings, else the signed-in account)
 //! - `logging`: the JSON Lines journal
+//! - `entitlements`: paid features (none in the public build: `FreeOnly`), license keys
 
 mod commands;
+pub mod entitlements;
 pub mod limit;
 pub mod logging;
 pub mod media;
@@ -30,6 +32,7 @@ use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, RunEvent, WebviewWindow};
 
 use commands::{AppState, TauriEvents};
+use entitlements::FreeOnly;
 use limit::LimitResolver;
 use media::stage::FfmpegStage;
 use queue::orchestrator::Orchestrator;
@@ -126,6 +129,8 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
         transport_kind,
         media,
         limits,
+        // The public build has no paid feature; nothing reads a license here.
+        entitlements: Arc::new(FreeOnly),
         recovered: Mutex::new(recovered),
     })
 }
@@ -253,6 +258,7 @@ pub fn run() {
             commands::sidecars_status,
             commands::encoder_status,
             commands::limit_status,
+            commands::entitlements_status,
             commands::sidecars_install,
             commands::sidecars_discover,
             commands::sidecars_use,

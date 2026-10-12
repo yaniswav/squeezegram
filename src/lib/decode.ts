@@ -9,7 +9,7 @@ import {
   isJsonString,
   type Json,
   type JsonObject,
-} from "./json"
+} from "./json.ts"
 
 /** A payload that breaks its contract; `path` locates the value (`$.items[2].state`). */
 export class DecodeError extends Error {

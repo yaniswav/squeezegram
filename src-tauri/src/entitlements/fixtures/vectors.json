@@ -1,0 +1,104 @@
+{
+  "_warning": "TEST KEY, NOT FOR PRODUCTION, public, seed published on purpose. Only the unit tests trust it; no build does. Generated outside the repository with Python `cryptography`.",
+  "test_key": {
+    "kid": "test-1",
+    "seed_text": "squeezegram license TEST KEY, NOT FOR PRODUCTION",
+    "seed_hex": "5a1953ab02ad745aa2b28f121babdbb229bbfbe757ed389d07f932fe0b6d9b5b",
+    "public_hex": "500023fae2db3d03e1b60be13ec7f2d0b1cc499e72ef716ef9b0122f784416c9",
+    "derivation": "seed = SHA-256(seed_text); Ed25519 private key = seed (RFC 8032)"
+  },
+  "subjects": [
+    {
+      "user_id": 777000001,
+      "sub": "e36a8198aa695b480131b298d679ba128f11748077460a7ae2394abddca5bf17"
+    },
+    {
+      "user_id": 777000002,
+      "sub": "c65e46dfa45e1ac1dde00ce43e1d4bbfc535caefcdb46a38ff32b7685ef095eb"
+    },
+    {
+      "user_id": 1,
+      "sub": "53595dc7c80c40c2db8038e8550ee3f8d0fba1bd244f98ed0728252fd2426974"
+    }
+  ],
+  "cases": [
+    {
+      "name": "valid",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIn0.RHbJIq4UA2JoHlqXSkmOzgIBwIBMK520d-joHQ9rL-bmfQDMsgKeszBgCyQdpyyRqZOy4TXP1xw6DtQqoe48Cg",
+      "user_id": 777000001,
+      "expect": "ok"
+    },
+    {
+      "name": "unknown_kid",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJwcm9kLTkiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIn0.J4U3q6fAeODCXut1KL1eTtoWq5_XBN9XquQeIEJ4vcRxtcxzvHJ27zfGO1PFok6biPg7fPku4evgyBq6GeJ6CQ",
+      "user_id": 777000001,
+      "expect": "LIC_UNKNOWN_KID"
+    },
+    {
+      "name": "payload_byte_altered",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAyIn0.RHbJIq4UA2JoHlqXSkmOzgIBwIBMK520d-joHQ9rL-bmfQDMsgKeszBgCyQdpyyRqZOy4TXP1xw6DtQqoe48Cg",
+      "user_id": 777000001,
+      "expect": "LIC_BAD_SIGNATURE"
+    },
+    {
+      "name": "truncated",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIn0.RHbJIq4UA2JoHlqXSkmOzgIBwIBMK520d-joHQ9rL-bmfQDMsgKeszBgCyQdpyyRqZOy4TXP1xw6",
+      "user_id": 777000001,
+      "expect": "LIC_MALFORMED"
+    },
+    {
+      "name": "truncated_to_two_parts",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIn0",
+      "user_id": 777000001,
+      "expect": "LIC_MALFORMED"
+    },
+    {
+      "name": "wrong_signature_other_key",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIn0.jv0x9TNseDLo-kb4yu59PriKaiKUu4yKI3Ge9PnCCr-6HS54oRUol1DvNUxlDoKQvP6_2F2owXBwVgf1dd3HCA",
+      "user_id": 777000001,
+      "expect": "LIC_BAD_SIGNATURE"
+    },
+    {
+      "name": "other_account",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJjNjVlNDZkZmE0NWUxYWMxZGRlMDBjZTQzZTFkNGJiZmM1MzVjYWVmY2RiNDZhMzhmZjMyYjc2ODVlZjA5NWViIiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIn0.bNRlhUkp2TAAr69MXVX7JKDkVo1VU1OjwFa_W9IEusMqaQqngysUxjpsyjVxytqETHQ6dauonhQE_aEk39JMDw",
+      "user_id": 777000001,
+      "expect": "LIC_WRONG_ACCOUNT"
+    },
+    {
+      "name": "no_account_signed_in",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIn0.RHbJIq4UA2JoHlqXSkmOzgIBwIBMK520d-joHQ9rL-bmfQDMsgKeszBgCyQdpyyRqZOy4TXP1xw6DtQqoe48Cg",
+      "user_id": null,
+      "expect": "LIC_NO_ACCOUNT"
+    },
+    {
+      "name": "future_iat_tolerated",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6NDEwMjQ0NDgwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIn0.nahDueN0ByYj3IRgMgULg2PzvaKMY_omeLjSLYI23KjcvS6CIScLobpBXkB2dp2QVX7CMJ8xkjyEI6-igOWrBQ",
+      "user_id": 777000001,
+      "expect": "ok"
+    },
+    {
+      "name": "prefix_sqz2",
+      "token": "SQZ2.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIn0.OMjyz-_vEqAMrUClzGSeTVpCW4Gk9Hr4ItlsRoe0ye3GISHrACvC2K4QuXsZqwLrsAm8D2VDEEzim8ov1kHYCA",
+      "user_id": 777000001,
+      "expect": "LIC_MALFORMED"
+    },
+    {
+      "name": "unknown_field_tolerated",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsInRlbGVwb3J0Il0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIiwibm90ZSI6ImFkZGVkIGJ5IGEgbGF0ZXIgaXNzdWVyIn0.fU0Fcusar1FAWAm0m4xqc5kglH0UFvPzQXVHbOpAUfoshv202CM1pGO2OgiWSmQBphzpK5uIwAa1RwFI2N39DA",
+      "user_id": 777000001,
+      "expect": "ok"
+    },
+    {
+      "name": "abnormal_base64_padding",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIn0=.yifqV2mL7YXEmfJrJuGtxg1ZT71VykViWkl49a701K2PVxUsTdaAxZzNWxes4q0Qz3umBFKA-l9LhEXrW8GJCw",
+      "user_id": 777000001,
+      "expect": "LIC_MALFORMED"
+    },
+    {
+      "name": "standard_alphabet_signature",
+      "token": "SQZ1.eyJ2IjoxLCJraWQiOiJ0ZXN0LTEiLCJzdWIiOiJlMzZhODE5OGFhNjk1YjQ4MDEzMWIyOThkNjc5YmExMjhmMTE3NDgwNzc0NjBhN2FlMjM5NGFiZGRjYTViZjE3IiwicGxhbiI6ImxpZmV0aW1lIiwiZmVhdCI6WyJhZHZhbmNlZF9lbmNvZGluZyIsIm11bHRpX2Rlc3RpbmF0aW9uIl0sImlhdCI6MTc5MTc2MzIwMCwianRpIjoiMGY4YzJkMWUtdGVzdC0wMDAxIn0.RHbJIq4UA2JoHlqXSkmOzgIBwIBMK520d+joHQ9rL+bmfQDMsgKeszBgCyQdpyyRqZOy4TXP1xw6DtQqoe48Cg",
+      "user_id": 777000001,
+      "expect": "LIC_MALFORMED"
+    }
+  ]
+}
