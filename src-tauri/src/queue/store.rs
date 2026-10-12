@@ -19,6 +19,8 @@ pub const HOLD_DUPLICATE: &str = "duplicate";
 pub const HOLD_WATCH: &str = "watch_pending";
 /// `origin` of an item found in a watched folder (`manual` for `queue_add`).
 pub const ORIGIN_WATCH: &str = "watch";
+/// `last_error` of an item rescheduled by Telegram's FLOOD_WAIT (F21).
+pub const FLOOD_WAIT_CODE: &str = "TG_FLOOD_WAIT";
 /// Longest minimum interval between two sends to a destination (F2): one week. Beyond it the
 /// setting is clamped, so the end of an interval is always a representable time.
 pub const MAX_MIN_INTERVAL_S: i64 = 7 * 24 * 3600;
@@ -895,6 +897,29 @@ impl Store {
             });
         }
         Ok(())
+    }
+
+    /// Drops the schedule of `destination_id`'s items held by its minimum interval, after the
+    /// interval changed: `next_run_at` was computed with the old value, and the loop checks the
+    /// new one when it picks them. A FLOOD_WAIT schedule is Telegram's and stays. Returns the
+    /// items released.
+    pub fn release_interval_holds(&mut self, destination_id: i64) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "UPDATE items SET next_run_at = NULL, updated_at = ?1
+             WHERE destination_id = ?2 AND state = ?3 AND next_run_at IS NOT NULL
+               AND (last_error IS NULL OR last_error <> ?4)
+             RETURNING id",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                now_iso(),
+                destination_id,
+                State::Encoded.as_str(),
+                FLOOD_WAIT_CODE
+            ],
+            |row| row.get(0),
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// When the last send to `destination_id` went out: the newest `sent` history row, or a

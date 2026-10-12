@@ -1397,3 +1397,118 @@ async fn a_rescheduled_item_can_be_cancelled_and_holds_nothing_back() {
     h.wait_state(next, Sent).await;
     assert_eq!(h.send.order(), [first, next]);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_new_interval_applies_to_the_items_already_waiting() {
+    let h = Harness::new("orch-interval-change", Treatment::Skip);
+    let chat = h.chats(1)[0];
+    // A week by mistake…
+    h.set_interval(chat, 7 * 24 * 3600);
+    let first = h.add("a.mp4");
+    let second = h.add("b.mp4");
+    h.orch.start();
+    h.wait_state(first, Sent).await;
+    h.idle(5).await;
+    assert!(h.item(second).next_run_at.is_some());
+
+    // …then 30 s: the waiting item follows the new value, not the week.
+    let patch = crate::queue::store::DestinationPatch {
+        min_interval_s: Some(30),
+        ..Default::default()
+    };
+    let saved = h.orch.update_destination(chat, &patch).unwrap();
+    assert_eq!(saved.min_interval_s, 30);
+    h.wait_state(second, Sent).await;
+    let gap = h.sent_after_start(second)[0] - h.sent_after_start(first)[0];
+    assert!(
+        (Duration::from_secs(30)..Duration::from_secs(32)).contains(&gap),
+        "{gap:?}"
+    );
+
+    // Back to none: the next item goes at once.
+    h.set_interval(chat, 3600);
+    let third = h.add("c.mp4");
+    h.idle(5).await;
+    assert!(h.item(third).next_run_at.is_some());
+    let none = crate::queue::store::DestinationPatch {
+        min_interval_s: Some(0),
+        ..Default::default()
+    };
+    h.orch.update_destination(chat, &none).unwrap();
+    h.wait_state(third, Sent).await;
+    let gap = h.sent_after_start(third)[0] - h.sent_after_start(second)[0];
+    assert!(gap < Duration::from_secs(10), "{gap:?}");
+}
+
+#[test]
+fn a_new_interval_leaves_a_flood_wait_schedule_alone() {
+    let store = memory_store();
+    let chat = first_destination(&store);
+    let orch = Orchestrator::new(
+        store,
+        Arc::new(Unavailable),
+        Arc::new(Unavailable),
+        Arc::new(Recorder::default()),
+        PauseRange {
+            min: Duration::ZERO,
+            max: Duration::ZERO,
+        },
+    );
+    let path = |name: &str| format!("{name}.mp4");
+    let ids = orch
+        .add(&[
+            NewItem {
+                source_path: path("interval"),
+                source_size: 1,
+                source_mtime: 1,
+                destination_id: chat,
+                send_mode: SendMode::Video,
+                caption: String::new(),
+            },
+            NewItem {
+                source_path: path("flood"),
+                source_size: 1,
+                source_mtime: 1,
+                destination_id: chat,
+                send_mode: SendMode::Video,
+                caption: String::new(),
+            },
+        ])
+        .unwrap();
+    let later = "2099-01-01T00:00:00.000Z";
+    orch.with_store(|s| {
+        s.conn().execute(
+            "UPDATE items SET state = 'encoded', next_run_at = ?1 WHERE id IN (?2, ?3)",
+            rusqlite::params![later, ids[0], ids[1]],
+        )?;
+        s.conn().execute(
+            "UPDATE items SET last_error = 'TG_FLOOD_WAIT' WHERE id = ?1",
+            [ids[1]],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let patch = crate::queue::store::DestinationPatch {
+        min_interval_s: Some(0),
+        ..Default::default()
+    };
+    orch.update_destination(chat, &patch).unwrap();
+    let next_run = |id| orch.with_store(|s| s.get_item(id)).unwrap().next_run_at;
+    assert_eq!(next_run(ids[0]), None);
+    assert_eq!(next_run(ids[1]).as_deref(), Some(later));
+    // Another setting does not touch the schedule.
+    orch.with_store(|s| {
+        s.conn().execute(
+            "UPDATE items SET next_run_at = ?1 WHERE id = ?2",
+            rusqlite::params![later, ids[0]],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let favorite = crate::queue::store::DestinationPatch {
+        favorite: Some(true),
+        ..Default::default()
+    };
+    orch.update_destination(chat, &favorite).unwrap();
+    assert_eq!(next_run(ids[0]).as_deref(), Some(later));
+}

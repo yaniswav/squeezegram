@@ -757,10 +757,7 @@ pub fn destination_update(
         .arg("favorite", patch.favorite)
         .arg("min_interval_s", patch.min_interval_s)
         .arg("default_mode", patch.default_mode.map(SendMode::as_str));
-    let result = state.queue.with_store(|store| {
-        store.update_destination(destination_id, &patch)?;
-        store.get_destination(destination_id)
-    });
+    let result = state.queue.update_destination(destination_id, &patch);
     call.finish(result.map_err(Into::into))
 }
 

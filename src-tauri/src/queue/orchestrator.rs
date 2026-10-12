@@ -30,8 +30,8 @@ use super::events::{
 };
 use super::state::{Changes, Column};
 use super::store::{
-    ClearOutcome, ClearScope, Destination, HistoryEntry, HistoryFilter, HistoryStatus, Item,
-    ItemPatch, NewItem, Store, remove_quietly,
+    ClearOutcome, ClearScope, Destination, DestinationPatch, HistoryEntry, HistoryFilter,
+    HistoryStatus, Item, ItemPatch, NewItem, Store, remove_quietly,
 };
 use super::{QueueError, Result, State, iso, parse_iso, recovery};
 
@@ -622,6 +622,25 @@ impl Orchestrator {
             });
         }
         Ok(outcome)
+    }
+
+    /// `destination_update`: the local settings of a destination. A new minimum interval also
+    /// applies to its items already waiting for the old one: their schedule is dropped and the
+    /// loop woken, so a shorter interval (or none) lets them go now rather than at the old time.
+    pub fn update_destination(&self, id: i64, patch: &DestinationPatch) -> Result<Destination> {
+        let (destination, released) = self.with_store(|store| {
+            store.update_destination(id, patch)?;
+            let released = match patch.min_interval_s {
+                Some(_) => store.release_interval_holds(id)?,
+                None => Vec::new(),
+            };
+            Ok((store.get_destination(id)?, released))
+        })?;
+        if !released.is_empty() {
+            self.emit_changed(&released);
+            self.inner.wake.notify_one();
+        }
+        Ok(destination)
     }
 
     /// `history_clear`: forgets every send, so a file already sent is no longer held as a
