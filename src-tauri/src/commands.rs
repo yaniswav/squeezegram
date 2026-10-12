@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -33,15 +33,18 @@ use crate::queue::store::{
     NewItem, SendMode, WatchFolder, WatchFolderPatch,
 };
 use crate::queue::{QueueError, State as ItemState};
-use crate::settings::{Settings, SettingsError, SettingsStore, patch_keys};
+use crate::settings::{ProxySettings, Settings, SettingsError, SettingsStore, patch_keys};
 use crate::sidecars::discover::{self, Discovery};
 use crate::sidecars::{SidecarError, SidecarService, SidecarStatus};
 use crate::transport::identity_settings::{
     self, IdentityChangeError, IdentityRuntime, TelegramIdentity,
 };
+use crate::transport::proxy::{Proxy, ProxyField, ProxyKind};
 use crate::transport::select::TransportKind;
 use crate::transport::service::{self, AuthPayload, DestinationCheck, ServiceError};
-use crate::transport::{AuthInput, SentCandidate, TelegramTransport, TransportError};
+use crate::transport::{
+    AuthInput, AuthState, SentCandidate, TelegramTransport, TransportError, tdlib,
+};
 use crate::update::{self, Trigger, UpdateError, UpdateInfo, UpdateNotice, UpdateService};
 use crate::watch::WatchService;
 
@@ -159,6 +162,16 @@ impl From<IdentityChangeError> for CommandError {
                 CommandError::io()
             }
             IdentityChangeError::Settings(error) => error.into(),
+        }
+    }
+}
+
+impl From<ProxyField> for CommandError {
+    /// `PROXY_INVALID { field }`: the field only, never what was typed.
+    fn from(field: ProxyField) -> Self {
+        Self {
+            code: "PROXY_INVALID",
+            params: json!({ "field": field.as_str() }),
         }
     }
 }
@@ -954,6 +967,15 @@ pub fn settings_get(state: State<'_, AppState>) -> Settings {
     Call::quiet("settings_get").done(state.settings.get())
 }
 
+/// `network` goes through `proxy_set` only: it also stores the secret and applies the proxy,
+/// which a plain settings patch would leave behind.
+fn refuse_network(patch: &Value) -> CommandResult<()> {
+    match patch.get("network") {
+        Some(_) => Err(SettingsError::Invalid("network: use proxy_set".into()).into()),
+        None => Ok(()),
+    }
+}
+
 /// The journal gets the changed keys (`send.pause_min_s`), never the values.
 #[tauri::command]
 pub fn settings_set(state: State<'_, AppState>, patch: Value) -> CommandResult<Settings> {
@@ -964,6 +986,9 @@ pub fn settings_set(state: State<'_, AppState>, patch: Value) -> CommandResult<S
             code: "SETTINGS_INVALID",
             params: json!({ "field": "telegram.api_override" }),
         }));
+    }
+    if let Err(error) = refuse_network(&patch) {
+        return call.finish(Err(error));
     }
     let result = state.settings.set(&patch).inspect(|settings| {
         state.queue.set_pauses(settings.pause_range());
@@ -979,6 +1004,139 @@ pub fn settings_set(state: State<'_, AppState>, patch: Value) -> CommandResult<S
         state.background.refresh();
     });
     call.finish(result.map_err(Into::into))
+}
+
+// --- proxy ---
+
+/// A proxy as the page sends it. `kind: null` is a direct connection.
+#[derive(Deserialize)]
+pub struct ProxyInput {
+    pub kind: Option<ProxyKind>,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub port: u32,
+    #[serde(default)]
+    pub username: String,
+    /// `null`: keep the stored secret, which the page never gets back.
+    pub secret: Option<String>,
+}
+
+/// The proxy as the page sees it: everything but the secret, and whether one is stored.
+#[derive(Debug, Serialize)]
+pub struct ProxyView {
+    pub proxy: Option<ProxySettings>,
+    pub has_secret: bool,
+}
+
+/// Result of `proxy_test`.
+#[derive(Debug, Serialize)]
+pub struct ProxyTest {
+    pub latency_ms: u64,
+}
+
+/// The proxy `input` describes, `None` for a direct connection. A secret left out (`null`) is
+/// the stored one while the kind stays the same (`stored` is only read then); after a change of
+/// kind it is empty, since a SOCKS5 password is no MTProto secret.
+fn proxy_from_input(
+    input: &ProxyInput,
+    saved: Option<&ProxySettings>,
+    stored: impl FnOnce() -> Result<Option<String>, TransportError>,
+) -> CommandResult<Option<Proxy>> {
+    let Some(kind) = input.kind else {
+        return Ok(None);
+    };
+    let secret = match &input.secret {
+        Some(secret) => secret.clone(),
+        None if saved.is_some_and(|saved| saved.kind == kind) => stored()?.unwrap_or_default(),
+        None => String::new(),
+    };
+    let proxy = Proxy::new(kind, &input.host, input.port, &input.username, &secret)?;
+    Ok(Some(proxy))
+}
+
+/// The secret first (DPAPI; removed when there is none), then the settings: what `select`
+/// loads at the next launch.
+fn save_proxy(
+    settings: &SettingsStore,
+    dir: &Path,
+    proxy: Option<&Proxy>,
+) -> CommandResult<Settings> {
+    tdlib::proxy::store_secret(dir, proxy.map_or("", |proxy| proxy.secret.as_str()))?;
+    let stored = proxy.map(|proxy| ProxySettings {
+        kind: proxy.kind,
+        host: proxy.host.clone(),
+        port: u32::from(proxy.port),
+        username: proxy.username.clone(),
+    });
+    Ok(settings.set(&json!({ "network": { "proxy": stored } }))?)
+}
+
+fn tdlib_dir() -> CommandResult<std::path::PathBuf> {
+    tdlib::default_dir().ok_or_else(CommandError::io)
+}
+
+/// The saved proxy, without its secret.
+#[tauri::command]
+pub fn proxy_get(state: State<'_, AppState>) -> CommandResult<ProxyView> {
+    let result = tdlib_dir().map(|dir| ProxyView {
+        proxy: state.settings.get().network.proxy,
+        // An unreadable file counts as stored: the start says why it fails, the page asks for
+        // the secret again.
+        has_secret: dir.join(tdlib::proxy::SECRET_FILE).exists(),
+    });
+    Call::quiet("proxy_get").finish(result)
+}
+
+/// Validates, saves (secret protected by DPAPI) and applies the proxy: at once while TDLib
+/// runs, else at its next start. A start that failed (unreadable secret, refused proxy) is
+/// tried again with the new choice. The journal gets the kind only.
+#[tauri::command]
+pub async fn proxy_set(state: State<'_, AppState>, input: ProxyInput) -> CommandResult<ProxyView> {
+    let call = Call::new("proxy_set")
+        .arg("kind", input.kind.map_or("none", ProxyKind::as_str))
+        .arg("new_secret", input.secret.is_some());
+    let result: CommandResult<ProxyView> = async {
+        let dir = tdlib_dir()?;
+        let saved = state.settings.get().network.proxy;
+        let proxy = proxy_from_input(&input, saved.as_ref(), || tdlib::proxy::load_secret(&dir))?;
+        let settings = save_proxy(&state.settings, &dir, proxy.as_ref())?;
+        let has_secret = proxy.as_ref().is_some_and(|proxy| !proxy.secret.is_empty());
+        state.transport.set_proxy(proxy).await?;
+        let failed_start = state.transport_kind == TransportKind::Tdlib
+            && matches!(*state.transport.auth_state().borrow(), AuthState::Closed);
+        if failed_start {
+            crate::transport::select::start(state.transport.as_ref()).await?;
+        }
+        Ok(ProxyView {
+            proxy: settings.network.proxy,
+            has_secret,
+        })
+    }
+    .await;
+    call.finish(result)
+}
+
+/// Round trip to Telegram through the proxy of the form (a secret left out: the stored one),
+/// without saving or applying it.
+#[tauri::command]
+pub async fn proxy_test(state: State<'_, AppState>, input: ProxyInput) -> CommandResult<ProxyTest> {
+    let call = Call::new("proxy_test").arg("kind", input.kind.map_or("none", ProxyKind::as_str));
+    let result: CommandResult<ProxyTest> = async {
+        let dir = tdlib_dir()?;
+        let saved = state.settings.get().network.proxy;
+        let proxy = proxy_from_input(&input, saved.as_ref(), || tdlib::proxy::load_secret(&dir))?
+            .ok_or(CommandError {
+            code: "PROXY_INVALID",
+            params: json!({ "field": "kind" }),
+        })?;
+        let latency = state.transport.test_proxy(&proxy).await?;
+        Ok(ProxyTest {
+            latency_ms: u64::try_from(latency.as_millis()).unwrap_or(u64::MAX),
+        })
+    }
+    .await;
+    call.finish(result)
 }
 
 #[tauri::command]
@@ -1288,11 +1446,18 @@ pub fn log_open_dir() -> CommandResult<()> {
     call.finish(result)
 }
 
-/// Settings for a report: no identity (`api_override`, device name), paths masked later.
+/// Settings for a report: no identity (`api_override`, device name), no proxy address or user
+/// name (its secret is never in the settings), paths masked later.
 fn settings_for_report(settings: &Settings) -> Value {
     let mut value = serde_json::to_value(settings).unwrap_or_default();
-    for key in ["api_override", "device_name"] {
-        if let Some(field) = value.pointer_mut(&format!("/telegram/{key}"))
+    for pointer in [
+        "/telegram/api_override",
+        "/telegram/device_name",
+        // The kind and port of the proxy help; its address and user name say who the user is.
+        "/network/proxy/host",
+        "/network/proxy/username",
+    ] {
+        if let Some(field) = value.pointer_mut(pointer)
             && !field.is_null()
         {
             *field = json!("<set>");
@@ -1392,6 +1557,119 @@ mod tests {
         assert!(!value.to_string().contains("4242") && !value.to_string().contains("SECRET"));
         let plain = settings_for_report(&Settings::default());
         assert!(plain["telegram"]["api_override"].is_null());
+        assert!(plain["network"]["proxy"].is_null());
+
+        settings.network.proxy = Some(ProxySettings {
+            kind: ProxyKind::Socks5,
+            host: "home.example.net".into(),
+            port: 1080,
+            username: "alice".into(),
+        });
+        let value = settings_for_report(&settings);
+        assert_eq!(
+            value["network"]["proxy"],
+            json!({ "kind": "socks5", "host": "<set>", "port": 1080, "username": "<set>" })
+        );
+    }
+
+    fn input(kind: Option<ProxyKind>, secret: Option<&str>) -> ProxyInput {
+        ProxyInput {
+            kind,
+            host: "proxy.example".into(),
+            port: 443,
+            username: String::new(),
+            secret: secret.map(str::to_owned),
+        }
+    }
+
+    const MT: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn a_left_out_secret_is_the_stored_one_only_for_the_same_kind() {
+        let saved = ProxySettings {
+            kind: ProxyKind::Mtproto,
+            host: "old.example".into(),
+            port: 443,
+            username: String::new(),
+        };
+        let stored = || Ok(Some(MT.to_owned()));
+        let unread = || -> Result<Option<String>, TransportError> { panic!("not read") };
+
+        assert!(
+            proxy_from_input(&input(None, None), Some(&saved), unread)
+                .unwrap()
+                .is_none()
+        );
+        let kept = proxy_from_input(&input(Some(ProxyKind::Mtproto), None), Some(&saved), stored)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (kept.host.as_str(), kept.secret.as_str()),
+            ("proxy.example", MT)
+        );
+        let typed = proxy_from_input(
+            &input(Some(ProxyKind::Mtproto), Some(&format!("dd{MT}"))),
+            Some(&saved),
+            unread,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(typed.secret, format!("dd{MT}"));
+        // Another kind: the MTProto secret is not a SOCKS5 password.
+        let socks = proxy_from_input(&input(Some(ProxyKind::Socks5), None), Some(&saved), unread)
+            .unwrap()
+            .unwrap();
+        assert!(socks.secret.is_empty());
+
+        let missing =
+            proxy_from_input(&input(Some(ProxyKind::Mtproto), None), None, unread).unwrap_err();
+        assert_eq!(
+            (missing.code, missing.params),
+            ("PROXY_INVALID", json!({ "field": "secret" }))
+        );
+        let mut bad_port = input(Some(ProxyKind::Http), Some(""));
+        bad_port.port = 70_000;
+        let error = proxy_from_input(&bad_port, None, unread).unwrap_err();
+        assert_eq!(error.params, json!({ "field": "port" }));
+        let unreadable =
+            proxy_from_input(&input(Some(ProxyKind::Mtproto), None), Some(&saved), || {
+                Err(TransportError::ProxySecretUnavailable)
+            })
+            .unwrap_err();
+        assert_eq!(unreadable.code, "TG_PROXY_SECRET_UNAVAILABLE");
+    }
+
+    #[test]
+    fn the_network_section_is_not_a_plain_setting() {
+        assert!(refuse_network(&json!({ "ui": { "theme": "dark" } })).is_ok());
+        let refused = refuse_network(&json!({ "network": { "proxy": null } })).unwrap_err();
+        assert_eq!(refused.code, "SETTINGS_INVALID");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn saving_a_proxy_keeps_its_secret_out_of_the_settings_file() {
+        let dir = TestDir::new("commands-proxy");
+        let store = SettingsStore::load(dir.path().join("settings.json")).unwrap();
+        let tdlib_dir = dir.path().join("tdlib");
+        let proxy = Proxy::new(ProxyKind::Mtproto, "mt.example", 443, "", MT).unwrap();
+
+        let saved = save_proxy(&store, &tdlib_dir, Some(&proxy)).unwrap();
+        assert_eq!(saved.network.proxy.as_ref().unwrap().host, "mt.example");
+        let file = std::fs::read_to_string(dir.path().join("settings.json")).unwrap();
+        assert!(!file.contains(MT), "{file}");
+        assert_eq!(
+            tdlib::proxy::load_secret(&tdlib_dir).unwrap().as_deref(),
+            Some(MT)
+        );
+
+        let direct = save_proxy(&store, &tdlib_dir, None).unwrap();
+        assert_eq!(direct.network.proxy, None);
+        assert_eq!(
+            tdlib::proxy::load_secret(&tdlib_dir).unwrap(),
+            None,
+            "secret removed"
+        );
     }
 
     #[test]

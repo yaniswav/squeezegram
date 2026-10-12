@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::media::plan::{EncodePreset, ResolutionCap, TARGET_MB_RANGE, VideoCodec};
 use crate::queue::orchestrator::PauseRange;
+use crate::transport::proxy::{Proxy, ProxyKind};
 
 pub const FILE_NAME: &str = "settings.json";
 
@@ -49,6 +50,29 @@ pub struct Settings {
     pub advanced_encoding: AdvancedEncoding,
     /// Paid feature `background`. Absent from older files: the defaults apply.
     pub background: Background,
+    /// Proxy for Telegram. Absent from older files: no proxy. Changed only through
+    /// `proxy_set`, which also stores the secret and applies it to the transport.
+    pub network: Network,
+}
+
+/// `proxy: null`: direct connection. The secret of the proxy is not here (`transport::proxy`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Network {
+    pub proxy: Option<ProxySettings>,
+}
+
+/// What `settings.json` keeps of a proxy: everything but its secret.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxySettings {
+    pub kind: ProxyKind,
+    pub host: String,
+    /// `u32` so that 0 or 70000 reach `validate` and are refused there with the others.
+    pub port: u32,
+    /// Empty for MTProto and for a SOCKS5/HTTP proxy without authentication.
+    #[serde(default)]
+    pub username: String,
 }
 
 /// What closing the window does.
@@ -265,6 +289,7 @@ impl Default for Settings {
             updates: Updates::default(),
             advanced_encoding: AdvancedEncoding::default(),
             background: Background::default(),
+            network: Network::default(),
         }
     }
 }
@@ -371,6 +396,17 @@ impl Settings {
             && !is_device_name(name)
         {
             return Err(SettingsError::Invalid("telegram.device_name".into()));
+        }
+        if let Some(proxy) = &self.network.proxy {
+            // The same checks as `proxy_set`, with a placeholder secret: the real one is not
+            // in the settings.
+            let secret = match proxy.kind {
+                ProxyKind::Mtproto => "00000000000000000000000000000000",
+                ProxyKind::Socks5 | ProxyKind::Http => "",
+            };
+            Proxy::new(proxy.kind, &proxy.host, proxy.port, &proxy.username, secret).map_err(
+                |field| SettingsError::Invalid(format!("network.proxy.{}", field.as_str())),
+            )?;
         }
         Ok(())
     }
@@ -532,7 +568,8 @@ mod tests {
                 "max_resolution": "1080p", "audio_kbps": 128, "video_codec": "h264",
                 "preset": "balanced", "target_mb": null
               },
-              "background": { "close_action": "quit" }
+              "background": { "close_action": "quit" },
+              "network": { "proxy": null }
             })
         );
     }
@@ -795,6 +832,44 @@ mod tests {
             assert_eq!(error.code(), "SETTINGS_INVALID", "{bad:?}");
         }
         assert_eq!(store.get(), reset, "a refused patch changes nothing");
+    }
+
+    #[test]
+    fn a_proxy_is_saved_without_secret_and_validated() {
+        let dir = TestDir::new("settings-proxy");
+        let path = dir.path().join(FILE_NAME);
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("network");
+        std::fs::write(&path, old.to_string()).unwrap();
+        let store = SettingsStore::load(path.clone()).unwrap();
+        assert_eq!(store.get().network.proxy, None, "older files: no proxy");
+
+        let saved = store
+            .set(&json!({ "network": { "proxy": {
+                "kind": "mtproto", "host": "mt.example", "port": 443
+            } } }))
+            .unwrap();
+        let proxy = saved.network.proxy.unwrap();
+        assert_eq!(
+            (proxy.kind, proxy.port, proxy.username.as_str()),
+            (ProxyKind::Mtproto, 443, "")
+        );
+        for bad in [
+            json!({ "network": { "proxy": { "kind": "socks5", "host": "", "port": 1080 } } }),
+            json!({ "network": { "proxy": { "kind": "socks5", "host": "h.org", "port": 0 } } }),
+            json!({ "network": { "proxy": { "kind": "socks5", "host": "h.org", "port": 65536 } } }),
+            json!({ "network": { "proxy": { "kind": "mtproto", "host": "h.org", "port": 1, "username": "u" } } }),
+            json!({ "network": { "proxy": { "kind": "vpn", "host": "h.org", "port": 1 } } }),
+            json!({ "network": { "proxy": { "kind": "socks5", "host": "h.org", "port": 1, "password": "p" } } }),
+        ] {
+            assert_eq!(
+                store.set(&bad).unwrap_err().code(),
+                "SETTINGS_INVALID",
+                "{bad}"
+            );
+        }
+        let direct = store.set(&json!({ "network": { "proxy": null } })).unwrap();
+        assert_eq!(direct.network.proxy, None);
     }
 
     #[test]

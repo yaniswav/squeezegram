@@ -59,6 +59,11 @@
       ]
     },
     { "expect": "setNetworkType", "reply": { "@type": "ok" } },
+    { "expect": "disableProxy", "reply": { "@type": "ok" } },
+    {
+      "expect": "getProxies",
+      "reply": { "@type": "addedProxies", "proxies": [] }
+    },
     {
       "expect": "setTdlibParameters",
       "reply": { "@type": "ok" },

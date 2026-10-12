@@ -70,9 +70,25 @@ fn is_hex32_at(chars: &[char], i: usize) -> bool {
             .all(char::is_ascii_hexdigit)
 }
 
-/// Replaces e-mail addresses, `+`-prefixed phone numbers, `tg://` links (QR login tokens) and
-/// 32-hex-digit words (the shape of an `api_hash`) with placeholders. Applied to every text the
-/// UI sends to the journal, and to the export.
+/// Shared proxy links carry the proxy's secret or password in their query.
+const PROXY_LINKS: [&str; 2] = ["t.me/proxy?", "t.me/socks?"];
+
+fn starts_with_text(chars: &[char], text: &str) -> bool {
+    chars.len() >= text.chars().count() && text.chars().zip(chars).all(|(a, b)| a == *b)
+}
+
+/// End of a link starting at `i`: whitespace or a quote.
+fn link_end(chars: &[char], i: usize) -> usize {
+    let mut end = i;
+    while end < chars.len() && !chars[end].is_whitespace() && !"\"'<>".contains(chars[end]) {
+        end += 1;
+    }
+    end
+}
+
+/// Replaces e-mail addresses, `+`-prefixed phone numbers, `tg://` links (QR login tokens,
+/// proxies), `t.me` proxy links and 32-hex-digit words (the shape of an `api_hash`) with
+/// placeholders. Applied to every text the UI sends to the journal, and to the export.
 pub fn scrub_secrets(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
@@ -87,13 +103,23 @@ pub fn scrub_secrets(text: &str) -> String {
         }
         // tg://login?token=…, tg://… : up to whitespace or a quote.
         if chars[i..].starts_with(&['t', 'g', ':', '/', '/']) {
-            let mut end = i;
-            while end < chars.len() && !chars[end].is_whitespace() && !"\"'<>".contains(chars[end])
-            {
-                end += 1;
-            }
             out.push_str("<tg_link>");
-            i = end;
+            i = link_end(&chars, i);
+            continue;
+        }
+        // https://t.me/proxy?server=…&secret=…: the scheme was already copied, taken back.
+        if PROXY_LINKS
+            .iter()
+            .any(|link| starts_with_text(&chars[i..], link))
+        {
+            for scheme in ["https://", "http://"] {
+                if let Some(kept) = out.strip_suffix(scheme) {
+                    out.truncate(kept.len());
+                    break;
+                }
+            }
+            out.push_str("<proxy_link>");
+            i = link_end(&chars, i);
             continue;
         }
         // +33 6 12 34 56 78, +1-555-0100: 7 digits or more after the plus sign.
@@ -278,6 +304,17 @@ mod tests {
                 "api_hash=<hex32>; \"<hex32>\" x{hash} {sha256} {}",
                 &hash[..31]
             )
+        );
+    }
+
+    #[test]
+    fn proxy_links_are_scrubbed_with_their_secret() {
+        let text = "use https://t.me/proxy?server=1.2.3.4&port=443&secret=ee00ff \
+                    or t.me/socks?server=h&user=u&pass=p, tg://proxy?secret=dd11 \
+                    but keep https://t.me/somechannel";
+        assert_eq!(
+            scrub_secrets(text),
+            "use <proxy_link> or <proxy_link> <tg_link> but keep https://t.me/somechannel"
         );
     }
 

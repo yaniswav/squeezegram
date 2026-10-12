@@ -172,6 +172,7 @@ pub(crate) mod tests {
             override_api_id: None,
             device_name: Some("Custom".into()),
             machine_name: Some("TEST-PC".into()),
+            proxy: None,
             release: false,
         }
     }

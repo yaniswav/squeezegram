@@ -4,6 +4,7 @@
 //! - `service`: destinations cache, pre-send check, reconciliation, `auth://state` payload.
 //! - `mock`: deterministic `MockTransport`, compiled in tests and debug builds only.
 //! - `tdlib`: `TdlibJson`, the TDLib transport over `tdjson` (login, chats, upload, shutdown).
+//! - `proxy`: the proxy every connection goes through (SOCKS5, HTTP, MTProto), validated.
 //! - `select`: which transport the app uses (`SQUEEZEGRAM_TRANSPORT`, identity, DLL).
 //! - `identity_settings`: the device name and personal API identity Settings shows and edits.
 //! - `NoTransport`: no Telegram at all; refuses everything, with the reason when there is one.
@@ -21,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 pub mod identity_settings;
 #[cfg(any(test, debug_assertions))]
 pub mod mock;
+pub mod proxy;
 pub mod select;
 pub mod service;
 pub mod stage;
@@ -530,6 +532,14 @@ pub enum TransportError {
     /// A transport method this transport does not implement; nothing was sent.
     #[error("not implemented yet: {0}")]
     NotImplemented(&'static str),
+    /// The proxy was refused or could not reach Telegram; TDLib's message (it names the
+    /// problem, never the secret).
+    #[error("proxy: {0}")]
+    Proxy(String),
+    /// A proxy is set but its DPAPI-protected secret cannot be read (other Windows account or
+    /// machine, corrupt file). Nothing connects until the user enters it again.
+    #[error("proxy secret unavailable")]
+    ProxySecretUnavailable,
 }
 
 impl TransportError {
@@ -566,6 +576,8 @@ impl TransportError {
                 ("TG_NOT_CONFIGURED", json!({ "problem": problem }))
             }
             TransportError::NotImplemented(what) => ("TG_NOT_IMPLEMENTED", json!({ "what": what })),
+            TransportError::Proxy(message) => ("TG_PROXY_FAILED", json!({ "message": message })),
+            TransportError::ProxySecretUnavailable => ("TG_PROXY_SECRET_UNAVAILABLE", json!({})),
         }
     }
 }
@@ -614,6 +626,13 @@ pub trait TelegramTransport: Send + Sync {
 
     /// Read only: messages of the destination that may be this upload; the user decides.
     async fn verify_sent(&self, probe: &SentProbe) -> Result<Vec<SentCandidate>, TransportError>;
+
+    /// Every connection goes through `proxy` (`None`: direct). Kept for the next start when no
+    /// client runs; applied before the first network request of a start, and at once otherwise.
+    async fn set_proxy(&self, proxy: Option<proxy::Proxy>) -> Result<(), TransportError>;
+
+    /// Round trip to Telegram through `proxy`, without changing the proxy in use.
+    async fn test_proxy(&self, proxy: &proxy::Proxy) -> Result<Duration, TransportError>;
 
     async fn shutdown(&self);
 }
@@ -704,6 +723,15 @@ impl TelegramTransport for NoTransport {
     }
 
     async fn verify_sent(&self, _: &SentProbe) -> Result<Vec<SentCandidate>, TransportError> {
+        self.refuse()
+    }
+
+    /// Nothing connects: the proxy is only saved (by the caller) for the next run.
+    async fn set_proxy(&self, _: Option<proxy::Proxy>) -> Result<(), TransportError> {
+        Ok(())
+    }
+
+    async fn test_proxy(&self, _: &proxy::Proxy) -> Result<Duration, TransportError> {
         self.refuse()
     }
 
@@ -868,6 +896,16 @@ mod tests {
                 TransportError::NotImplemented("upload (M4)"),
                 "TG_NOT_IMPLEMENTED",
                 json!({ "what": "upload (M4)" }),
+            ),
+            (
+                TransportError::Proxy("Connection refused".into()),
+                "TG_PROXY_FAILED",
+                json!({ "message": "Connection refused" }),
+            ),
+            (
+                TransportError::ProxySecretUnavailable,
+                "TG_PROXY_SECRET_UNAVAILABLE",
+                json!({}),
             ),
         ];
         for (error, code, params) in cases {

@@ -8,6 +8,9 @@
 //! Chats: the main list, the archive (a private chat and a forum) and two folders, "Work" and
 //! "Family" (`MOCK_SLOW_GROUP` is in the main list and in both folders); two more chats are in
 //! no list and only found by `search_chats` (`MOCK_PUBLIC_GROUP`, `MOCK_OLD_GROUP`).
+//!
+//! Proxy: kept as set; a test answers `MOCK_PROXY_PING`, or `Proxy` for the host
+//! `MOCK_PROXY_DOWN`.
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard};
@@ -17,6 +20,7 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
+use super::proxy::Proxy;
 use super::{
     AuthInput, AuthState, ChatFolder, ChatKind, Dialog, Forbidden, Me, MediaKind, Payload, Peer,
     PeerKind, Progress, SendCheck, Sent, SentCandidate, SentProbe, SlowMode, Target,
@@ -24,6 +28,10 @@ use super::{
 };
 
 pub const MOCK_CODE: &str = "12345";
+/// Round trip of a proxy test.
+pub const MOCK_PROXY_PING: Duration = Duration::from_millis(120);
+/// A proxy at this host never answers its test.
+pub const MOCK_PROXY_DOWN: &str = "down.invalid";
 pub const MOCK_PASSWORD: &str = "squeezegram";
 pub const MOCK_ME_ID: i64 = 777_000_001;
 /// Forum with topics General (1), Videos (2) and a closed Archive (3).
@@ -204,6 +212,7 @@ struct MockState {
     thumbnails: Vec<Option<(u32, u32, bool)>>,
     /// Chats whose rights were taken away after the start (`revoke_write`).
     revoked: Vec<(Peer, Forbidden)>,
+    proxy: Option<Proxy>,
 }
 
 pub struct MockTransport {
@@ -235,6 +244,7 @@ impl MockTransport {
                 checks: 0,
                 thumbnails: Vec::new(),
                 revoked: Vec::new(),
+                proxy: None,
             }),
             step_delay: Duration::from_millis(200),
         }
@@ -327,6 +337,11 @@ impl MockTransport {
             date_unix,
         });
         id
+    }
+
+    /// The proxy last set (`set_proxy`).
+    pub fn proxy(&self) -> Option<Proxy> {
+        self.lock().proxy.clone()
     }
 
     /// Calls to `upload`, whatever their outcome.
@@ -852,6 +867,18 @@ impl TelegramTransport for MockTransport {
             })
             .collect();
         Ok(candidates)
+    }
+
+    async fn set_proxy(&self, proxy: Option<Proxy>) -> Result<(), TransportError> {
+        self.lock().proxy = proxy;
+        Ok(())
+    }
+
+    async fn test_proxy(&self, proxy: &Proxy) -> Result<Duration, TransportError> {
+        if proxy.host == MOCK_PROXY_DOWN {
+            return Err(TransportError::Proxy("Connection refused".into()));
+        }
+        Ok(MOCK_PROXY_PING)
     }
 
     async fn shutdown(&self) {

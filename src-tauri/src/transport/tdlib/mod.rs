@@ -1,6 +1,7 @@
 //! `TdlibJson`: the TDLib transport as a thin JSON layer over `tdjson`.
 //! Start, login state machine, `auth_submit`, `log_out`, `shutdown` and `me` live here; `chats`
-//! holds dialogs, topics and `can_send`, `send` holds `upload` and `verify_sent`. Requests and
+//! holds dialogs, topics and `can_send`, `send` holds `upload` and `verify_sent`, `proxy` the
+//! proxy and its DPAPI-protected secret. Requests and
 //! fields are named after `td_api.tl` of the pinned TDLib 1.8.68.
 //!
 //! Rules learned from how TDLib behaves:
@@ -27,6 +28,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
+use super::proxy::Proxy;
 use super::{
     AuthInput, AuthState, ChatFolder, Dialog, Me, MediaKind, Peer, Progress, SendCheck, Sent,
     SentCandidate, SentProbe, Target, TelegramTransport, Topic, TransportError, UploadRequest,
@@ -43,6 +45,7 @@ pub mod identity;
 pub mod json;
 pub mod key;
 pub mod library;
+pub mod proxy;
 #[cfg(any(test, debug_assertions))]
 pub mod replay;
 pub mod send;
@@ -50,6 +53,8 @@ pub mod send;
 pub(crate) mod tests;
 #[cfg(test)]
 mod tests_chats_send;
+#[cfg(test)]
+mod tests_proxy;
 
 pub use bindings::{DynLib, TdBindings};
 pub use key::DatabaseKey;
@@ -103,6 +108,9 @@ pub struct TdlibConfig {
     /// How long `list_dialogs` waits for the first `updateChatFolders` of the session (TDLib
     /// sends it right after sign-in); after that the folders are taken as unknown.
     pub folders_wait: Duration,
+    /// Proxy of the first start (`None`: direct). `Err`: one is set but cannot be used (its
+    /// secret is unreadable), and no start connects until `set_proxy` replaces it.
+    pub proxy: Result<Option<Proxy>, TransportError>,
 }
 
 impl TdlibConfig {
@@ -122,6 +130,7 @@ impl TdlibConfig {
             cancel_grace: Duration::from_secs(2),
             network_disabled: false,
             folders_wait: Duration::from_secs(3),
+            proxy: Ok(None),
         }
     }
 
@@ -145,6 +154,7 @@ impl fmt::Debug for TdlibConfig {
             .field("application_version", &self.application_version)
             .field("log_verbosity", &self.log_verbosity)
             .field("network_disabled", &self.network_disabled)
+            .field("proxy", &self.proxy)
             .finish_non_exhaustive()
     }
 }
@@ -367,6 +377,8 @@ struct Inner<B: TdBindings> {
     /// Chat folders from the last `updateChatFolders` (`None` until it arrives); cleared on
     /// close and log out. Names are personal data, never logged.
     folders: Mutex<Option<Vec<ChatFolder>>>,
+    /// Applied by every start (`open`) and by `set_proxy`; see `TdlibConfig::proxy`.
+    proxy: Mutex<Result<Option<Proxy>, TransportError>>,
 }
 
 /// The TDLib transport over any `TdBindings` (`DynLib` in the app, `Replay` in tests).
@@ -392,6 +404,7 @@ impl TdlibJson<DynLib> {
 
 impl<B: TdBindings> TdlibJson<B> {
     pub fn new(bindings: B, config: TdlibConfig) -> Self {
+        let proxy = config.proxy.clone();
         Self {
             inner: Arc::new(Inner {
                 bindings,
@@ -408,6 +421,7 @@ impl<B: TdBindings> TdlibJson<B> {
                 listeners: Arc::new(Listeners::default()),
                 me_cache: Mutex::new(None),
                 folders: Mutex::new(None),
+                proxy: Mutex::new(proxy),
             }),
         }
     }
@@ -683,6 +697,9 @@ impl<B: TdBindings> Inner<B> {
     /// Log settings, key, client, `setTdlibParameters`. On error the caller closes the client.
     async fn open(self: &Arc<Self>) -> Result<(), TransportError> {
         let config = &self.config;
+        // A proxy that cannot be used stops the start before any client exists: connecting
+        // without it could expose the user it is meant to protect.
+        let proxy = lock(&self.proxy).clone()?;
         // 1. Verbosity first: nothing is logged with the default level.
         self.execute_ok(
             "setLogVerbosityLevel",
@@ -727,7 +744,10 @@ impl<B: TdBindings> Inner<B> {
         *lock(&self.version) = version["value"].as_str().map(str::to_owned);
         self.wait_raw(client, auth::WAIT_PARAMETERS, config.start_timeout)
             .await?;
-        // 3. Queued before the parameters, answered after them.
+        // 3. Queued before the parameters, answered after them. TDLib runs the proxy choice
+        // before its first connection (`proxy.rs`).
+        let (proxy_what, proxy_body) = proxy::choice_request(proxy.as_ref());
+        let (proxy_extra, proxy_answer) = self.submit(proxy_what, proxy_body)?;
         let network = if config.network_disabled {
             Some(self.submit(
                 "setNetworkType",
@@ -767,7 +787,8 @@ impl<B: TdBindings> Inner<B> {
             self.wait("setNetworkType", extra, receiver, config.start_timeout)
                 .await?;
         }
-        Ok(())
+        self.finish_proxy(proxy_what, proxy_extra, proxy_answer, config.start_timeout)
+            .await
     }
 
     /// `close` then `authorizationStateClosed`, bounded by `close_timeout`; forgets the client
@@ -1022,6 +1043,22 @@ impl<B: TdBindings> TelegramTransport for TdlibJson<B> {
 
     async fn verify_sent(&self, probe: &SentProbe) -> Result<Vec<SentCandidate>, TransportError> {
         self.inner.verify_sent(probe).await
+    }
+
+    /// Under the lifecycle lock, so a start in progress applies either the old choice or this
+    /// one, never half of each.
+    async fn set_proxy(&self, proxy: Option<Proxy>) -> Result<(), TransportError> {
+        let inner = &self.inner;
+        let _lifecycle = inner.lifecycle.lock().await;
+        *lock(&inner.proxy) = Ok(proxy.clone());
+        if inner.current_client() == 0 {
+            return Ok(());
+        }
+        inner.apply_proxy(proxy.as_ref()).await
+    }
+
+    async fn test_proxy(&self, proxy: &Proxy) -> Result<Duration, TransportError> {
+        self.inner.ping_proxy(proxy).await
     }
 
     async fn shutdown(&self) {

@@ -17,7 +17,7 @@
 //! something.
 //!
 //! Journal: `transport_selected`, `tdjson_found` / `tdjson_missing`, `tg_identity` (presence
-//! and lengths, never the values), `transport_start`.
+//! and lengths, never the values), `proxy_loaded` (kind only), `transport_start`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,11 +26,12 @@ use std::time::Instant;
 use serde::Serialize;
 use serde_json::json;
 
+use super::proxy::Proxy;
 use super::tdlib::identity::{self, ApiIdentity, IdentityProblem, IdentitySource};
 use super::tdlib::library::{self, Checked, SearchPaths};
 use super::tdlib::{TdlibConfig, TdlibJson};
 use super::{NoTransport, TelegramTransport, TransportError};
-use crate::settings::Settings;
+use crate::settings::{ProxySettings, Settings};
 
 /// `tdlib` | `mock` | `none`.
 pub const TRANSPORT_ENV: &str = "SQUEEZEGRAM_TRANSPORT";
@@ -82,6 +83,8 @@ pub struct Inputs {
     pub device_name: Option<String>,
     /// `COMPUTERNAME`, for the default device name.
     pub machine_name: Option<String>,
+    /// `network.proxy`; its secret is read from the TDLib folder (DPAPI).
+    pub proxy: Option<ProxySettings>,
     /// Release build: default `tdlib`, a DLL off the pin is refused.
     pub release: bool,
 }
@@ -96,6 +99,7 @@ impl Inputs {
             override_api_id: settings.telegram.api_override.as_ref().map(|o| o.api_id),
             device_name: settings.telegram.device_name.clone(),
             machine_name: std::env::var("COMPUTERNAME").ok(),
+            proxy: settings.network.proxy.clone(),
             release: !cfg!(debug_assertions),
         }
     }
@@ -251,12 +255,16 @@ fn tdlib(inputs: &Inputs, reason: &'static str) -> Selection {
         );
     }
     let personal = inputs.override_api_id.map(|_| identity.api_id);
-    let config = TdlibConfig::new(
+    // The proxy belongs to the computer, not to an API identity: its secret stays in the
+    // TDLib folder, beside the sessions.
+    let proxy = load_proxy(inputs, &dir);
+    let mut config = TdlibConfig::new(
         session_dir(&dir, personal),
         identity.api_id,
         identity.api_hash,
         inputs.device_model(),
     );
+    config.proxy = proxy;
     Selection {
         transport: Arc::new(TdlibJson::with_dll(library.path, config)),
         kind: TransportKind::Tdlib,
@@ -315,6 +323,27 @@ pub(crate) fn resolve_identity(
         api_hash.as_deref(),
         result.as_ref().map(|_| ()),
     );
+    result
+}
+
+/// The proxy of the settings with its secret. An unreadable secret is kept as the error: the
+/// transport then refuses to start (`TdlibConfig::proxy`) instead of connecting directly.
+pub(crate) fn load_proxy(
+    inputs: &Inputs,
+    tdlib_dir: &std::path::Path,
+) -> Result<Option<Proxy>, TransportError> {
+    let result = super::tdlib::proxy::load(tdlib_dir, inputs.proxy.as_ref());
+    let kind = inputs.proxy.as_ref().map(|proxy| proxy.kind.as_str());
+    match &result {
+        Ok(_) => tracing::info!(event = "proxy_loaded", kind, "Telegram proxy loaded"),
+        Err(error) => tracing::warn!(
+            event = "proxy_loaded",
+            kind,
+            error_code = error.code_and_params().0,
+            error = %error,
+            "Telegram proxy unusable, Telegram will not connect"
+        ),
+    }
     result
 }
 
@@ -459,6 +488,7 @@ mod tests {
             override_api_id: None,
             device_name: None,
             machine_name: Some("TEST-PC".into()),
+            proxy: None,
             release,
         }
     }
@@ -839,6 +869,36 @@ mod tests {
         assert_eq!(
             (selection.kind, selection.reason),
             (TransportKind::Tdlib, "release_default")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_proxy_comes_with_its_stored_secret_or_blocks_the_start() {
+        use crate::transport::proxy::ProxyKind;
+        use crate::transport::tdlib::proxy::store_secret;
+
+        let dir = TempDir::new("select-proxy");
+        let mut inputs = inputs(&dir, false);
+        let tdlib_dir = inputs.tdlib_dir().unwrap();
+        assert_eq!(load_proxy(&inputs, &tdlib_dir).unwrap(), None);
+
+        inputs.proxy = Some(ProxySettings {
+            kind: ProxyKind::Mtproto,
+            host: "mt.example".into(),
+            port: 443,
+            username: String::new(),
+        });
+        assert!(matches!(
+            load_proxy(&inputs, &tdlib_dir),
+            Err(TransportError::ProxySecretUnavailable)
+        ));
+        let secret = "0123456789abcdef0123456789abcdef";
+        store_secret(&tdlib_dir, secret).unwrap();
+        let proxy = load_proxy(&inputs, &tdlib_dir).unwrap().unwrap();
+        assert_eq!(
+            (proxy.host.as_str(), proxy.secret.as_str()),
+            ("mt.example", secret)
         );
     }
 }

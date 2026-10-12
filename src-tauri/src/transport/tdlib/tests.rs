@@ -227,7 +227,8 @@ async fn wrong_database_key_is_bad_database_key_and_closes_the_client() {
         AuthState::Closed
     ));
     assert_eq!(transport.inner.current_client(), 0);
-    assert!(lock(&transport.inner.pending).len() <= 1);
+    // `setNetworkType` and `disableProxy`, queued before the parameters, never answered.
+    assert!(lock(&transport.inner.pending).len() <= 2);
     assert!(replay.unexpected().is_empty(), "{:?}", replay.unexpected());
     transport.shutdown().await;
     assert!(lock(&transport.inner.pending).is_empty());
