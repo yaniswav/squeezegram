@@ -1717,7 +1717,7 @@ export function sidecarsDiscover(): Promise<FfmpegDiscovery> {
  */
 export function sidecarsUse(candidateId: number): Promise<SidecarStatus> {
   return call("sidecars_use", sidecarStatusDecoder, {
-    candidate_id: candidateId,
+    candidateId,
   })
 }
 
