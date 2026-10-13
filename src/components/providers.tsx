@@ -38,6 +38,7 @@ import {
   type SettingsPatch,
 } from "@/lib/ipc"
 import type { JsonObject } from "@/lib/json"
+import { follow } from "@/lib/subscription"
 import { isThemePreference, setThemePreference } from "@/lib/theme"
 import { AlertsContext, useAlerts, type AppAlert } from "@/state/alerts"
 import { AuthContext, useAuth, type AuthApi } from "@/state/auth"
@@ -162,30 +163,30 @@ function AuthProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<AuthState | null>(null)
   const [status, setStatus] = useState<AuthApi["status"]>("loading")
 
-  useEffect(() => {
-    // An event that lands before the first answer is newer than that answer.
-    let eventSeen = false
-
-    const stop = onAuthState((payload) => {
-      eventSeen = true
-      setAuth(payload)
-      setStatus("ready")
-    })
-
-    authState().then(
-      (payload) => {
-        if (eventSeen) return
-        setAuth(payload)
-        setStatus("ready")
-      },
-      (cause: unknown) => {
-        setStatus("error")
-        pushError(cause)
-      },
-    )
-
-    return stop
-  }, [pushError])
+  // The listener first, then the state: a change made while both were on their way (TDLib
+  // signing in at startup) would otherwise be missed until the next one.
+  useEffect(
+    () =>
+      follow({
+        listen: onAuthState,
+        onEvent: (payload) => {
+          setAuth(payload)
+          setStatus("ready")
+        },
+        fetch: authState,
+        // An event that landed before the answer is at least as new as that answer.
+        onFetched: (payload, eventSeen) => {
+          if (eventSeen) return
+          setAuth(payload)
+          setStatus("ready")
+        },
+        onFetchFailed: (cause) => {
+          setStatus((current) => (current === "ready" ? current : "error"))
+          pushError(cause)
+        },
+      }),
+    [pushError],
+  )
 
   const value = useMemo(() => ({ status, auth }), [status, auth])
 
@@ -352,12 +353,24 @@ function QueueProvider({ children }: { children: ReactNode }) {
     [pushError],
   )
 
-  const refresh = useCallback(
-    () => queueList().then(onList, onListFailed),
-    [onList, onListFailed],
-  )
+  // Only the latest request is applied: an answer overtaken by a later one is older than it.
+  const latestList = useRef(0)
+
+  const refresh = useCallback(() => {
+    const request = ++latestList.current
+
+    return queueList().then(
+      (list) => {
+        if (request === latestList.current) onList(list)
+      },
+      (cause: unknown) => {
+        if (request === latestList.current) onListFailed(cause)
+      },
+    )
+  }, [onList, onListFailed])
 
   useEffect(() => {
+    let stopped = false
     let timer: number | undefined
 
     const scheduleRefresh = () => {
@@ -401,18 +414,31 @@ function QueueProvider({ children }: { children: ReactNode }) {
       push(code, params ?? {}, itemId),
     )
 
-    const stopStatus = onQueueStatus(({ running: now }) => setRunning(now))
-    queueList().then(onList, onListFailed)
-    queueStatus().then(({ running: now }) => setRunning(now), pushError)
+    // Listeners first, then the current state: a change made in between is either in the
+    // answer or announced by an event (each `queue://changed` also asks for the list again).
+    void stopChanged.ready.then(() => {
+      if (!stopped) void refresh()
+    })
+
+    const stopStatus = follow({
+      listen: onQueueStatus,
+      onEvent: ({ running: now }) => setRunning(now),
+      fetch: queueStatus,
+      onFetched: ({ running: now }, eventSeen) => {
+        if (!eventSeen) setRunning(now)
+      },
+      onFetchFailed: pushError,
+    })
 
     return () => {
+      stopped = true
       stopStatus()
       stopChanged()
       stopProgress()
       stopAlert()
       window.clearTimeout(timer)
     }
-  }, [refresh, push, pushError, onList, onListFailed])
+  }, [refresh, push, pushError])
 
   const value = useMemo(
     () => ({ status, items, progress, running, refresh }),

@@ -16,6 +16,7 @@ import {
   type UpdateNotice,
   type UpdateProgress,
 } from "@/lib/ipc"
+import { follow } from "@/lib/subscription"
 import { useAlerts } from "@/state/alerts"
 import { useSettings } from "@/state/settings"
 import { UpdateContext, type UpdateApi } from "@/state/update"
@@ -35,25 +36,26 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
   const [installing, setInstalling] = useState(false)
 
   useEffect(() => {
-    // The startup check can finish before the first answer: the event is the newer one.
-    let eventSeen = false
-
-    const stopNotice = onUpdate((payload) => {
-      eventSeen = true
-      setNotice(payload)
-      void reload()
-    })
-
-    const stopProgress = onUpdateProgress(setProgress)
-
-    updateInfo().then(
-      (loaded) => {
+    // The startup check runs once the page has loaded and announces its result only once:
+    // the listener is registered before the stored result is asked, and an event that lands
+    // before the answer is the newer one.
+    const stopNotice = follow({
+      listen: onUpdate,
+      onEvent: (payload) => {
+        setNotice(payload)
+        void reload()
+      },
+      fetch: updateInfo,
+      onFetched: (loaded, eventSeen) => {
         setInfo(loaded)
 
         if (!eventSeen) setNotice(loaded.notice)
       },
-      (cause: unknown) => console.warn("Update information unavailable", cause),
-    )
+      onFetchFailed: (cause) =>
+        console.warn("Update information unavailable", cause),
+    })
+
+    const stopProgress = onUpdateProgress(setProgress)
 
     return () => {
       stopNotice()

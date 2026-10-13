@@ -17,6 +17,7 @@ import {
   type SidecarProgress,
   type SidecarStatus,
 } from "@/lib/ipc"
+import { follow } from "@/lib/subscription"
 import { useSettings } from "@/state/settings"
 
 /** While another window or an earlier page load is installing, the status is polled. */
@@ -51,13 +52,23 @@ export function SidecarBanner({
     [onFailed],
   )
 
-  // Re-resolve whenever the custom ffmpeg folder changes in the settings.
-  useEffect(() => {
-    sidecarsStatus().then(setStatus, onFailed)
-  }, [onFailed, customDir])
+  // Re-resolve whenever the custom ffmpeg folder changes in the settings. The listener is
+  // registered before the status is asked, and a status announced meanwhile wins.
+  useEffect(
+    () =>
+      follow({
+        listen: onSidecarStatus,
+        onEvent: setStatus,
+        fetch: sidecarsStatus,
+        onFetched: (next, eventSeen) => {
+          if (!eventSeen) setStatus(next)
+        },
+        onFetchFailed: onFailed,
+      }),
+    [onFailed, customDir],
+  )
 
   useEffect(() => onSidecarProgress(setProgress), [])
-  useEffect(() => onSidecarStatus(setStatus), [])
 
   const busy = installing || status?.installing === true
   useEffect(() => {

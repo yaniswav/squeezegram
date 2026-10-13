@@ -32,6 +32,7 @@ import {
   type EntitlementStatus,
 } from "./entitlements"
 import type { ClearScope } from "./queue-clear"
+import { subscription, type Subscription } from "./subscription"
 import {
   updateInfoDecoder,
   updateNoticeDecoder,
@@ -1792,21 +1793,22 @@ export function updateOpenPage(): Promise<void> {
 // --- events ---
 
 /**
- * Subscribes to a Tauri event and returns a synchronous unsubscribe, safe to call before
- * `listen` has resolved (React effect cleanup). A payload that does not decode is reported
- * and dropped: the handler only sees well-formed events.
+ * Subscribes to a Tauri event. The result stops it synchronously, even before `listen` has
+ * resolved (React effect cleanup), and its `ready` says when the core delivers the event: a
+ * current value asked before that may miss a change (see `follow`). A payload that does not
+ * decode is reported and dropped: the handler only sees well-formed events.
  */
 function subscribe<T>(
   event: string,
   decode: d.Decoder<T>,
   handler: (payload: T) => void,
-): () => void {
-  if (!isTauri()) return () => {}
+): Subscription {
+  if (!isTauri()) return subscription(() => {}, Promise.resolve())
 
   let stopped = false
   let stop: (() => void) | undefined
   // The core emits serde_json: the payload is JSON until decoded.
-  listen<Json>(event, ({ payload }) => {
+  const ready = listen<Json>(event, ({ payload }) => {
     let decoded: T
 
     try {
@@ -1818,19 +1820,18 @@ function subscribe<T>(
     }
 
     handler(decoded)
-  })
-    .then((unlisten) => {
+  }).then(
+    (unlisten) => {
       if (stopped) unlisten()
       else stop = unlisten
-    })
-    .catch((cause: unknown) =>
-      console.error(`Could not listen to ${event}`, cause),
-    )
+    },
+    (cause: unknown) => console.error(`Could not listen to ${event}`, cause),
+  )
 
-  return () => {
+  return subscription(() => {
     stopped = true
     stop?.()
-  }
+  }, ready)
 }
 
 const quitRequestedDecoder = d.object<QuitRequest>({ running: d.number })
