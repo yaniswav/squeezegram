@@ -36,7 +36,10 @@ export type LicenseCode =
 export interface EntitlementStatus {
   plan: EntitlementPlan
   source: EntitlementSource
-  /** Granted now; empty unless `source` is `license`. */
+  /**
+   * Granted now; empty unless `source` is `license`. The core decides: a lifetime licence lists
+   * every shipped feature, whatever its own `feat` list.
+   */
   features: Feature[]
   /** The stored license was issued to the signed-in account; null when nothing to compare. */
   account_matches: boolean | null
@@ -113,6 +116,7 @@ export function hasStoredLicense(status: EntitlementStatus): boolean {
   )
 }
 
+/** Reads `features` only: which plan grants what is decided by the core. */
 export function grants(
   status: EntitlementStatus | null,
   feature: Feature,

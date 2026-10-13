@@ -7,6 +7,8 @@
 //! - The payload is JSON: `v` (1), `kid`, `sub`, `plan` (`lifetime`), `feat`, `iat`, `jti`.
 //!   Unknown fields and unknown feature names are ignored; `iat` is informational (a date in
 //!   the future is accepted: the user's clock is not trusted either way).
+//! - `feat` is parsed and kept, but a `lifetime` licence grants every feature whatever it lists
+//!   (`Plan::grants_every_feature`): licences issued before a feature existed unlock it too.
 //! - `sub` binds the license to a Telegram account without carrying its id: see `subject_for`.
 //!
 //! Neither the token nor the payload ever reaches a `Debug`, a `Display` or the journal.
@@ -107,15 +109,25 @@ pub struct License {
     pub kid: String,
     pub sub: String,
     pub plan: Plan,
-    /// Known features only, in license order.
+    /// The `feat` list: known features only, in license order. What the licence names, not
+    /// what it grants: see `allows`.
     pub features: Vec<Feature>,
     pub iat: i64,
     pub jti: String,
 }
 
 impl License {
+    /// Every feature on a plan that grants them all (`lifetime`, whatever `feat` lists), else
+    /// only the listed ones.
     pub fn allows(&self, feature: Feature) -> bool {
-        self.features.contains(&feature)
+        self.plan.grants_every_feature() || self.features.contains(&feature)
+    }
+
+    /// The features `allows` grants, in `Feature::ALL` order.
+    pub fn granted(&self) -> impl Iterator<Item = Feature> + '_ {
+        Feature::ALL
+            .into_iter()
+            .filter(|feature| self.allows(*feature))
     }
 }
 
@@ -298,6 +310,36 @@ pub(crate) mod test_vectors {
         pub fn case(&self, name: &str) -> &Case {
             self.cases.iter().find(|c| c.name == name).unwrap()
         }
+
+        /// A token for `payload`, signed with the test key (its seed is public): for a payload
+        /// the vectors do not have.
+        pub fn sign(&self, payload: &serde_json::Value) -> String {
+            use base64::Engine;
+            use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+            use ed25519_dalek::{Signer, SigningKey};
+
+            let signed = format!(
+                "{}.{}",
+                super::PREFIX,
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(payload).unwrap())
+            );
+            let signature =
+                SigningKey::from_bytes(&hex32(&self.test_key.seed_hex)).sign(signed.as_bytes());
+            format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+        }
+
+        /// A `lifetime` licence for `user_id` whose `feat` is `feat`.
+        pub fn lifetime_token(&self, user_id: i64, feat: &[&str], jti: &str) -> String {
+            self.sign(&serde_json::json!({
+                "v": 1,
+                "kid": self.test_key.kid,
+                "sub": super::subject_for(user_id),
+                "plan": "lifetime",
+                "feat": feat,
+                "iat": 1_700_000_000,
+                "jti": jti,
+            }))
+        }
     }
 }
 
@@ -342,7 +384,8 @@ mod tests {
             license.features,
             [Feature::AdvancedEncoding, Feature::MultiDestination]
         );
-        assert!(license.allows(Feature::MultiDestination) && !license.allows(Feature::Background));
+        // Lifetime: every feature, listed or not.
+        assert!(Feature::ALL.iter().all(|f| license.allows(*f)));
         assert_eq!(license.kid, "test-1");
         // An unknown feature name (`teleport`) and an unknown field are ignored.
         let tolerant = verify(&vectors.case("unknown_field_tolerated").token, &keys).unwrap();
@@ -360,32 +403,86 @@ mod tests {
     #[test]
     fn a_license_issued_with_caption_templates_still_verifies() {
         // Caption templates left the Feature enum (they will be free), but licences already
-        // sold list "caption_templates" in `feat`. The test key's seed is public, so the token
-        // can be signed here instead of added to the vectors.
-        use ed25519_dalek::{Signer, SigningKey};
-
+        // sold list "caption_templates" in `feat`.
         let vectors = test_vectors::load();
-        let seed = hex32(&vectors.test_key.seed_hex);
-        let payload = serde_json::json!({
-            "v": 1,
-            "kid": vectors.test_key.kid,
-            "sub": subject_for(777000001),
-            "plan": "lifetime",
-            "feat": ["caption_templates", "advanced_encoding"],
-            "iat": 1_700_000_000,
-            "jti": "legacy-caption-templates",
-        });
-        let signed = format!(
-            "{PREFIX}.{}",
-            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap())
+        let token = vectors.lifetime_token(
+            777000001,
+            &["caption_templates", "advanced_encoding"],
+            "legacy-caption-templates",
         );
-        let signature = SigningKey::from_bytes(&seed).sign(signed.as_bytes());
-        let token = format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()));
-
         let license = verify(&token, &vectors.key_ring()).unwrap();
         assert_eq!(license.features, [Feature::AdvancedEncoding]);
         assert!(license.allows(Feature::AdvancedEncoding));
         assert_eq!(Feature::from_name("caption_templates"), None);
+    }
+
+    #[test]
+    fn a_lifetime_license_grants_every_feature_whatever_it_lists() {
+        // What is sold is "Premium, lifetime": licences issued before watched folders and
+        // background mode existed list only the first features, and must unlock all of them.
+        let vectors = test_vectors::load();
+        let keys = vectors.key_ring();
+        for feat in [
+            &["advanced_encoding"][..],
+            &[],
+            &["teleport"],
+            &["advanced_encoding", "multi_destination"],
+        ] {
+            let token = vectors.lifetime_token(777000001, feat, "short-list");
+            let license = verify_for(&token, &keys, Some(777000001)).unwrap();
+            assert_eq!(license.plan, Plan::Lifetime);
+            // The list is still parsed as before (unknown names dropped)...
+            let listed: Vec<Feature> = feat.iter().filter_map(|n| Feature::from_name(n)).collect();
+            assert_eq!(license.features, listed, "{feat:?}");
+            // ...but does not limit a lifetime licence.
+            for feature in Feature::ALL {
+                assert!(license.allows(feature), "{feat:?} {feature:?}");
+            }
+            assert_eq!(license.granted().collect::<Vec<_>>(), Feature::ALL);
+        }
+    }
+
+    #[test]
+    fn a_plan_that_is_not_lifetime_grants_only_its_list() {
+        // `verify` accepts no plan but `lifetime` today, so no token can carry another one. The
+        // rule is checked on a `License` built directly: `Plan::Free` stands in for a future
+        // limited plan (`Plan::grants_every_feature` is false for it).
+        assert!(Plan::Lifetime.grants_every_feature());
+        assert!(!Plan::Free.grants_every_feature());
+        let vectors = test_vectors::load();
+        let payload = serde_json::json!({
+            "v": 1,
+            "kid": vectors.test_key.kid,
+            "sub": subject_for(777000001),
+            "plan": "limited",
+            "feat": ["advanced_encoding"],
+            "iat": 1_700_000_000,
+            "jti": "limited",
+        });
+        assert_eq!(
+            verify(&vectors.sign(&payload), &vectors.key_ring()),
+            Err(LicenseError::Malformed)
+        );
+        let limited = License {
+            kid: "test-1".into(),
+            sub: subject_for(777000001),
+            plan: Plan::Free,
+            features: vec![Feature::AdvancedEncoding],
+            iat: 0,
+            jti: "limited".into(),
+        };
+        assert!(limited.allows(Feature::AdvancedEncoding));
+        for feature in [
+            Feature::MultiDestination,
+            Feature::WatchedFolder,
+            Feature::Background,
+        ] {
+            assert!(!limited.allows(feature), "{feature:?}");
+        }
+        assert_eq!(
+            limited.granted().collect::<Vec<_>>(),
+            [Feature::AdvancedEncoding]
+        );
     }
 
     #[test]

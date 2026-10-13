@@ -47,10 +47,16 @@ const STATUSES = {
     account_matches: null,
     reason: null,
   },
+  /** A lifetime licence lists every shipped feature, whatever its `feat` (store.rs). */
   premium: {
     plan: "lifetime",
     source: "license",
-    features: ["advanced_encoding", "multi_destination"],
+    features: [
+      "advanced_encoding",
+      "multi_destination",
+      "watched_folder",
+      "background",
+    ],
     account_matches: true,
     reason: null,
   },
@@ -127,7 +133,12 @@ test("the License section shows each verdict, never anything personal", () => {
   assert.deepEqual(licenseView(STATUSES.premium), {
     kind: "premium",
     plan: "lifetime",
-    features: ["advanced_encoding", "multi_destination"],
+    features: [
+      "advanced_encoding",
+      "multi_destination",
+      "watched_folder",
+      "background",
+    ],
   })
   assert.deepEqual(licenseView(STATUSES.pending), { kind: "pending" })
   assert.deepEqual(licenseView(STATUSES.otherAccount), {
@@ -150,9 +161,19 @@ test("remove is offered for a stored license, applied or not", () => {
     assert.equal(hasStoredLicense(status), true, status.source)
 })
 
-test("advanced encoding is granted only by the features of an applied license", () => {
-  assert.equal(grants(STATUSES.premium, "advanced_encoding"), true)
-  assert.equal(grants(STATUSES.premium, "background"), false)
+test("a feature is granted only by the features of an applied license", () => {
+  for (const feature of STATUSES.premium.features)
+    assert.equal(grants(STATUSES.premium, feature), true, feature)
+
+  // The page reads the list the core sends and decides nothing itself: a status that lists
+  // fewer features (a plan that is not lifetime) grants only those.
+  const limited: EntitlementStatus = {
+    ...STATUSES.premium,
+    features: ["advanced_encoding"],
+  }
+
+  assert.equal(grants(limited, "advanced_encoding"), true)
+  assert.equal(grants(limited, "background"), false)
 
   const { none, pending, otherAccount, corrupt } = STATUSES
 

@@ -49,7 +49,7 @@ Free:
 
 ### Free and Premium
 
-squeezegram Premium is a lifetime licence bought once in Telegram Stars from `@squeezegram_bot` on Telegram. The key is tied to your Telegram account and checked on your computer, with no network request. It is unrelated to Telegram Premium, which only raises the upload limit.
+squeezegram Premium is a lifetime licence bought once in Telegram Stars from `@squeezegram_bot` on Telegram. The key is tied to your Telegram account and checked on your computer, with no network request. It unlocks every Premium feature, including those added in later versions. It is unrelated to Telegram Premium, which only raises the upload limit.
 
 | | Free | squeezegram Premium |
 | --- | --- | --- |

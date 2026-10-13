@@ -128,11 +128,10 @@ impl Verdict {
             Verdict::Applies(license) => EntitlementStatus {
                 plan: license.plan,
                 source: EntitlementSource::License,
-                // Declared-but-unwired features are not shown as unlocked (`allows` is unchanged).
+                // What `allows` grants (every feature for a lifetime licence), minus the
+                // declared-but-unwired ones: not shown as unlocked (`allows` is unchanged).
                 features: license
-                    .features
-                    .iter()
-                    .copied()
+                    .granted()
                     .filter(|feature| feature.shipped())
                     .collect(),
                 account_matches: Some(true),
@@ -405,12 +404,13 @@ mod tests {
         status(EntitlementSource::Pending, None, Some("LIC_NO_ACCOUNT"))
     }
 
-    /// The `valid` vector on its own account.
+    /// The `valid` vector on its own account: it lists two features, a lifetime licence
+    /// grants every shipped one.
     fn lifetime() -> EntitlementStatus {
         EntitlementStatus {
             plan: Plan::Lifetime,
             source: EntitlementSource::License,
-            features: vec![Feature::AdvancedEncoding, Feature::MultiDestination],
+            features: Feature::ALL.into_iter().filter(|f| f.shipped()).collect(),
             account_matches: Some(true),
             reason: None,
         }
@@ -447,9 +447,7 @@ mod tests {
         assert_eq!(first.status(), free_none());
         let valid = token(&vectors, "valid");
         assert_eq!(first.save(&format!("  {valid}\r\n")), Ok(lifetime()));
-        assert!(first.allows(Feature::AdvancedEncoding));
-        assert!(first.allows(Feature::MultiDestination));
-        assert!(!first.allows(Feature::Background));
+        assert!(Feature::ALL.iter().all(|f| first.allows(*f)));
         let path = dir.path().join(FILE_NAME);
         assert_eq!(fs::read_to_string(&path).unwrap(), format!("{valid}\n"));
         assert!(!path.with_extension("txt.tmp").exists());
@@ -467,6 +465,37 @@ mod tests {
             LicenseEntitlements::path_beside(&dir.path().join(crate::settings::FILE_NAME)),
             path
         );
+    }
+
+    #[test]
+    fn a_licence_issued_with_a_short_list_unlocks_every_feature() {
+        // Licences sold before watched folders and background mode list only
+        // `advanced_encoding` (or two features): stored as they are, no reissue.
+        let dir = TestDir::new("license-short-list");
+        let vectors = test_vectors::load();
+        let account = MockTransport::authorized();
+        let short = vectors.lifetime_token(MOCK_ME_ID, &["advanced_encoding"], "short-list");
+        fs::write(dir.path().join(FILE_NAME), &short).unwrap();
+        let store = store(&dir, &vectors, &account);
+        for feature in Feature::ALL {
+            assert!(store.allows(feature), "{feature:?}");
+        }
+        let status = store.status();
+        assert_eq!(status, lifetime());
+        assert_eq!(
+            serde_json::to_value(&status).unwrap()["features"],
+            json!([
+                "advanced_encoding",
+                "multi_destination",
+                "watched_folder",
+                "background"
+            ])
+        );
+        // Account binding is unchanged: not signed in, nothing is granted.
+        let signed_out =
+            LicenseEntitlements::load(dir.path().join(FILE_NAME), vectors.key_ring(), None);
+        assert_eq!(signed_out.status(), pending());
+        assert!(Feature::ALL.iter().all(|f| !signed_out.allows(*f)));
     }
 
     #[test]

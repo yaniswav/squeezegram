@@ -47,7 +47,8 @@ impl Feature {
         Feature::Background,
     ];
 
-    /// Name in a license's `feat` list (also its serialized form).
+    /// Name in a license's `feat` list (also its serialized form). A lifetime licence grants
+    /// every feature whatever the list (`Plan::grants_every_feature`).
     pub fn as_str(self) -> &'static str {
         match self {
             Feature::AdvancedEncoding => "advanced_encoding",
@@ -81,6 +82,11 @@ impl Feature {
 }
 
 /// The plan in effect.
+///
+/// `Lifetime` is what is sold, "squeezegram Premium, lifetime": every Premium feature of every
+/// version, including features added after the licence was issued. Its `feat` list therefore
+/// does not limit it (`License::allows`); the list stays in the format for a future plan that
+/// grants only what it names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Plan {
@@ -93,6 +99,17 @@ impl Plan {
         match self {
             Plan::Free => "free",
             Plan::Lifetime => "lifetime",
+        }
+    }
+
+    /// Whether a licence on this plan grants every `Feature`, whatever its `feat` list says.
+    /// The one place that decides it: `License::allows` and the status follow.
+    pub fn grants_every_feature(self) -> bool {
+        match self {
+            Plan::Lifetime => true,
+            // Never the plan of a licence (`license::verify` refuses it). It stands in for any
+            // non-lifetime plan: only the features its licence lists.
+            Plan::Free => false,
         }
     }
 }
@@ -133,7 +150,8 @@ impl EntitlementSource {
 pub struct EntitlementStatus {
     pub plan: Plan,
     pub source: EntitlementSource,
-    /// Features granted now (empty unless `source` is `license`).
+    /// Features granted now and shipped in this version (empty unless `source` is `license`):
+    /// every shipped feature for a lifetime licence, whatever its `feat` list.
     pub features: Vec<Feature>,
     /// Whether the stored license was issued to the signed-in account; `null` when there is no
     /// verified license or no account to compare with.
