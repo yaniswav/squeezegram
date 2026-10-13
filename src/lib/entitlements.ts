@@ -46,6 +46,26 @@ export interface EntitlementStatus {
   reason: LicenseCode | null
 }
 
+export type EntitlementObservationVia = "fetch" | "event"
+
+/** Safe diagnostic line for the status delivered to the page; no account or license data. */
+export function entitlementsSeenLog(
+  status: EntitlementStatus,
+  via: EntitlementObservationVia,
+) {
+  return {
+    level: "info" as const,
+    event: "entitlements_seen",
+    msg: "Entitlements received",
+    fields: {
+      via,
+      source: status.source,
+      plan: status.plan,
+      features: status.features,
+    },
+  }
+}
+
 export const entitlementStatusDecoder = d.object<EntitlementStatus>({
   plan: d.literals<EntitlementPlan>({ free: true, lifetime: true }),
   source: d.literals<EntitlementSource>({

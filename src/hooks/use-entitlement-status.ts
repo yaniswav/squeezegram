@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react"
 import {
   entitlementsStatus,
+  logFrontend,
   onEntitlementsStatus,
   type EntitlementStatus,
 } from "@/lib/ipc"
+import { entitlementsSeenLog } from "@/lib/entitlements"
 import { follow } from "@/lib/subscription"
 
 /** `null` while loading, `"failed"` when the core could not be asked. */
@@ -22,9 +24,14 @@ export function useEntitlementStatus() {
     () =>
       follow({
         listen: onEntitlementsStatus,
-        onEvent: setStatus,
+        onEvent: (next) => {
+          logFrontend(entitlementsSeenLog(next, "event"))
+          setStatus(next)
+        },
         fetch: entitlementsStatus,
         onFetched: (next, eventSeen) => {
+          logFrontend(entitlementsSeenLog(next, "fetch"))
+
           if (!eventSeen) setStatus(next)
         },
         onFetchFailed: () => setStatus((current) => current ?? "failed"),

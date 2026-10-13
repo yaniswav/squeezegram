@@ -247,6 +247,7 @@ impl LicenseEntitlements {
         if !fresh {
             let verdict = Verdict::of(&inner.stored, &self.keys, user_id);
             let status = verdict.status();
+            let fields = serde_json::json!({ "features": status.features }).to_string();
             let io_error = match inner.stored {
                 Stored::Unreadable(Some(kind)) => Some(kind.to_string()),
                 _ => None,
@@ -255,6 +256,7 @@ impl LicenseEntitlements {
                 event = "license_status",
                 plan = status.plan.as_str(),
                 source = status.source.as_str(),
+                json = fields.as_str(),
                 error_code = status.reason,
                 kid = verdict.kid(),
                 io_error = io_error.as_deref(),
@@ -642,18 +644,37 @@ mod tests {
         assert_eq!(store.status(), pending());
         assert!(!store.allows(Feature::MultiDestination));
 
-        let lines: Vec<(serde_json::Value, serde_json::Value)> = journal
+        store.clear().unwrap();
+        assert_eq!(store.status(), free_none());
+
+        let lines: Vec<serde_json::Value> = journal
             .lines()
             .iter()
             .filter(|l| l["event"] == "license_status")
-            .map(|l| (l["fields"]["source"].clone(), l["fields"]["kid"].clone()))
+            .map(|l| {
+                json!({
+                    "source": l["fields"]["source"],
+                    "kid": l["fields"]["kid"],
+                    "features": l["fields"]["features"],
+                })
+            })
             .collect();
         assert_eq!(
             lines,
             [
-                (json!("pending"), json!("test-1")),
-                (json!("license"), json!("test-1")),
-                (json!("pending"), json!("test-1")),
+                json!({ "source": "pending", "kid": "test-1", "features": [] }),
+                json!({
+                    "source": "license",
+                    "kid": "test-1",
+                    "features": [
+                        "advanced_encoding",
+                        "multi_destination",
+                        "watched_folder",
+                        "background"
+                    ],
+                }),
+                json!({ "source": "pending", "kid": "test-1", "features": [] }),
+                json!({ "source": "none", "kid": null, "features": [] }),
             ],
             "one line per change, none for repeated reads"
         );

@@ -7,6 +7,7 @@ import { follow, subscription, type Subscription } from "./subscription.ts"
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (cause: unknown) => void
+
   const promise = new Promise<T>((ok, ko) => {
     resolve = ok
     reject = ko
@@ -82,6 +83,42 @@ test("an answer is flagged when an event arrived before it", async () => {
   answer.resolve("pending")
   await flush()
   assert.deepEqual(seen, ["event:license", "fetched:pending:true"])
+})
+
+test("a failed listener registration still asks for the current value once", async () => {
+  const registered = deferred<void>()
+  const failure = new Error("listener unavailable")
+  const failures: unknown[] = []
+  const seen: string[] = []
+  let asked = 0
+
+  follow({
+    // Like ipc.ts's subscribe: report registration failure and resolve `ready`.
+    listen: () =>
+      subscription(
+        () => {},
+        registered.promise.then(undefined, (cause: unknown) => {
+          failures.push(cause)
+        }),
+      ),
+    onEvent: () => assert.fail("no listener was registered"),
+    fetch: () => {
+      asked += 1
+
+      return Promise.resolve("license")
+    },
+    onFetched: (value, eventSeen) => seen.push(`fetched:${value}:${eventSeen}`),
+    onFetchFailed: () =>
+      assert.fail("registration failure is not a fetch failure"),
+  })
+
+  await flush()
+  assert.equal(asked, 0, "asked before registration settled")
+  registered.reject(failure)
+  await flush()
+  assert.deepEqual(failures, [failure])
+  assert.equal(asked, 1)
+  assert.deepEqual(seen, ["fetched:license:false"])
 })
 
 test("an answer without any event before it is not flagged", async () => {

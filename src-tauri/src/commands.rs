@@ -1386,7 +1386,7 @@ pub fn limit_status(state: State<'_, AppState>) -> EffectiveLimit {
 /// belongs to the signed-in account and the `LIC_*` code that keeps it from applying.
 #[tauri::command]
 pub fn entitlements_status(state: State<'_, AppState>) -> EntitlementStatus {
-    Call::quiet("entitlements_status").done(state.entitlements.status())
+    Call::new("entitlements_status").done(state.entitlements.status())
 }
 
 /// Verifies `token` offline, then stores it. Refused with its `LIC_*` code when it does not

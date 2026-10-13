@@ -46,3 +46,14 @@ test("sidecars_use sends the argument name Tauri derives from Rust", () => {
 
   assert.equal(pageArgument, camelCase(rustArgument))
 })
+
+test("entitlements_status is written to the command journal", () => {
+  const command = between(
+    core,
+    "pub fn entitlements_status(",
+    "pub fn license_set(",
+  )
+
+  assert.match(command, /Call::new\("entitlements_status"\)/)
+  assert.doesNotMatch(command, /Call::quiet\("entitlements_status"\)/)
+})

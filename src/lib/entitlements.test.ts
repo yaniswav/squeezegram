@@ -11,6 +11,7 @@ import {
 } from "./advanced-encoding.ts"
 import { DecodeError } from "./decode.ts"
 import {
+  entitlementsSeenLog,
   entitlementStatusDecoder,
   grants,
   hasStoredLicense,
@@ -82,6 +83,27 @@ const STATUSES = {
     reason: "LIC_MALFORMED",
   },
 } satisfies Record<string, EntitlementStatus>
+
+test("the entitlement diagnostic names its path and contains no personal data", () => {
+  for (const via of ["fetch", "event"] as const) {
+    assert.deepEqual(entitlementsSeenLog(STATUSES.premium, via), {
+      level: "info",
+      event: "entitlements_seen",
+      msg: "Entitlements received",
+      fields: {
+        via,
+        source: "license",
+        plan: "lifetime",
+        features: [
+          "advanced_encoding",
+          "multi_destination",
+          "watched_folder",
+          "background",
+        ],
+      },
+    })
+  }
+})
 
 test("every status the core serializes decodes unchanged", () => {
   assert.deepEqual(entitlementStatusDecoder(FREE_BUILD, "$"), FREE_BUILD)
@@ -227,6 +249,7 @@ test("a file's encoding choices are a complete set the core can read back", () =
 test("a custom target is a whole number of MiB within the core's range", () => {
   for (const ok of [1, 50, 2000, 4000])
     assert.equal(isTargetMb(ok), true, `${ok}`)
+
   for (const bad of [0, -1, 4001, 1.5, Number.NaN])
     assert.equal(isTargetMb(bad), false, `${bad}`)
 })
