@@ -186,9 +186,9 @@
   },
   "drop": {
     "overlay": "Suelte para añadir a la cola",
-    "hint": "Suelte vídeos y fotos en cualquier parte de esta ventana, o",
-    "browse": "explorar archivos…",
-    "browseFolder": "o añada una carpeta…"
+    "hint": "Suelte vídeos y fotos en cualquier parte de esta ventana.",
+    "browse": "Explorar archivos…",
+    "browseFolder": "Añadir una carpeta…"
   },
   "add": {
     "title": "Añadir archivos",

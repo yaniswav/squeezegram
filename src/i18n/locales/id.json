@@ -182,9 +182,9 @@
   },
   "drop": {
     "overlay": "Lepaskan untuk menambahkan ke antrean",
-    "hint": "Lepaskan video dan foto di mana saja di jendela ini, atau",
-    "browse": "telusuri berkas…",
-    "browseFolder": "atau tambahkan folder…"
+    "hint": "Lepaskan video dan foto di mana saja di jendela ini.",
+    "browse": "Telusuri berkas…",
+    "browseFolder": "Tambahkan folder…"
   },
   "add": {
     "title": "Tambah berkas",

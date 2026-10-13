@@ -186,9 +186,9 @@
   },
   "drop": {
     "overlay": "Solte para adicionar à fila",
-    "hint": "Solte vídeos e fotos em qualquer lugar desta janela, ou",
-    "browse": "procure arquivos…",
-    "browseFolder": "ou adicione uma pasta…"
+    "hint": "Solte vídeos e fotos em qualquer lugar desta janela.",
+    "browse": "Procurar arquivos…",
+    "browseFolder": "Adicionar uma pasta…"
   },
   "add": {
     "title": "Adicionar arquivos",

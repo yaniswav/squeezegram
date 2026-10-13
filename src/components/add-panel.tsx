@@ -1,4 +1,4 @@
-import { FolderOpen, Plus, X } from "lucide-react"
+import { FilePlus, FolderOpen, FolderPlus, Plus, X } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { useId, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -235,25 +235,32 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
     <Card>
       <CardContent className="space-y-4">
         <h2 className="font-heading text-base font-medium">{t("add.title")}</h2>
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
-          <FolderOpen className="size-4" aria-hidden />
-          <span>{t("drop.hint")}</span>
-          <Button
-            variant="link"
-            className="h-auto p-0"
-            disabled={!isDesktop()}
-            onClick={() => void browse()}
-          >
-            {t("drop.browse")}
-          </Button>
-          <Button
-            variant="link"
-            className="h-auto p-0"
-            disabled={!isDesktop()}
-            onClick={() => void browseFolder()}
-          >
-            {t("drop.browseFolder")}
-          </Button>
+        {/* Both actions side by side; a narrow window moves them below, together. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted-foreground">
+          <p className="flex min-w-0 items-center gap-1.5">
+            <FolderOpen className="size-4 shrink-0" aria-hidden />
+            <span>{t("drop.hint")}</span>
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!isDesktop()}
+              onClick={() => void browse()}
+            >
+              <FilePlus data-icon="inline-start" />
+              {t("drop.browse")}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!isDesktop()}
+              onClick={() => void browseFolder()}
+            >
+              <FolderPlus data-icon="inline-start" />
+              {t("drop.browseFolder")}
+            </Button>
+          </div>
         </div>
 
         <p role="status" className="text-sm text-success empty:hidden">
