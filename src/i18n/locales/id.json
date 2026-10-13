@@ -253,6 +253,8 @@
   "queue": {
     "start": "Mulai",
     "pause": "Jeda",
+    "startUnavailable": "Tidak ada yang perlu diproses: tambahkan berkas, atau setujui atau coba lagi berkas yang menunggu.",
+    "pauseUnavailable": "Tidak ada yang sedang berjalan atau menunggu giliran.",
     "running": "Sedang berjalan: satu berkas per waktu. Jeda berlaku setelah berkas saat ini selesai.",
     "idle": "Siap: berkas yang Anda tambahkan akan diproses otomatis.",
     "paused": "Dijeda: tidak ada yang diproses sampai Anda menekan Mulai.",
@@ -266,6 +268,7 @@
     "finishedLabel": "Berkas yang selesai",
     "clear": {
       "button": "Kosongkan antrean",
+      "unavailable": "Tidak ada yang bisa dikosongkan: antrean kosong atau hanya berisi berkas yang sedang diproses.",
       "title": "Kosongkan antrean?",
       "body": "Berkas yang Anda kosongkan akan keluar dari antrean dan salinan yang sudah disiapkan akan dihapus. Berkas asli Anda tidak pernah dihapus. Berkas yang sedang diproses saat ini tidak tersentuh.",
       "choices": "Yang akan dikosongkan",

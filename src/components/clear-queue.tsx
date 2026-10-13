@@ -31,8 +31,15 @@ export function ClearQueue({ onDone }: ClearQueueProps) {
   }
   const unconfirmed = items.filter((item) => item.state === "unknown").length
 
+  // `queue_clear` removes nothing in that case: the button says so instead of opening.
+  const reason =
+    status === "ready" && counts.all === 0
+      ? t("queue.clear.unavailable")
+      : undefined
+
   function ask() {
-    setScope("finished")
+    // Opened on a choice that clears something, never on a disabled confirmation.
+    setScope(counts.finished > 0 ? "finished" : "all")
     setOpen(true)
   }
 
@@ -60,14 +67,23 @@ export function ClearQueue({ onDone }: ClearQueueProps) {
 
   return (
     <>
-      <Button
-        variant="outline"
-        disabled={busy || status !== "ready" || counts.all === 0}
-        onClick={ask}
-      >
-        <Trash2 data-icon="inline-start" />
-        {t("queue.clear.button")}
-      </Button>
+      {/* A disabled button gets no pointer events: the wrapper shows the reason. */}
+      <span title={reason} className="inline-flex">
+        <Button
+          variant="outline"
+          disabled={busy || status !== "ready" || counts.all === 0}
+          aria-describedby={reason ? `${group}-reason` : undefined}
+          onClick={ask}
+        >
+          <Trash2 data-icon="inline-start" />
+          {t("queue.clear.button")}
+        </Button>
+      </span>
+      {reason && (
+        <span id={`${group}-reason`} className="sr-only">
+          {reason}
+        </span>
+      )}
       <ConfirmDialog
         open={open}
         onOpenChange={setOpen}

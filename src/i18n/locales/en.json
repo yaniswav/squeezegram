@@ -260,6 +260,8 @@
   "queue": {
     "start": "Start",
     "pause": "Pause",
+    "startUnavailable": "Nothing to process: add files, or approve or retry the ones that are waiting.",
+    "pauseUnavailable": "Nothing is running or waiting for its turn.",
     "running": "Running: one file at a time. Pausing takes effect after the current file.",
     "idle": "Ready: the files you add are processed automatically.",
     "paused": "Paused: nothing is processed until you press Start.",
@@ -274,6 +276,7 @@
     "finishedLabel": "Finished files",
     "clear": {
       "button": "Clear queue",
+      "unavailable": "Nothing to clear: the queue is empty or only holds files being processed right now.",
       "title": "Clear the queue?",
       "body": "The files you clear leave the queue and their prepared copies are deleted. Your original files are never deleted. A file being processed right now is not touched.",
       "choices": "What to clear",

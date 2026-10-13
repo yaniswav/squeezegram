@@ -267,6 +267,8 @@
   "queue": {
     "start": "Iniciar",
     "pause": "Pausar",
+    "startUnavailable": "No hay nada que procesar: añada archivos, o apruebe o reintente los que esperan.",
+    "pauseUnavailable": "No hay nada en curso ni esperando su turno.",
     "running": "En curso: un archivo cada vez. La pausa se aplica después del archivo actual.",
     "idle": "Listo: los archivos que añada se procesan automáticamente.",
     "paused": "En pausa: no se procesa nada hasta que pulse Iniciar.",
@@ -282,6 +284,7 @@
     "finishedLabel": "Archivos terminados",
     "clear": {
       "button": "Vaciar cola",
+      "unavailable": "No hay nada que vaciar: la cola está vacía o solo contiene archivos que se están procesando ahora.",
       "title": "¿Vaciar la cola?",
       "body": "Los archivos que vacíe salen de la cola y sus copias preparadas se eliminan. Sus archivos originales nunca se eliminan. Un archivo que se está procesando en este momento no se toca.",
       "choices": "Qué vaciar",

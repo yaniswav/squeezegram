@@ -267,6 +267,8 @@
   "queue": {
     "start": "Démarrer",
     "pause": "Pause",
+    "startUnavailable": "Rien à traiter : ajoutez des fichiers, ou validez ou relancez ceux qui attendent.",
+    "pauseUnavailable": "Rien n'est en cours ni n'attend son tour.",
     "running": "En cours : un fichier à la fois. La mise en pause prend effet après le fichier en cours.",
     "idle": "Prêt : les fichiers que vous ajoutez sont traités automatiquement.",
     "paused": "En pause : rien n'est traité tant que vous n'appuyez pas sur Démarrer.",
@@ -282,6 +284,7 @@
     "finishedLabel": "Fichiers terminés",
     "clear": {
       "button": "Vider la file d'attente",
+      "unavailable": "Rien à vider : la file d'attente est vide ou ne contient que des fichiers en cours de traitement.",
       "title": "Vider la file d'attente ?",
       "body": "Les fichiers que vous videz quittent la file d'attente, et leurs copies préparées sont supprimées. Vos fichiers d'origine ne sont jamais supprimés. Un fichier en cours de traitement n'est pas touché.",
       "choices": "Ce qu'il faut vider",

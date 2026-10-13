@@ -16,6 +16,7 @@ import {
 import { useFlash } from "@/hooks/use-flash"
 import { useGroupRiskGate } from "@/hooks/use-group-risk-gate"
 import { queuePause, queueReorder, queueStart } from "@/lib/ipc"
+import { canPause, canStart } from "@/lib/queue-actions"
 import { isFinished, isProcessable } from "@/lib/queue-state"
 import { cn } from "@/lib/utils"
 import { useAlerts } from "@/state/alerts"
@@ -36,7 +37,16 @@ export function QueueList() {
   const active = items.filter((item) => !isFinished(item.state))
   const finished = items.filter((item) => isFinished(item.state))
   // `running` only says the orchestrator is armed; nothing runs without a processable item.
-  const busy = items.some((item) => isProcessable(item.state))
+  const busy = canPause(items)
+  // Start with nothing the loop can take, or Pause with nothing to hold back, would do
+  // nothing visible: the button is disabled and says why.
+  const toggleUseless =
+    status === "ready" &&
+    running !== null &&
+    !(running ? busy : canStart(items))
+  const toggleReason = toggleUseless
+    ? t(running ? "queue.pauseUnavailable" : "queue.startUnavailable")
+    : undefined
 
   // Files queued before the warning existed (or by a watched folder) start here: the
   // notice also comes before the queue is armed for a group.
@@ -94,18 +104,34 @@ export function QueueList() {
         </CardDescription>
         <CardAction className="flex flex-wrap justify-end gap-2">
           <ClearQueue onDone={setCleared} />
-          <Button
-            variant={!running ? "default" : busy ? "outline" : "secondary"}
-            disabled={toggling || status !== "ready" || running === null}
-            onClick={toggle}
-          >
-            {running ? (
-              <Pause data-icon="inline-start" />
-            ) : (
-              <Play data-icon="inline-start" className="rtl:-scale-x-100" />
-            )}
-            {running ? t("queue.pause") : t("queue.start")}
-          </Button>
+          {/* A disabled button gets no pointer events: the wrapper shows the reason. */}
+          <span title={toggleReason} className="inline-flex">
+            <Button
+              variant={!running ? "default" : busy ? "outline" : "secondary"}
+              disabled={
+                toggling ||
+                status !== "ready" ||
+                running === null ||
+                toggleUseless
+              }
+              aria-describedby={
+                toggleReason ? `${ids}-toggle-reason` : undefined
+              }
+              onClick={toggle}
+            >
+              {running ? (
+                <Pause data-icon="inline-start" />
+              ) : (
+                <Play data-icon="inline-start" className="rtl:-scale-x-100" />
+              )}
+              {running ? t("queue.pause") : t("queue.start")}
+            </Button>
+          </span>
+          {toggleReason && (
+            <span id={`${ids}-toggle-reason`} className="sr-only">
+              {toggleReason}
+            </span>
+          )}
         </CardAction>
       </CardHeader>
 

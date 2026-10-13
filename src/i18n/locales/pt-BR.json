@@ -267,6 +267,8 @@
   "queue": {
     "start": "Iniciar",
     "pause": "Pausar",
+    "startUnavailable": "Nada para processar: adicione arquivos, ou aprove ou tente de novo os que estão aguardando.",
+    "pauseUnavailable": "Nada está em execução nem aguardando a vez.",
     "running": "Em execução: um arquivo por vez. A pausa vale após o arquivo atual.",
     "idle": "Pronta: os arquivos que você adicionar são processados automaticamente.",
     "paused": "Pausada: nada é processado até você pressionar Iniciar.",
@@ -282,6 +284,7 @@
     "finishedLabel": "Arquivos concluídos",
     "clear": {
       "button": "Limpar fila",
+      "unavailable": "Nada para limpar: a fila está vazia ou só tem arquivos sendo processados agora.",
       "title": "Limpar a fila?",
       "body": "Os arquivos que você limpar saem da fila e as cópias preparadas deles são excluídas. Seus arquivos originais nunca são excluídos. Um arquivo que está sendo processado agora não é alterado.",
       "choices": "O que limpar",
