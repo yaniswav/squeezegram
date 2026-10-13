@@ -51,6 +51,8 @@
     "FFMPEG_FAILED_hevc_gpu_only": "El codificador de la GPU ({{encoder}}) se detuvo tras {{duration}} sin terminar (código de salida {{exitCode}}). HEVC solo puede codificarlo la tarjeta gráfica, así que ningún codificador de la CPU puede tomar el relevo. Vuelva a intentarlo, idealmente mientras ningún juego ni grabación de pantalla use la tarjeta gráfica, o cambie a H.264 en los ajustes avanzados de codificación.",
     "ENCODER_FALLBACK": "El codificador de la GPU ({{from}}) informó de un error tras {{duration}}. squeezegram cambió al codificador de la CPU ({{to}}) y lo seguirá usando hasta que se reinicie la aplicación.",
     "ENCODER_FALLBACK_silent": "El codificador de la GPU ({{from}}) se detuvo sin mensaje de error (tras {{duration}}). squeezegram cambió al codificador de la CPU ({{to}}) y lo seguirá usando hasta que se reinicie la aplicación.",
+    "ENCODER_FALLBACK_start_failed": "El codificador de la GPU ({{from}}) no logró iniciarse para este archivo, a pesar de varios intentos. squeezegram cambió al codificador de la CPU ({{to}}) para este archivo y volverá a probar la GPU con el siguiente.",
+    "ENCODER_FALLBACK_start_failed_again": "El codificador de la GPU ({{from}}) volvió a no iniciarse, con un segundo archivo seguido. squeezegram cambió al codificador de la CPU ({{to}}) y lo seguirá usando hasta que se reinicie la aplicación.",
     "CODEC_FALLBACK": "HEVC no está disponible en este equipo, así que este archivo se comprimió como H.264.",
     "OUTPUT_TOO_LARGE": "Este archivo no cabe dentro del límite de subida, ni siquiera comprimido.",
     "CAPTION_TOO_LONG": "Este pie de foto es demasiado largo: {{length}} caracteres, y Telegram permite {{max}}. Acórtelo y vuelva a intentarlo; no se envió nada.",

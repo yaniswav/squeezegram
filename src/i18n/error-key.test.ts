@@ -48,6 +48,18 @@ test("a cause picks the precise sentence of the GPU fallback codes", () => {
     "ENCODER_FALLBACK",
   )
 
+  // A GPU that only failed to start is tried again on the next file, or given up on the
+  // second time: two sentences, as the first one must not promise a session-long CPU.
+  assert.equal(
+    messageKey("ENCODER_FALLBACK", { cause: "start_failed" }, has),
+    "ENCODER_FALLBACK_start_failed",
+  )
+
+  assert.equal(
+    messageKey("ENCODER_FALLBACK", { cause: "start_failed_again" }, has),
+    "ENCODER_FALLBACK_start_failed_again",
+  )
+
   // No params or an unknown cause: the general sentence.
   assert.equal(messageKey("FFMPEG_FAILED", {}, has), "FFMPEG_FAILED")
   assert.equal(
@@ -93,6 +105,8 @@ test("the GPU sentences only use params the core sends", () => {
     FFMPEG_FAILED_hevc_gpu_only: ["duration", "encoder", "exitCode"],
     ENCODER_FALLBACK: ["duration", "from", "to"],
     ENCODER_FALLBACK_silent: ["duration", "from", "to"],
+    ENCODER_FALLBACK_start_failed: ["from", "to"],
+    ENCODER_FALLBACK_start_failed_again: ["from", "to"],
   }
 
   for (const [key, params] of Object.entries(sent)) {

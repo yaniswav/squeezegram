@@ -51,6 +51,8 @@
     "FFMPEG_FAILED_hevc_gpu_only": "L'encodeur GPU ({{encoder}}) s'est arrêté après {{duration}} sans terminer (code de sortie {{exitCode}}). Le HEVC ne peut être encodé que par la carte graphique, donc aucun encodeur CPU ne peut prendre le relais. Réessayez, idéalement pendant qu'aucun jeu ni enregistrement d'écran n'utilise la carte graphique, ou passez à H.264 dans les paramètres d'encodage avancé.",
     "ENCODER_FALLBACK": "L'encodeur GPU ({{from}}) a signalé une erreur après {{duration}}. squeezegram est passé à l'encodeur CPU ({{to}}) et le conserve jusqu'au redémarrage de l'application.",
     "ENCODER_FALLBACK_silent": "L'encodeur GPU ({{from}}) s'est arrêté sans message d'erreur (après {{duration}}). squeezegram est passé à l'encodeur CPU ({{to}}) et le conserve jusqu'au redémarrage de l'application.",
+    "ENCODER_FALLBACK_start_failed": "L'encodeur GPU ({{from}}) n'a pas réussi à démarrer pour ce fichier, malgré plusieurs essais. squeezegram est passé à l'encodeur CPU ({{to}}) pour ce fichier et réessaiera le GPU sur le suivant.",
+    "ENCODER_FALLBACK_start_failed_again": "L'encodeur GPU ({{from}}) n'a de nouveau pas réussi à démarrer, sur un deuxième fichier de suite. squeezegram est passé à l'encodeur CPU ({{to}}) et le conserve jusqu'au redémarrage de l'application.",
     "CODEC_FALLBACK": "Le HEVC n'est pas disponible sur cet ordinateur : ce fichier a donc été compressé en H.264.",
     "OUTPUT_TOO_LARGE": "Ce fichier ne peut pas passer sous la limite d'envoi, même compressé.",
     "CAPTION_TOO_LONG": "Cette légende est trop longue : {{length}} caractères, alors que Telegram en autorise {{max}}. Raccourcissez-la et réessayez ; rien n'a été envoyé.",

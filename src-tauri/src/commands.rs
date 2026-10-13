@@ -1338,8 +1338,9 @@ pub fn sidecars_status(state: State<'_, AppState>) -> SidecarStatus {
 /// Result of `encoder_status`.
 #[derive(Debug, Serialize)]
 pub struct EncoderStatus {
-    /// A GPU encoder that stopped mid-encode in this session: until the app restarts, new
-    /// encodes use the CPU (Settings shows a warning).
+    /// A GPU encoder the session gave up on: it stopped mid-encode (late, or with an error of
+    /// its own), or failed to start on two items in a row even after retries. Until the app
+    /// restarts, new encodes use the CPU (Settings shows a warning).
     pub gpu_failed: Option<GpuFailure>,
 }
 

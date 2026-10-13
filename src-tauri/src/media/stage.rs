@@ -196,7 +196,8 @@ pub struct FfmpegStage {
     gpu: GpuSession,
 }
 
-/// A GPU encoder that stopped mid-encode in this session (`encoder_status`).
+/// A GPU encoder that stopped mid-encode in this session (`encoder_status`), and that the
+/// session now avoids.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GpuFailure {
     pub encoder: String,
@@ -204,28 +205,61 @@ pub struct GpuFailure {
     pub at_seconds: u64,
 }
 
-/// Memory of a GPU failure, for this session only: new encodes then go to the CPU instead of
-/// paying a failed GPU attempt on every file. The GPU is tried again after a restart.
+/// Items in a row whose GPU encode failed to start, even after its retries, that turn the GPU
+/// off for the session. One is not enough: the failure is random (about 3 runs in 8 on one
+/// large file, then the next one works), so the GPU must be given a chance on the next item;
+/// a second one in a row says the GPU is not usable now, and paying 3 failed tries per file
+/// would be worse than the CPU.
+const START_FAILED_ITEMS_TO_DISABLE: u32 = 2;
+
 #[derive(Default)]
-pub struct GpuSession(std::sync::Mutex<Option<GpuFailure>>);
+struct GpuState {
+    /// Set once the GPU is avoided for the rest of the session.
+    failure: Option<GpuFailure>,
+    /// Items in a row whose GPU encode failed to start for good; reset by a GPU success.
+    start_failed_items: u32,
+}
+
+/// Memory of GPU failures, for this session only. A GPU encoder that stops mid-encode (late, or
+/// with an error of its own) is avoided at once: new encodes then go to the CPU instead of
+/// paying a failed GPU attempt on every file. One that only failed to start (see
+/// `encode::is_start_failure`) is avoided after `START_FAILED_ITEMS_TO_DISABLE` items in a
+/// row. The GPU is tried again after a restart.
+#[derive(Default)]
+pub struct GpuSession(std::sync::Mutex<GpuState>);
 
 impl GpuSession {
-    pub fn failure(&self) -> Option<GpuFailure> {
+    fn state(&self) -> std::sync::MutexGuard<'_, GpuState> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
     }
 
-    fn record(&self, stop: &EncoderStop) {
-        let failure = GpuFailure {
+    /// The failure the session avoids, if the GPU is off.
+    pub fn failure(&self) -> Option<GpuFailure> {
+        self.state().failure.clone()
+    }
+
+    /// Notes a GPU encode that failed for good (its retries included); `true` if the GPU is now
+    /// off for the session.
+    fn record(&self, stop: &EncoderStop) -> bool {
+        let mut state = self.state();
+        if stop.start_failure {
+            state.start_failed_items += 1;
+            if state.start_failed_items < START_FAILED_ITEMS_TO_DISABLE {
+                return false;
+            }
+        }
+        state.failure = Some(GpuFailure {
             encoder: stop.encoder_name().to_owned(),
             at_seconds: stop.at_seconds(),
-        };
-        *self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(failure);
+        });
+        true
+    }
+
+    /// A GPU encode went through: the failures to start were not a pattern.
+    fn recovered(&self) {
+        self.state().start_failed_items = 0;
     }
 }
 
@@ -288,6 +322,17 @@ fn stage_error(error: MediaError) -> StageError {
     }
 }
 
+/// The `cause` of the `ENCODER_FALLBACK` alert: it picks the sentence, which must say whether
+/// the GPU is given up for the session (`gpu_off`) or tried again on the next file.
+fn fallback_cause(stop: &EncoderStop, gpu_off: bool) -> &'static str {
+    match (stop.start_failure, gpu_off) {
+        (true, false) => "start_failed",
+        (true, true) => "start_failed_again",
+        (false, _) if stop.stderr_empty => "silent",
+        (false, _) => "encoder_error",
+    }
+}
+
 /// Codes of a failed CPU retry that say more than "the retry failed too": kept as they are.
 const KEPT_FALLBACK_CODES: [&str; 5] = [
     "DISK_SPACE",
@@ -300,7 +345,9 @@ const KEPT_FALLBACK_CODES: [&str; 5] = [
 /// Encodes with `encoder`; if it is a GPU encoder that stops mid-encode (no cancellation, empty
 /// stderr or a hardware error), retries ONCE with the CPU encoder `cpu` (the detection's first
 /// working one: libx264, else libopenh264, else h264_mf), on a fresh `.part` and a plan rebuilt
-/// for it. The GPU is then skipped for the rest of the session (`session`).
+/// for it. A GPU that merely failed to start was already tried again, silently, by
+/// `encode::encode_video`; only if all its tries fail does it get here. Whether the GPU is then
+/// skipped for the rest of the session depends on the kind of failure (`GpuSession::record`).
 ///
 /// No loop: the retry runs on the CPU, which never gives `EncoderStopped`, and any failure of
 /// the retry is final.
@@ -313,9 +360,14 @@ pub(crate) async fn encode_with_cpu_fallback(
 ) -> Result<encode::Produced> {
     let stop = match encode::encode_video(job, encoder).await {
         Err(MediaError::EncoderStopped(stop)) => stop,
-        other => return other,
+        other => {
+            if other.is_ok() && encoder.is_gpu() {
+                session.recovered();
+            }
+            return other;
+        }
     };
-    session.record(&stop);
+    let gpu_off = session.record(&stop);
     let detail = stop.to_string();
     tracing::warn!(
         event = "encoder_failed_midway",
@@ -325,9 +377,12 @@ pub(crate) async fn encode_with_cpu_fallback(
         dur_ms = stop.elapsed_ms,
         out_time_s = (stop.out_time_s * 100.0).round() / 100.0,
         stderr_empty = stop.stderr_empty,
+        start_failure = stop.start_failure,
+        attempts = stop.attempts,
+        gpu_off,
         fallback = cpu.map(Encoder::name),
         stderr_tail = stop.stderr_tail.as_str(),
-        "GPU encoder stopped mid-encode; GPU skipped until the app restarts"
+        "GPU encoder stopped mid-encode"
     );
     let mut params = stop_params(&stop);
     // A CPU retry would turn a HEVC plan into an H.264 file: HEVC has no CPU encoder to retry on.
@@ -368,7 +423,7 @@ pub(crate) async fn encode_with_cpu_fallback(
             "from": stop.encoder_name(),
             "to": cpu.name(),
             "atSeconds": stop.at_seconds(),
-            "cause": if stop.stderr_empty { "silent" } else { "encoder_error" },
+            "cause": fallback_cause(&stop, gpu_off),
         }),
     );
     job.progress.report_now(Progress {
@@ -1240,6 +1295,28 @@ mod tests {
         cpu: Option<Encoder>,
         cancel_after: Option<Duration>,
     ) -> Run {
+        run_in_session(name, fake, plan, cpu, cancel_after, GpuSession::default()).await
+    }
+
+    /// The next item of a session: the GPU's memory comes from the previous runs.
+    async fn run_in(
+        name: &str,
+        fake: Fake,
+        plan: Plan,
+        cpu: Option<Encoder>,
+        session: GpuSession,
+    ) -> Run {
+        run_in_session(name, fake, plan, cpu, None, session).await
+    }
+
+    async fn run_in_session(
+        name: &str,
+        fake: Fake,
+        plan: Plan,
+        cpu: Option<Encoder>,
+        cancel_after: Option<Duration>,
+        session: GpuSession,
+    ) -> Run {
         let dir = TestDir::new(name);
         let (ffmpeg, ffprobe) = fake_tools(dir.path(), fake);
         let input = dir.path().join("in.mkv");
@@ -1268,7 +1345,6 @@ mod tests {
                 canceller.cancel();
             });
         }
-        let session = GpuSession::default();
         let result = encode_with_cpu_fallback(&job, Encoder::Nvenc, cpu, 0.03, &session).await;
         Run {
             result,
@@ -1545,6 +1621,101 @@ mod tests {
         assert!(lines.iter().all(|l| l["event"] != "encoder_failed_midway"));
     }
 
+    /// The alert of the one run `run` made, by its `cause`.
+    fn alert_cause(run: &Run) -> String {
+        let alerts = run.sink.alerts.lock().unwrap();
+        assert_eq!(alerts.len(), 1, "one alert expected");
+        assert_eq!(alerts[0].code, "ENCODER_FALLBACK");
+        alerts[0].params["cause"].as_str().unwrap().to_owned()
+    }
+
+    #[tokio::test]
+    async fn one_item_that_fails_to_start_does_not_turn_the_gpu_off_for_the_session() {
+        let run = run("session-one", SILENT, Some(Encoder::X264), None).await;
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        assert_eq!(alert_cause(&run), "start_failed");
+        assert_eq!(run.session.failure(), None, "the next file tries the GPU");
+    }
+
+    #[tokio::test]
+    async fn a_second_item_in_a_row_that_fails_to_start_turns_the_gpu_off() {
+        let first = run("session-two-a", SILENT, Some(Encoder::X264), None).await;
+        assert_eq!(alert_cause(&first), "start_failed");
+
+        let second = run_in(
+            "session-two-b",
+            SILENT,
+            sample_plan(),
+            Some(Encoder::X264),
+            first.session,
+        )
+        .await;
+        assert!(second.result.is_ok(), "{:?}", second.result);
+        assert_eq!(alert_cause(&second), "start_failed_again");
+        let failure = second.session.failure().expect("the GPU is off");
+        assert_eq!(failure.encoder, "h264_nvenc");
+        // Both items paid their three GPU tries.
+        assert_eq!(
+            second
+                .calls
+                .iter()
+                .filter(|c| c.starts_with("h264_nvenc"))
+                .count(),
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn a_gpu_encode_that_works_between_two_start_failures_resets_the_count() {
+        let first = run("session-reset-a", SILENT, Some(Encoder::X264), None).await;
+        assert_eq!(alert_cause(&first), "start_failed");
+
+        let works = Fake {
+            gpu_fails: 0,
+            ..SILENT
+        };
+        let second = run_in(
+            "session-reset-b",
+            works,
+            sample_plan(),
+            Some(Encoder::X264),
+            first.session,
+        )
+        .await;
+        assert!(second.result.is_ok(), "{:?}", second.result);
+        assert_eq!(second.calls, ["h264_nvenc fresh"]);
+
+        let third = run_in(
+            "session-reset-c",
+            SILENT,
+            sample_plan(),
+            Some(Encoder::X264),
+            second.session,
+        )
+        .await;
+        assert_eq!(
+            alert_cause(&third),
+            "start_failed",
+            "the count started over"
+        );
+        assert_eq!(third.session.failure(), None);
+    }
+
+    #[tokio::test]
+    async fn a_late_or_reported_gpu_failure_turns_the_gpu_off_at_once() {
+        let late = run("session-late", LATE, Some(Encoder::X264), None).await;
+        assert_eq!(alert_cause(&late), "silent");
+        assert!(late.session.failure().is_some());
+
+        let fake = Fake {
+            gpu_stderr: Some("Failed locking bitstream buffer: NV_ENC_ERR_GENERIC (20)"),
+            ..SILENT
+        };
+        let reported = run("session-reported", fake, Some(Encoder::X264), None).await;
+        assert_eq!(alert_cause(&reported), "encoder_error");
+        assert!(reported.session.failure().is_some());
+    }
+
     #[tokio::test]
     async fn without_a_cpu_encoder_the_stop_is_reported_with_its_numbers() {
         let run = run("fallback-none", LATE, None, None).await;
@@ -1680,7 +1851,8 @@ mod tests {
         );
         assert_eq!(info.video.unwrap().codec, "h264");
         assert!(produced.size <= limit);
-        assert!(session.failure().is_some());
+        // The wrapper's NVENC stop is a failure to start: tried three times, GPU not given up.
+        assert_eq!(session.failure(), None);
         assert_eq!(
             sink.alert_codes(),
             [(Some(1), "ENCODER_FALLBACK".to_owned())]
@@ -1971,8 +2143,8 @@ mod tests {
             "the same GPU command three times, no CPU run"
         );
         assert!(run.sink.alerts.lock().unwrap().is_empty());
-        let failure = run.session.failure().expect("the GPU did stop");
-        assert_eq!(failure.encoder, "hevc_nvenc");
+        // Three failures to start on one item are not yet a GPU to give up on.
+        assert_eq!(run.session.failure(), None);
         no_part_left(&run.out_dir);
     }
 
