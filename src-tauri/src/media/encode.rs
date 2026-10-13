@@ -5,7 +5,7 @@
 //! file that must never be reused.
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
 
@@ -366,21 +366,56 @@ fn hardware_encoder_error(stderr: &str) -> bool {
     MARKERS.iter().any(|m| lower.contains(m))
 }
 
+/// A GPU encoder run that ends this early, with nothing on stderr, never really started: the
+/// session opened ("Nvenc initialized successfully") and ffmpeg then exited 1 before the first
+/// frames went out. Measured on an RTX 4080 (two ffmpeg builds) with one 4 GB 4K60 HEVC file
+/// whose `moov` is at the end: about 3 runs in 8 end like this, the next identical run
+/// succeeds, and decoding alone or libx264 never fail.
+///
+/// 15 s of output is well past the 2 to 6 s seen on real failures and still costs a few
+/// seconds to redo on a GPU; 60 s of wall time bounds what a retry can waste when the encode
+/// is slow (a heavy source, a busy card). Beyond either, the run had really started and a
+/// failure is a late one: never repeated blindly.
+pub const START_FAILURE_MAX_OUT_S: f64 = 15.0;
+pub const START_FAILURE_MAX_RUN_MS: u64 = 60_000;
+
+/// Extra tries (after the first) of a GPU encode that failed to start.
+pub const GPU_START_RETRIES: u32 = 2;
+
+/// Wait between two tries: lets a busy card or a driver reset settle. Short in tests.
+const GPU_RETRY_DELAY: Duration = if cfg!(test) {
+    Duration::from_millis(60)
+} else {
+    Duration::from_secs(2)
+};
+
+/// Whether a failed GPU run looks like a transient failure to start (see
+/// `START_FAILURE_MAX_OUT_S`): silent, early, with little output. A stderr line is the
+/// encoder saying what is wrong, so it is never retried blindly.
+pub fn is_start_failure(stderr_empty: bool, out_time_s: f64, elapsed_ms: u64) -> bool {
+    stderr_empty && out_time_s < START_FAILURE_MAX_OUT_S && elapsed_ms < START_FAILURE_MAX_RUN_MS
+}
+
 /// A GPU encoder that ended with a code other than 0, not cancelled, with an empty stderr or a
 /// hardware encoder error (seen on an RTX 4080: `h264_nvenc` exits 1 after 2 to 6 s, nothing on
-/// stderr, while a game and NVIDIA recording run; cause not established).
+/// stderr, while a game and NVIDIA recording run, and at random on one large 4K file; cause not
+/// established). One that is a `start_failure` was already tried again `attempts - 1` times.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncoderStop {
     pub encoder: Encoder,
     pub codec: VideoCodec,
     pub exit_code: Option<i32>,
-    /// Time spent in the failed run.
+    /// Time spent in the failed run (the last one).
     pub elapsed_ms: u64,
     /// Last `out_time` reached, in seconds of output.
     pub out_time_s: f64,
     pub stderr_empty: bool,
     /// Last stderr lines (journal only).
     pub stderr_tail: String,
+    /// The last run matched `is_start_failure`.
+    pub start_failure: bool,
+    /// Runs made of the same ffmpeg command, this one included.
+    pub attempts: u32,
 }
 
 impl EncoderStop {
@@ -401,8 +436,9 @@ impl std::fmt::Display for EncoderStop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} stopped mid-encode: exit {:?} after {} ms at {:.2} s of output, stderr: {}",
+            "{} stopped mid-encode ({} attempts): exit {:?} after {} ms at {:.2} s of output, stderr: {}",
             self.encoder_name(),
+            self.attempts,
             self.exit_code,
             self.elapsed_ms,
             self.out_time_s,
@@ -480,10 +516,77 @@ fn log_ffmpeg_end(output: &procs::Output, began: Instant, code: Option<&str>) {
     }
 }
 
+/// `run_ffmpeg`, and when a GPU encoder fails to start (`is_start_failure`), the same command
+/// again up to `GPU_START_RETRIES` times: the failure is random and the next identical run
+/// usually succeeds, whereas falling back to the CPU turns minutes into an hour. A late failure
+/// or one with an error on stderr is returned at once, as is a cancellation (also during the
+/// wait between two tries). A pause never interrupts an encode, so it does not end this wait
+/// either: the queue pauses after the item.
+async fn run_ffmpeg(
+    job: &Job<'_>,
+    step: &str,
+    args: Args,
+    duration_s: Option<f64>,
+    span: (f64, f64),
+    encoder: Option<Encoder>,
+) -> Result<()> {
+    let mut attempt = 1;
+    loop {
+        let result = run_ffmpeg_once(job, step, args.clone(), duration_s, span, encoder).await;
+        let mut stop = match result {
+            Err(MediaError::EncoderStopped(stop)) => stop,
+            other => {
+                if attempt > 1 && other.is_ok() {
+                    tracing::info!(
+                        event = "gpu_retry_ok",
+                        step,
+                        attempts = attempt,
+                        "GPU encode succeeded on a retry"
+                    );
+                }
+                return other;
+            }
+        };
+        stop.attempts = attempt;
+        if !stop.start_failure || attempt > GPU_START_RETRIES {
+            return Err(MediaError::EncoderStopped(stop));
+        }
+        tracing::warn!(
+            event = "gpu_retry",
+            step,
+            encoder = stop.encoder_name(),
+            attempt = attempt + 1,
+            max_attempts = GPU_START_RETRIES + 1,
+            exit_code = stop.exit_code,
+            dur_ms = stop.elapsed_ms,
+            out_time_s = (stop.out_time_s * 100.0).round() / 100.0,
+            "GPU encoder failed to start with nothing on stderr; same command again"
+        );
+        // The failed run's output must not be seen by the next one (ffmpeg `-y` would overwrite
+        // it, but a half-written file is no evidence of anything).
+        remove_if_exists(&job.part());
+        // The bar goes back to where this run began, as the new run does.
+        job.progress.report_now(Progress {
+            percent: span.0,
+            ..Default::default()
+        });
+        wait_before_retry(job.cancel, GPU_RETRY_DELAY).await?;
+        attempt += 1;
+    }
+}
+
+/// Sleeps `delay`; `MediaError::Cancelled` at once if `cancel` fires meanwhile.
+async fn wait_before_retry(cancel: &CancellationToken, delay: Duration) -> Result<()> {
+    tokio::select! {
+        () = tokio::time::sleep(delay) => Ok(()),
+        () = cancel.cancelled() => Err(MediaError::Cancelled),
+    }
+}
+
 /// Runs ffmpeg with progress mapped onto `start..start+width` percent. `encoder` is the video
 /// encoder of an encode (`None` for a remux): a GPU one that stops mid-encode gives
 /// `MediaError::EncoderStopped`.
-async fn run_ffmpeg(
+async fn run_ffmpeg_once(
     job: &Job<'_>,
     step: &str,
     args: Args,
@@ -536,14 +639,17 @@ async fn run_ffmpeg(
             && code == "FFMPEG_FAILED"
             && (stderr_empty || hardware_encoder_error(&stderr))
         {
+            let elapsed_ms = crate::logging::ms_since(began);
             return Err(MediaError::EncoderStopped(Box::new(EncoderStop {
                 encoder,
                 codec: job.plan.video_codec,
                 exit_code: output.code,
-                elapsed_ms: crate::logging::ms_since(began),
+                elapsed_ms,
                 out_time_s: reached_s,
                 stderr_empty,
                 stderr_tail: stderr,
+                start_failure: is_start_failure(stderr_empty, reached_s, elapsed_ms),
+                attempts: 1,
             })));
         }
         return Err(MediaError::failed(
@@ -1379,6 +1485,47 @@ mod tests {
     }
 
     #[test]
+    fn only_a_silent_early_gpu_run_is_a_start_failure() {
+        assert!(is_start_failure(true, 0.0, 800));
+        assert!(is_start_failure(true, 4.57, 9_000), "the measured failure");
+        assert!(is_start_failure(true, 14.9, 59_999));
+        assert!(
+            !is_start_failure(true, 15.0, 20_000),
+            "15 s of output is late"
+        );
+        assert!(
+            !is_start_failure(true, 3.0, 60_000),
+            "a minute of work is late"
+        );
+        assert!(
+            !is_start_failure(false, 1.0, 1_000),
+            "an error on stderr is the encoder's own diagnosis"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_wait_between_tries_ends_at_once_when_cancelled() {
+        let cancel = CancellationToken::new();
+        let began = tokio::time::Instant::now();
+        assert!(
+            wait_before_retry(&cancel, Duration::from_secs(2))
+                .await
+                .is_ok()
+        );
+        assert_eq!(began.elapsed(), Duration::from_secs(2));
+
+        let canceller = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            canceller.cancel();
+        });
+        let began = tokio::time::Instant::now();
+        let waited = wait_before_retry(&cancel, Duration::from_secs(2)).await;
+        assert!(matches!(waited, Err(MediaError::Cancelled)));
+        assert_eq!(began.elapsed(), Duration::from_millis(300));
+    }
+
+    #[test]
     fn failures_are_classified_into_spec_codes() {
         assert_eq!(
             classify_failure(
@@ -1438,9 +1585,12 @@ mod tests {
             out_time_s: 3.2,
             stderr_empty: true,
             stderr_tail: String::new(),
+            start_failure: true,
+            attempts: 3,
         };
         assert_eq!(stop.at_seconds(), 4);
         assert!(stop.to_string().contains("h264_nvenc stopped mid-encode"));
+        assert!(stop.to_string().contains("3 attempts"));
     }
 
     #[test]
