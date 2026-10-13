@@ -135,6 +135,7 @@ export function DestinationPicker({
 
   const selected = value === "" ? undefined : byId.get(Number(value))
   const unnamed = t("destinations.unnamed")
+  const savedLabel = t("destinations.savedMessages")
   const trimmed = query.trim()
 
   const remote =
@@ -152,6 +153,7 @@ export function DestinationPicker({
         topicsState: (forumId) => topicsState.get(forumId) ?? "idle",
         remote,
         unnamedLabel: unnamed,
+        savedLabel,
         unnamedOpen,
         unnamedCheck: (id) => checks.get(id) ?? "idle",
       }),
@@ -163,6 +165,7 @@ export function DestinationPicker({
       topicsState,
       remote,
       unnamed,
+      savedLabel,
       unnamedOpen,
       checks,
     ],
@@ -458,7 +461,9 @@ export function DestinationPicker({
     }
   }
 
-  const selectedLabel = selected ? destinationName(selected) || unnamed : null
+  const selectedLabel = selected
+    ? destinationName(selected, t) || unnamed
+    : null
   const searching =
     searchState.phase === "searching" && searchState.query === trimmed
   const searchFailed =

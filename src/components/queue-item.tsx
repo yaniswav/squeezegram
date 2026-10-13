@@ -87,7 +87,7 @@ function useDestinationLabel(destinationId: number): string {
   const destination = byId.get(destinationId)
 
   return destination
-    ? destinationName(destination)
+    ? destinationName(destination, t)
     : t("common.destinationNumber", { id: destinationId })
 }
 
@@ -805,7 +805,7 @@ function EarlierSend({ item }: { item: Item }) {
       <p className="text-xs text-muted-foreground">
         {t("queue.item.duplicate.sentTo", {
           destination: destination
-            ? destinationName(destination)
+            ? destinationName(destination, t)
             : t("common.destinationNumber", { id: info.destination_id }),
           date: formatDateTime(new Date(info.sent_at), i18n.language),
         })}

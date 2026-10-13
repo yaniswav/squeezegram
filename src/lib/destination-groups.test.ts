@@ -668,3 +668,23 @@ test("the add panel starts on the most recent destination that can be chosen", (
   assert.equal(mostRecent(topicLast)?.id, clips.id)
   assert.equal(mostRecent([zoe, slow]), undefined)
 })
+
+test("Saved Messages is shown and searched under the page's language", () => {
+  const savedLabel = "Messages enregistrés"
+  const labels = (groups: PickerGroup[]) =>
+    groups.flatMap((g) => g.options.map((o) => o.label))
+
+  assert.deepEqual(summary(build({ savedLabel }))[0], ["saved", [savedLabel]])
+  assert.ok(
+    labels(build({ savedLabel, query: "enregistres" })).includes(savedLabel),
+  )
+  assert.ok(!labels(build({ savedLabel, query: "saved" })).includes(savedLabel))
+  // What is stored does not change: the picker works on copies.
+  assert.equal(saved.title, "Saved Messages")
+
+  // A local name still wins.
+  const named = { ...saved, alias: "Me" }
+  const groups = build({ savedLabel, destinations: [named] })
+
+  assert.deepEqual(summary(groups)[0], ["saved", ["Me"]])
+})

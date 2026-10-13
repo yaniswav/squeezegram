@@ -16,7 +16,11 @@ import type { CheckState } from "@/hooks/use-destination-check"
 import { errorMessage } from "@/i18n/errors"
 import { formatDuration } from "@/lib/format"
 import { type Destination, type DestinationPatch } from "@/lib/ipc"
-import { destinationName, useDestinations } from "@/state/destinations"
+import {
+  destinationName,
+  telegramName,
+  useDestinations,
+} from "@/state/destinations"
 
 /** `store::MAX_MIN_INTERVAL_S` (one week), in the minutes the form uses. */
 const MAX_INTERVAL_MINUTES = 7 * 24 * 60
@@ -78,7 +82,7 @@ export function DestinationField({
 
   const selected = value === "" ? undefined : byId.get(Number(value))
   const selectedName = selected
-    ? destinationName(selected) || t("destinations.unnamed")
+    ? destinationName(selected, t) || t("destinations.unnamed")
     : ""
 
   async function doRefresh() {
@@ -216,7 +220,7 @@ export function DestinationField({
               dir="auto"
               autoFocus
               value={draft}
-              placeholder={selected.title}
+              placeholder={telegramName(selected, t)}
               aria-describedby={`${ids}-alias-hint`}
               onChange={(event) => setDraft(event.target.value)}
             />

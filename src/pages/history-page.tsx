@@ -230,7 +230,7 @@ export function HistoryPage({ focusTitle }: { focusTitle: boolean }) {
                       <td className="px-3 py-2.5">
                         <bdi>
                           {destination
-                            ? destinationName(destination)
+                            ? destinationName(destination, t)
                             : t("common.destinationNumber", {
                                 id: entry.destination_id,
                               })}

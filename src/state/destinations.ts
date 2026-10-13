@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { createContext } from "react"
 import type { Destination, DestinationPatch } from "@/lib/ipc"
 import { useRequiredContext } from "./context"
@@ -30,9 +31,22 @@ export function useDestinations(): DestinationsApi {
   return useRequiredContext(DestinationsContext, "useDestinations")
 }
 
+/**
+ * The name Telegram gives the chat, as shown: Saved Messages in the page's language (the
+ * stored title is the one TDLib returned, in English whatever the language).
+ */
+export function telegramName(destination: Destination, t: TFunction): string {
+  return destination.is_saved
+    ? t("destinations.savedMessages")
+    : destination.title.trim()
+}
+
 /** Local name, else Telegram name; "" when both are blank (the UI shows a placeholder). */
-export function destinationName(destination: Destination): string {
-  return destination.alias?.trim() || destination.title.trim()
+export function destinationName(
+  destination: Destination,
+  t: TFunction,
+): string {
+  return destination.alias?.trim() || telegramName(destination, t)
 }
 
 /** `list` with `rows` replacing the entries of the same id, new ones appended. */

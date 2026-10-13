@@ -891,6 +891,7 @@
     },
     "save": "Guardar",
     "unnamed": "Chat sin nombre",
+    "savedMessages": "Mensajes guardados",
     "panelLabel": "Elija un destino",
     "listLabel": "Destinos",
     "groups": {

@@ -1013,7 +1013,7 @@ function WatchedFolders({ entitlements }: { entitlements: EntitlementState }) {
 
     return t("settings.watch.summary", {
       destination: destination
-        ? destinationName(destination) || t("destinations.unnamed")
+        ? destinationName(destination, t) || t("destinations.unnamed")
         : t("settings.watch.noDestination"),
       mode: folder.send_mode
         ? t(`mode.${folder.send_mode}`)

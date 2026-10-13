@@ -114,6 +114,11 @@ export interface BuildInput {
   remote: readonly number[] | null
   /** Label of a chat without a name (a deleted account cached before the fix…). */
   unnamedLabel: string
+  /**
+   * Name of Saved Messages in the page's language, shown, sorted and searched in place of the
+   * stored title (TDLib's, in English); a local alias still wins. Absent: the stored title.
+   */
+  savedLabel?: string
   /** The unnamed chats are shown (folded by default). */
   unnamedOpen?: boolean
   unnamedCheck?: (id: number) => UnnamedCheck
@@ -272,11 +277,16 @@ export function countFilters(
 }
 
 export function buildGroups(input: BuildInput): PickerGroup[] {
-  const { expanded, topicsState, unnamedLabel } = input
+  const { expanded, topicsState, unnamedLabel, savedLabel } = input
   const filter = input.filter ?? DEFAULT_FILTER
+  const all = savedLabel
+    ? input.destinations.map((d) =>
+        d.is_saved && !d.alias?.trim() ? { ...d, title: savedLabel } : d,
+      )
+    : input.destinations
   // Unnamed chats only ever show in their own folded group, never among the others.
-  const unnamed = input.destinations.filter(isUnnamed)
-  const destinations = input.destinations.filter((d) => !isUnnamed(d))
+  const unnamed = all.filter(isUnnamed)
+  const destinations = all.filter((d) => !isUnnamed(d))
   const chats = destinations.filter((d) => d.topic_id === 0)
   const forumByPeer = new Map(
     chats.filter((d) => d.is_forum).map((d) => [peerKey(d), d]),
