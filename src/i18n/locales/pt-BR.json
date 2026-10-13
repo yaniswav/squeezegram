@@ -282,6 +282,13 @@
     "finished_other": "Concluídos ({{count}})",
     "listLabel": "Arquivos na fila",
     "finishedLabel": "Arquivos concluídos",
+    "group": {
+      "destinations_one": "Para {{count}} destino",
+      "destinations_many": "Para {{count}} de destinos",
+      "destinations_other": "Para {{count}} destinos",
+      "destinationsLabel": "Destinos de {{name}}",
+      "cancelTo": "Cancelar o envio de {{name}} para {{destination}}"
+    },
     "clear": {
       "button": "Limpar fila",
       "unavailable": "Nada para limpar: a fila está vazia ou só tem arquivos sendo processados agora.",

@@ -282,6 +282,13 @@
     "finished_other": "Terminé ({{count}})",
     "listLabel": "Fichiers dans la file d'attente",
     "finishedLabel": "Fichiers terminés",
+    "group": {
+      "destinations_one": "Vers {{count}} destination",
+      "destinations_many": "Vers {{count}} de destinations",
+      "destinations_other": "Vers {{count}} destinations",
+      "destinationsLabel": "Destinations de {{name}}",
+      "cancelTo": "Annuler l'envoi de {{name}} vers {{destination}}"
+    },
     "clear": {
       "button": "Vider la file d'attente",
       "unavailable": "Rien à vider : la file d'attente est vide ou ne contient que des fichiers en cours de traitement.",

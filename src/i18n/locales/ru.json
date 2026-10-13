@@ -290,6 +290,14 @@
     "finished_other": "Завершённые ({{count}})",
     "listLabel": "Файлы в очереди",
     "finishedLabel": "Завершённые файлы",
+    "group": {
+      "destinations_one": "Получателей: {{count}}",
+      "destinations_few": "Получателей: {{count}}",
+      "destinations_many": "Получателей: {{count}}",
+      "destinations_other": "Получателей: {{count}}",
+      "destinationsLabel": "Получатели файла {{name}}",
+      "cancelTo": "Отменить отправку {{name}} получателю {{destination}}"
+    },
     "clear": {
       "button": "Очистить очередь",
       "unavailable": "Нечего очищать: очередь пуста или в ней только файлы, которые обрабатываются прямо сейчас.",

@@ -306,6 +306,16 @@
     "finished_other": "المنتهية ({{count}})",
     "listLabel": "الملفات في قائمة الانتظار",
     "finishedLabel": "الملفات المنتهية",
+    "group": {
+      "destinations_zero": "عدد الوجهات: {{count}}",
+      "destinations_one": "عدد الوجهات: {{count}}",
+      "destinations_two": "عدد الوجهات: {{count}}",
+      "destinations_few": "عدد الوجهات: {{count}}",
+      "destinations_many": "عدد الوجهات: {{count}}",
+      "destinations_other": "عدد الوجهات: {{count}}",
+      "destinationsLabel": "وجهات {{name}}",
+      "cancelTo": "إلغاء إرسال {{name}} إلى {{destination}}"
+    },
     "clear": {
       "button": "مسح قائمة الانتظار",
       "unavailable": "لا يوجد ما يُمسح: قائمة الانتظار فارغة أو لا تضم إلا ملفات قيد المعالجة الآن.",

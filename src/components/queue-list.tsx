@@ -4,7 +4,7 @@ import { useId, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { ClearQueue } from "@/components/clear-queue"
 import { EmptyState } from "@/components/empty-state"
-import { QueueItem } from "@/components/queue-item"
+import { QueueGroup, QueueItem } from "@/components/queue-item"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -15,13 +15,51 @@ import {
 } from "@/components/ui/card"
 import { useFlash } from "@/hooks/use-flash"
 import { useGroupRiskGate } from "@/hooks/use-group-risk-gate"
-import { queuePause, queueReorder, queueStart } from "@/lib/ipc"
+import { queuePause, queueReorder, queueStart, type Item } from "@/lib/ipc"
 import { canPause, canStart } from "@/lib/queue-actions"
-import { isFinished, isProcessable } from "@/lib/queue-state"
+import { groupBatches, isGroupFinished, moveGroup } from "@/lib/queue-groups"
+import { isProcessable } from "@/lib/queue-state"
 import { cn } from "@/lib/utils"
 import { useAlerts } from "@/state/alerts"
 import { useDestinations } from "@/state/destinations"
-import { useQueue } from "@/state/queue"
+import { useQueue, type QueueApi } from "@/state/queue"
+
+const NO_PROGRESS: QueueApi["progress"] = new Map()
+
+/** A file sent to one destination as before; to several, one card with a row each. */
+function QueueCard({
+  items,
+  progress,
+  onMove,
+  isFirst,
+  isLast,
+}: {
+  items: Item[]
+  progress: QueueApi["progress"]
+  onMove?: (direction: -1 | 1) => void
+  isFirst?: boolean
+  isLast?: boolean
+}) {
+  const [first] = items
+
+  return items.length === 1 ? (
+    <QueueItem
+      item={first}
+      progress={progress.get(first.id)}
+      onMove={onMove}
+      isFirst={isFirst}
+      isLast={isLast}
+    />
+  ) : (
+    <QueueGroup
+      items={items}
+      progress={progress}
+      onMove={onMove}
+      isFirst={isFirst}
+      isLast={isLast}
+    />
+  )
+}
 
 export function QueueList() {
   const { t } = useTranslation()
@@ -34,8 +72,10 @@ export function QueueList() {
   const [cleared, setCleared] = useFlash()
   const ids = useId()
 
-  const active = items.filter((item) => !isFinished(item.state))
-  const finished = items.filter((item) => isFinished(item.state))
+  // One card per file of a batch: the items of a file sent to several destinations together.
+  const groups = groupBatches(items)
+  const active = groups.filter((group) => !isGroupFinished(group))
+  const finished = groups.filter(isGroupFinished)
   // `running` only says the orchestrator is armed; nothing runs without a processable item.
   const busy = canPause(items)
   // Start with nothing the loop can take, or Pause with nothing to hold back, would do
@@ -72,12 +112,11 @@ export function QueueList() {
     }
   }
 
+  // A card moves with all of its destinations.
   async function move(index: number, direction: -1 | 1) {
-    const order = active.map((item) => item.id)
-    const target = index + direction
+    const order = moveGroup(active, index, direction)
 
-    if (target < 0 || target >= order.length) return
-    ;[order[index], order[target]] = [order[target], order[index]]
+    if (!order) return
 
     try {
       await queueReorder(order)
@@ -165,11 +204,11 @@ export function QueueList() {
       {active.length > 0 && (
         <ul className="divide-y" aria-labelledby={`${ids}-title`}>
           <AnimatePresence initial={false}>
-            {active.map((item, index) => (
-              <QueueItem
-                key={item.id}
-                item={item}
-                progress={progress.get(item.id)}
+            {active.map((group, index) => (
+              <QueueCard
+                key={group.key}
+                items={group.items}
+                progress={progress}
                 onMove={(direction) => void move(index, direction)}
                 isFirst={index === 0}
                 isLast={index === active.length - 1}
@@ -206,8 +245,12 @@ export function QueueList() {
               {finished
                 .slice()
                 .reverse()
-                .map((item) => (
-                  <QueueItem key={item.id} item={item} progress={undefined} />
+                .map((group) => (
+                  <QueueCard
+                    key={group.key}
+                    items={group.items}
+                    progress={NO_PROGRESS}
+                  />
                 ))}
             </ul>
           )}

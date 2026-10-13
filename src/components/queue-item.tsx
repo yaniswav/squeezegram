@@ -4,6 +4,7 @@ import {
   ArrowUp,
   ExternalLink,
   File,
+  Files,
   Film,
   Image,
   RotateCcw,
@@ -51,6 +52,7 @@ import {
   queueRetry,
   type DuplicateInfo,
   type Item,
+  type MediaInfo,
   type Phase,
   type QueueProgress,
   type SendMode,
@@ -64,7 +66,7 @@ import {
 } from "@/lib/queue-state"
 import { useAlerts } from "@/state/alerts"
 import { destinationName, useDestinations } from "@/state/destinations"
-import { useQueue } from "@/state/queue"
+import { useQueue, type QueueApi } from "@/state/queue"
 
 const MODE_ICON: Record<SendMode, LucideIcon> = {
   video: Film,
@@ -78,24 +80,20 @@ type Confirm = "cancel" | "duplicate" | "resend" | null
 
 type Progressed = QueueProgress & { receivedAt: number; cpuFallback: boolean }
 
-interface QueueItemProps {
-  item: Item
-  progress: Progressed | undefined
-  /** Absent for finished items, which can't be reordered. */
-  onMove?: (direction: -1 | 1) => void
-  isFirst?: boolean
-  isLast?: boolean
+/** The destination's name, or its number while the list is not loaded. */
+function useDestinationLabel(destinationId: number): string {
+  const { t } = useTranslation()
+  const { byId } = useDestinations()
+  const destination = byId.get(destinationId)
+
+  return destination
+    ? destinationName(destination)
+    : t("common.destinationNumber", { id: destinationId })
 }
 
-export function QueueItem({
-  item,
-  progress,
-  onMove,
-  isFirst = false,
-  isLast = false,
-}: QueueItemProps) {
-  const { t, i18n } = useTranslation()
-  const language = i18n.language
+/** The commands of one item, their confirmations and the group warning. */
+function useItemControls(item: Item) {
+  const { t } = useTranslation()
   const { pushError } = useAlerts()
   const { refresh } = useQueue()
   const { byId } = useDestinations()
@@ -104,11 +102,7 @@ export function QueueItem({
   const [busy, setBusy] = useState(false)
 
   const name = fileName(item.source_path)
-  const plan = itemPlan(item)
-  const media = itemMedia(item)
-  const Icon = MODE_ICON[item.send_mode]
   const destination = byId.get(item.destination_id)
-  const editable = isNotStarted(item.state)
 
   /** Runs a command, refreshes the queue; errors become alerts. True on success. */
   async function run<T>(action: () => Promise<T>): Promise<boolean> {
@@ -130,16 +124,226 @@ export function QueueItem({
 
   function requestCancel() {
     // Nothing is lost before the item starts: no confirmation needed.
-    if (editable) void run(() => queueCancel(item.id))
+    if (isNotStarted(item.state)) void run(() => queueCancel(item.id))
     else setConfirm("cancel")
   }
 
+  // A held file is promoted to a send: the group warning applies here too.
+  function promote() {
+    guard(
+      destination ? [destination] : [],
+      () => void run(() => queuePromote([item.id])),
+    )
+  }
+
+  const dialogs = (
+    <>
+      <ConfirmDialog
+        open={confirm === "cancel"}
+        onOpenChange={(open) => !open && setConfirm(null)}
+        title={t("queue.item.cancelDialog.title")}
+        description={t("queue.item.cancelDialog.body", { name })}
+        confirmLabel={t("queue.item.cancelDialog.confirm")}
+        cancelLabel={t("queue.item.cancelDialog.keep")}
+        destructive
+        onConfirm={() => void run(() => queueCancel(item.id))}
+      />
+      <ConfirmDialog
+        open={confirm === "duplicate"}
+        onOpenChange={(open) => !open && setConfirm(null)}
+        title={t("queue.item.duplicate.dialogTitle")}
+        description={t("queue.item.duplicate.dialogBody", { name })}
+        confirmLabel={t("queue.item.duplicate.dialogConfirm")}
+        cancelLabel={t("common.cancel")}
+        onConfirm={promote}
+      />
+      <ConfirmDialog
+        open={confirm === "resend"}
+        onOpenChange={(open) => !open && setConfirm(null)}
+        title={t("queue.item.unknown.dialogTitle")}
+        description={t("queue.item.unknown.dialogBody", { name })}
+        confirmLabel={t("queue.item.unknown.sendAgain")}
+        cancelLabel={t("common.cancel")}
+        onConfirm={() => void run(() => itemResolveUnknown(item.id, "retry"))}
+      />
+      {groupRiskDialog}
+    </>
+  )
+
+  return { busy, run, setConfirm, requestCancel, promote, dialogs }
+}
+
+type ItemControls = ReturnType<typeof useItemControls>
+
+/**
+ * Where the item stands and what can still be changed. `sendOnly`: in a card grouping the
+ * destinations of a file, the preparation is shown once above them.
+ */
+function ItemDetails({
+  item,
+  progress,
+  controls,
+  sendOnly = false,
+}: {
+  item: Item
+  progress: Progressed | undefined
+  controls: ItemControls
+  sendOnly?: boolean
+}) {
+  const { busy, run, setConfirm, promote } = controls
+  const editable = isNotStarted(item.state)
+
+  return (
+    <>
+      <StatusPanel
+        item={item}
+        progress={progress}
+        busy={busy}
+        sendOnly={sendOnly}
+        onPromote={promote}
+        onConfirm={setConfirm}
+        onRetry={() => void run(() => queueRetry(item.id))}
+        onMarkSent={(messageId) =>
+          void run(() => itemResolveUnknown(item.id, "mark_sent", messageId))
+        }
+      />
+
+      {editable && (
+        <ItemEditor
+          item={item}
+          busy={busy}
+          onSave={(patch) => run(() => itemUpdate(item.id, patch))}
+        />
+      )}
+      {editable && item.send_mode !== "document" && (
+        <ItemEncoding
+          item={item}
+          busy={busy}
+          onApply={(choices) => run(() => itemEncodingSet(item.id, choices))}
+        />
+      )}
+      {!editable && item.caption !== "" && (
+        <p className="text-sm whitespace-pre-wrap" dir="auto">
+          {item.caption}
+        </p>
+      )}
+    </>
+  )
+}
+
+/** Width and height as shown, the rotation applied. */
+function shownSize(media: MediaInfo | null): [number, number] | null {
   const video = media?.video
 
-  const [width, height] =
-    video && Math.abs(video.rotation % 180) === 90
-      ? [video.height, video.width]
-      : [video?.width, video?.height]
+  if (!video) return null
+
+  return Math.abs(video.rotation % 180) === 90
+    ? [video.height, video.width]
+    : [video.width, video.height]
+}
+
+/** Source size, prepared size, duration and resolution, then `target`. */
+function FileFacts({
+  sourceSize,
+  outputSize,
+  media,
+  target,
+}: {
+  sourceSize: number
+  outputSize: number | null
+  media: MediaInfo | null
+  target: string
+}) {
+  const { t, i18n } = useTranslation()
+  const language = i18n.language
+  const size = shownSize(media)
+
+  return (
+    <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+      <span>{formatBytes(sourceSize, language)}</span>
+      {outputSize !== null && outputSize !== sourceSize && (
+        <>
+          <ArrowRight className="size-3 rtl:rotate-180" aria-hidden />
+          <span>{formatBytes(outputSize, language)}</span>
+        </>
+      )}
+      {media?.duration_s != null && (
+        <span>· {formatDuration(media.duration_s, language)}</span>
+      )}
+      {size && (
+        <span>
+          · {t("queue.item.resolution", { width: size[0], height: size[1] })}
+        </span>
+      )}
+      <span>· {target}</span>
+    </p>
+  )
+}
+
+/** Move up and down, for the cards of the active list. */
+function MoveButtons({
+  name,
+  disabled,
+  isFirst,
+  isLast,
+  onMove,
+}: {
+  name: string
+  disabled: boolean
+  isFirst: boolean
+  isLast: boolean
+  onMove: (direction: -1 | 1) => void
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label={t("queue.item.moveUp", { name })}
+        disabled={disabled || isFirst}
+        onClick={() => onMove(-1)}
+      >
+        <ArrowUp />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label={t("queue.item.moveDown", { name })}
+        disabled={disabled || isLast}
+        onClick={() => onMove(1)}
+      >
+        <ArrowDown />
+      </Button>
+    </>
+  )
+}
+
+interface QueueItemProps {
+  item: Item
+  progress: Progressed | undefined
+  /** Absent for finished items, which can't be reordered. */
+  onMove?: (direction: -1 | 1) => void
+  isFirst?: boolean
+  isLast?: boolean
+}
+
+export function QueueItem({
+  item,
+  progress,
+  onMove,
+  isFirst = false,
+  isLast = false,
+}: QueueItemProps) {
+  const { t } = useTranslation()
+  const controls = useItemControls(item)
+  const destinationLabel = useDestinationLabel(item.destination_id)
+  const { busy, requestCancel } = controls
+
+  const name = fileName(item.source_path)
+  const plan = itemPlan(item)
+  const Icon = MODE_ICON[item.send_mode]
 
   return (
     <motion.li
@@ -160,30 +364,12 @@ export function QueueItem({
           <p className="truncate text-sm font-medium" title={item.source_path}>
             <bdi>{name}</bdi>
           </p>
-          <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
-            <span>{formatBytes(item.source_size, language)}</span>
-            {item.output_size !== null &&
-              item.output_size !== item.source_size && (
-                <>
-                  <ArrowRight className="size-3 rtl:rotate-180" aria-hidden />
-                  <span>{formatBytes(item.output_size, language)}</span>
-                </>
-              )}
-            {media?.duration_s != null && (
-              <span>· {formatDuration(media.duration_s, language)}</span>
-            )}
-            {width !== undefined && height !== undefined && (
-              <span>· {t("queue.item.resolution", { width, height })}</span>
-            )}
-            <span>
-              ·{" "}
-              {t("queue.item.to", {
-                name: destination
-                  ? destinationName(destination)
-                  : t("common.destinationNumber", { id: item.destination_id }),
-              })}
-            </span>
-          </p>
+          <FileFacts
+            sourceSize={item.source_size}
+            outputSize={item.output_size}
+            media={itemMedia(item)}
+            target={t("queue.item.to", { name: destinationLabel })}
+          />
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-1">
@@ -199,26 +385,13 @@ export function QueueItem({
           className="flex shrink-0 items-center gap-0.5"
         >
           {onMove && (
-            <>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={t("queue.item.moveUp", { name })}
-                disabled={busy || isFirst}
-                onClick={() => onMove(-1)}
-              >
-                <ArrowUp />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={t("queue.item.moveDown", { name })}
-                disabled={busy || isLast}
-                onClick={() => onMove(1)}
-              >
-                <ArrowDown />
-              </Button>
-            </>
+            <MoveButtons
+              name={name}
+              disabled={busy}
+              isFirst={isFirst}
+              isLast={isLast}
+              onMove={onMove}
+            />
           )}
           {canCancel(item.state) && (
             <Button
@@ -235,80 +408,213 @@ export function QueueItem({
       </div>
 
       <div className="space-y-3 ps-12">
-        <StatusPanel
-          item={item}
-          progress={progress}
-          busy={busy}
-          // A watched file is promoted to a send: the group warning applies here too.
-          onPromote={() =>
-            guard(
-              destination ? [destination] : [],
-              () => void run(() => queuePromote([item.id])),
-            )
-          }
-          onConfirm={setConfirm}
-          onRetry={() => void run(() => queueRetry(item.id))}
-          onMarkSent={(messageId) =>
-            void run(() => itemResolveUnknown(item.id, "mark_sent", messageId))
-          }
-        />
+        <ItemDetails item={item} progress={progress} controls={controls} />
+      </div>
 
-        {editable && (
-          <ItemEditor
-            item={item}
-            busy={busy}
-            onSave={(patch) => run(() => itemUpdate(item.id, patch))}
-          />
-        )}
-        {editable && item.send_mode !== "document" && (
-          <ItemEncoding
-            item={item}
-            busy={busy}
-            onApply={(choices) => run(() => itemEncodingSet(item.id, choices))}
-          />
-        )}
-        {!editable && item.caption !== "" && (
-          <p className="text-sm whitespace-pre-wrap" dir="auto">
-            {item.caption}
+      {controls.dialogs}
+    </motion.li>
+  )
+}
+
+interface QueueGroupProps {
+  /** The items of one file of a batch, one per destination, in queue order (2 or more). */
+  items: Item[]
+  progress: QueueApi["progress"]
+  /** Absent for finished groups, which can't be reordered. */
+  onMove?: (direction: -1 | 1) => void
+  isFirst?: boolean
+  isLast?: boolean
+}
+
+/**
+ * One file sent to several destinations: the file once, its preparation once (the encoded
+ * file serves every destination, `Store::reusable_output`), then one row per destination with
+ * its own state, sending progress and actions. The core still has one item per destination.
+ */
+export function QueueGroup({
+  items,
+  progress,
+  onMove,
+  isFirst = false,
+  isLast = false,
+}: QueueGroupProps) {
+  const { t } = useTranslation()
+  const [first] = items
+  const name = fileName(first.source_path)
+  const modes = new Set(items.map((item) => item.send_mode))
+  const Icon = modes.size === 1 ? MODE_ICON[first.send_mode] : Files
+  const media = items.map(itemMedia).find((found) => found !== null) ?? null
+
+  const outputSize =
+    items.find(
+      (item) =>
+        item.output_size !== null && item.output_size !== item.source_size,
+    )?.output_size ?? null
+
+  return (
+    <motion.li
+      layout="position"
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="space-y-3 px-4 py-3"
+      aria-busy={items.some((item) => isWorking(item.state))}
+    >
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          <Icon className="size-4" aria-hidden />
+        </span>
+
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="truncate text-sm font-medium" title={first.source_path}>
+            <bdi>{name}</bdi>
           </p>
+          <FileFacts
+            sourceSize={first.source_size}
+            outputSize={outputSize}
+            media={media}
+            target={t("queue.group.destinations", { count: items.length })}
+          />
+        </div>
+
+        {onMove && (
+          <div
+            role="group"
+            aria-label={t("queue.item.actions", { name })}
+            className="flex shrink-0 items-center gap-0.5"
+          >
+            <MoveButtons
+              name={name}
+              disabled={false}
+              isFirst={isFirst}
+              isLast={isLast}
+              onMove={onMove}
+            />
+          </div>
         )}
       </div>
 
-      <ConfirmDialog
-        open={confirm === "cancel"}
-        onOpenChange={(open) => !open && setConfirm(null)}
-        title={t("queue.item.cancelDialog.title")}
-        description={t("queue.item.cancelDialog.body", { name })}
-        confirmLabel={t("queue.item.cancelDialog.confirm")}
-        cancelLabel={t("queue.item.cancelDialog.keep")}
-        destructive
-        onConfirm={() => void run(() => queueCancel(item.id))}
-      />
-      <ConfirmDialog
-        open={confirm === "duplicate"}
-        onOpenChange={(open) => !open && setConfirm(null)}
-        title={t("queue.item.duplicate.dialogTitle")}
-        description={t("queue.item.duplicate.dialogBody", { name })}
-        confirmLabel={t("queue.item.duplicate.dialogConfirm")}
-        cancelLabel={t("common.cancel")}
-        onConfirm={() =>
-          guard(
-            destination ? [destination] : [],
-            () => void run(() => queuePromote([item.id])),
-          )
-        }
-      />
-      <ConfirmDialog
-        open={confirm === "resend"}
-        onOpenChange={(open) => !open && setConfirm(null)}
-        title={t("queue.item.unknown.dialogTitle")}
-        description={t("queue.item.unknown.dialogBody", { name })}
-        confirmLabel={t("queue.item.unknown.sendAgain")}
-        cancelLabel={t("common.cancel")}
-        onConfirm={() => void run(() => itemResolveUnknown(item.id, "retry"))}
-      />
-      {groupRiskDialog}
+      <div className="space-y-3 ps-12">
+        <GroupPreparation items={items} progress={progress} />
+        <ul
+          className="space-y-2"
+          aria-label={t("queue.group.destinationsLabel", { name })}
+        >
+          {items.map((item) => (
+            <DestinationRow
+              key={item.id}
+              item={item}
+              progress={progress.get(item.id)}
+            />
+          ))}
+        </ul>
+      </div>
     </motion.li>
+  )
+}
+
+/** The preparation step the item is in, if it is preparing. */
+function preparingPhase(item: Item): Phase | null {
+  return item.state === "probing" ||
+    item.state === "encoding" ||
+    item.state === "remuxing"
+    ? item.state
+    : null
+}
+
+const PREPARE_PHASES: ReadonlySet<Phase> = new Set([
+  "probing",
+  "encoding",
+  "remuxing",
+])
+
+/**
+ * The preparation shared by the destinations: running while one of them prepares, done once
+ * one of them has the file ready (the others reuse it), waiting before.
+ */
+function GroupPreparation({
+  items,
+  progress,
+}: {
+  items: Item[]
+  progress: QueueApi["progress"]
+}) {
+  const preparing = items.find((item) => preparingPhase(item) !== null)
+  const phase = preparing ? preparingPhase(preparing) : null
+
+  if (preparing && phase) {
+    const current = progress.get(preparing.id)
+    const own =
+      current && PREPARE_PHASES.has(current.phase) ? current : undefined
+
+    return (
+      <Step
+        step="prepare"
+        status="active"
+        phaseLabel={own?.phase ?? phase}
+        percent={own?.percent ?? preparing.progress_pct ?? 0}
+        progress={own}
+      />
+    )
+  }
+
+  return (
+    <Step
+      step="prepare"
+      status={items.some(isPrepared) ? "done" : "waiting"}
+      phaseLabel={null}
+      percent={0}
+      progress={undefined}
+    />
+  )
+}
+
+/** One destination of a grouped file. */
+function DestinationRow({
+  item,
+  progress,
+}: {
+  item: Item
+  progress: Progressed | undefined
+}) {
+  const { t } = useTranslation()
+  const controls = useItemControls(item)
+  const destination = useDestinationLabel(item.destination_id)
+  const plan = itemPlan(item)
+  const name = fileName(item.source_path)
+
+  return (
+    <li
+      className="space-y-3 rounded-lg border p-3"
+      aria-busy={isWorking(item.state)}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="min-w-0 flex-1 truncate text-sm font-medium">
+          <bdi>{destination}</bdi>
+        </p>
+        <QueueStateBadge state={item.state} />
+        {item.state !== "cancelled" && <PlanBadge kind={plan?.kind ?? null} />}
+        {canCancel(item.state) && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t("queue.group.cancelTo", { name, destination })}
+            disabled={controls.busy}
+            onClick={controls.requestCancel}
+          >
+            <X />
+          </Button>
+        )}
+      </div>
+      <ItemDetails
+        item={item}
+        progress={progress}
+        controls={controls}
+        sendOnly
+      />
+      {controls.dialogs}
+    </li>
   )
 }
 
@@ -316,6 +622,7 @@ interface StatusPanelProps {
   item: Item
   progress: Progressed | undefined
   busy: boolean
+  sendOnly: boolean
   onPromote: () => void
   onConfirm: (confirm: Confirm) => void
   onRetry: () => void
@@ -326,6 +633,7 @@ function StatusPanel({
   item,
   progress,
   busy,
+  sendOnly,
   onPromote,
   onConfirm,
   onRetry,
@@ -366,7 +674,7 @@ function StatusPanel({
       return (
         <>
           <WaitingNotice item={item} progress={progress} />
-          <Steps item={item} progress={progress} />
+          <Steps item={item} progress={progress} sendOnly={sendOnly} />
         </>
       )
 
@@ -417,7 +725,7 @@ function StatusPanel({
       return (
         <>
           {item.next_run_at && <ScheduledNotice item={item} />}
-          <Steps item={item} progress={progress} />
+          <Steps item={item} progress={progress} sendOnly={sendOnly} />
         </>
       )
 
@@ -425,7 +733,7 @@ function StatusPanel({
     case "encoding":
     case "remuxing":
     case "uploading":
-      return <Steps item={item} progress={progress} />
+      return <Steps item={item} progress={progress} sendOnly={sendOnly} />
 
     case "sent":
       return item.tg_sent_at ? (
@@ -728,9 +1036,12 @@ type StepStatus = "waiting" | "active" | "done"
 function Steps({
   item,
   progress,
+  sendOnly,
 }: {
   item: Item
   progress: Progressed | undefined
+  /** The preparation is shown elsewhere (a file sent to several destinations). */
+  sendOnly: boolean
 }) {
   const preparingPhase: Phase | null =
     item.state === "probing" ||
@@ -761,6 +1072,20 @@ function Steps({
   const send: StepStatus =
     item.state === "sent" ? "done" : sending ? "active" : "waiting"
 
+  const sendStep = (
+    <Step
+      step="send"
+      status={send}
+      phaseLabel={
+        sendProgress?.phase ?? (item.state === "uploading" ? "uploading" : null)
+      }
+      percent={sendProgress?.percent ?? 0}
+      progress={sendProgress}
+    />
+  )
+
+  if (sendOnly) return sendStep
+
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <Step
@@ -770,16 +1095,7 @@ function Steps({
         percent={prepareProgress?.percent ?? item.progress_pct ?? 0}
         progress={prepareProgress}
       />
-      <Step
-        step="send"
-        status={send}
-        phaseLabel={
-          sendProgress?.phase ??
-          (item.state === "uploading" ? "uploading" : null)
-        }
-        percent={sendProgress?.percent ?? 0}
-        progress={sendProgress}
-      />
+      {sendStep}
     </div>
   )
 }

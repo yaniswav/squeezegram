@@ -266,6 +266,11 @@
     "finished_other": "Selesai ({{count}})",
     "listLabel": "Berkas dalam antrean",
     "finishedLabel": "Berkas yang selesai",
+    "group": {
+      "destinations_other": "Ke {{count}} tujuan",
+      "destinationsLabel": "Tujuan {{name}}",
+      "cancelTo": "Batalkan pengiriman {{name}} ke {{destination}}"
+    },
     "clear": {
       "button": "Kosongkan antrean",
       "unavailable": "Tidak ada yang bisa dikosongkan: antrean kosong atau hanya berisi berkas yang sedang diproses.",

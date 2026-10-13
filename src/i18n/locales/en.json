@@ -274,6 +274,12 @@
     "finished_other": "Finished ({{count}})",
     "listLabel": "Files in the queue",
     "finishedLabel": "Finished files",
+    "group": {
+      "destinations_one": "To {{count}} destination",
+      "destinations_other": "To {{count}} destinations",
+      "destinationsLabel": "Destinations of {{name}}",
+      "cancelTo": "Cancel sending {{name}} to {{destination}}"
+    },
     "clear": {
       "button": "Clear queue",
       "unavailable": "Nothing to clear: the queue is empty or only holds files being processed right now.",

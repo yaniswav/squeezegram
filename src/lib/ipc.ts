@@ -102,6 +102,12 @@ export interface Item {
   destination_id: number
   send_mode: SendMode
   caption: string
+  /**
+   * 1-based position of the file in the `queue_add` call that queued it, among the items of
+   * the same destination, and the number of those items. 1 and 1 for a watched file.
+   */
+  batch_index: number
+  batch_count: number
   state: ItemState
   hold_reason: HoldReason | null
   origin: string
@@ -957,6 +963,8 @@ const itemDecoder = d.object<Item>({
   destination_id: d.number,
   send_mode: sendModeDecoder,
   caption: d.string,
+  batch_index: d.number,
+  batch_count: d.number,
   state: itemStateDecoder,
   hold_reason: d.nullable(d.string),
   origin: d.string,

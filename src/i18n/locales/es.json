@@ -282,6 +282,13 @@
     "finished_other": "Terminados ({{count}})",
     "listLabel": "Archivos en la cola",
     "finishedLabel": "Archivos terminados",
+    "group": {
+      "destinations_one": "A {{count}} destino",
+      "destinations_many": "A {{count}} de destinos",
+      "destinations_other": "A {{count}} destinos",
+      "destinationsLabel": "Destinos de {{name}}",
+      "cancelTo": "Cancelar el envío de {{name}} a {{destination}}"
+    },
     "clear": {
       "button": "Vaciar cola",
       "unavailable": "No hay nada que vaciar: la cola está vacía o solo contiene archivos que se están procesando ahora.",
