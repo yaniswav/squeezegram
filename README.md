@@ -74,7 +74,7 @@ What leaves your computer:
 
 The Telegram session is stored in an encrypted TDLib database whose key is protected with Windows DPAPI. The local journal is kept for 7 days at most, never contains your phone number, codes, passwords, e-mail address or captions, and is exported only if you create a debug report yourself.
 
-To remove everything, tick "Delete app data" in the uninstaller: it also deletes `%LOCALAPPDATA%\squeezegram` (Telegram session, database, logs, settings, ffmpeg). It is kept during an update.
+To remove everything, uninstall squeezegram from Windows Settings (Apps) and tick "Delete the application data": it also deletes `%LOCALAPPDATA%\squeezegram` (Telegram session, logs, ffmpeg) and `%APPDATA%\squeezegram` (queue, settings, licence key). Both are kept during an update, and when a new installer removes the installed version before reinstalling, even if that box is ticked.
 
 ### A warning about Telegram
 
