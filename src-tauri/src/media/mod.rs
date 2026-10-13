@@ -27,8 +27,9 @@ pub enum MediaError {
     /// retries once on the CPU.
     #[error("{0}")]
     EncoderStopped(Box<encode::EncoderStop>),
-    /// A failure whose `params` go to the front with the code (`FFMPEG_FAILED{encoder,
-    /// exitCode, atSeconds, cause}`); `detail` stays in the journal.
+    /// A failure whose `params` go to the front with the code (`FFMPEG_FAILED` or
+    /// `FFMPEG_KILLED`, plus `{encoder, exitCode, atSeconds, cause}`); `detail` stays in the
+    /// journal.
     #[error("{code}: {detail}")]
     Reported {
         code: &'static str,
@@ -49,7 +50,7 @@ impl MediaError {
         match self {
             MediaError::Cancelled => None,
             MediaError::Failed { code, .. } | MediaError::Reported { code, .. } => Some(code),
-            MediaError::EncoderStopped(_) => Some("FFMPEG_FAILED"),
+            MediaError::EncoderStopped(stop) => Some(stop.code()),
         }
     }
 }

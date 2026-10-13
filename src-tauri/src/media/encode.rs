@@ -382,6 +382,10 @@ pub const START_FAILURE_MAX_RUN_MS: u64 = 60_000;
 /// Extra tries (after the first) of a GPU encode that failed to start.
 pub const GPU_START_RETRIES: u32 = 2;
 
+/// Extra tries after a silent GPU exit with useful progress. The signal can mean that another
+/// program stopped ffmpeg, but it is not proof of that cause, so only one identical retry is made.
+pub const GPU_SUSPECTED_KILL_RETRIES: u32 = 1;
+
 /// Wait between two tries: lets a busy card or a driver reset settle. Short in tests.
 const GPU_RETRY_DELAY: Duration = if cfg!(test) {
     Duration::from_millis(60)
@@ -394,6 +398,22 @@ const GPU_RETRY_DELAY: Duration = if cfg!(test) {
 /// encoder saying what is wrong, so it is never retried blindly.
 pub fn is_start_failure(stderr_empty: bool, out_time_s: f64, elapsed_ms: u64) -> bool {
     stderr_empty && out_time_s < START_FAILURE_MAX_OUT_S && elapsed_ms < START_FAILURE_MAX_RUN_MS
+}
+
+/// A silent exit after useful GPU progress is compatible with an external kill. This is only a
+/// diagnostic signature: a silent encoder failure can produce the same observable result.
+fn is_suspected_kill(
+    encoder: Option<Encoder>,
+    ending: Ending,
+    code: Option<i32>,
+    stderr: &str,
+    started: bool,
+) -> bool {
+    encoder.is_some_and(|encoder| encoder.is_gpu())
+        && ending == Ending::Exited
+        && code == Some(1)
+        && stderr.trim().is_empty()
+        && started
 }
 
 /// A GPU encoder that ended with a code other than 0, not cancelled, with an empty stderr or a
@@ -412,8 +432,10 @@ pub struct EncoderStop {
     pub stderr_empty: bool,
     /// Last stderr lines (journal only).
     pub stderr_tail: String,
-    /// The last run matched `is_start_failure`.
+    /// The last run was inside the short start-failure window used by the session policy.
     pub start_failure: bool,
+    /// Matches a silent exit after progress; an external kill is possible, not established.
+    pub suspected_kill: bool,
     /// Runs made of the same ffmpeg command, this one included.
     pub attempts: u32,
 }
@@ -429,6 +451,15 @@ impl EncoderStop {
     /// Whole seconds of the failed run, as shown to the user.
     pub fn at_seconds(&self) -> u64 {
         (self.elapsed_ms as f64 / 1000.0).round() as u64
+    }
+
+    /// Stable error code for this stop's own diagnostic signature.
+    pub fn code(&self) -> &'static str {
+        if self.suspected_kill {
+            "FFMPEG_KILLED"
+        } else {
+            "FFMPEG_FAILED"
+        }
     }
 }
 
@@ -519,9 +550,9 @@ fn log_ffmpeg_end(output: &procs::Output, began: Instant, code: Option<&str>) {
 /// `run_ffmpeg`, and when a GPU encoder fails to start (`is_start_failure`), the same command
 /// again up to `GPU_START_RETRIES` times: the failure is random and the next identical run
 /// usually succeeds, whereas falling back to the CPU turns minutes into an hour. A late failure
-/// or one with an error on stderr is returned at once, as is a cancellation (also during the
-/// wait between two tries). A pause never interrupts an encode, so it does not end this wait
-/// either: the queue pauses after the item.
+/// is retried only when it has the suspected-kill signature; one with an error on stderr is
+/// returned at once, as is a cancellation (also during the wait between two tries). A pause never
+/// interrupts an encode, so it does not end this wait either: the queue pauses after the item.
 async fn run_ffmpeg(
     job: &Job<'_>,
     step: &str,
@@ -531,6 +562,7 @@ async fn run_ffmpeg(
     encoder: Option<Encoder>,
 ) -> Result<()> {
     let mut attempt = 1;
+    let mut max_attempts = GPU_START_RETRIES + 1;
     loop {
         let result = run_ffmpeg_once(job, step, args.clone(), duration_s, span, encoder).await;
         let mut stop = match result {
@@ -548,19 +580,24 @@ async fn run_ffmpeg(
             }
         };
         stop.attempts = attempt;
-        if !stop.start_failure || attempt > GPU_START_RETRIES {
+        if stop.suspected_kill {
+            max_attempts = max_attempts.min(GPU_SUSPECTED_KILL_RETRIES + 1);
+        }
+        if (!stop.start_failure && !stop.suspected_kill) || attempt >= max_attempts {
             return Err(MediaError::EncoderStopped(stop));
         }
         tracing::warn!(
             event = "gpu_retry",
             step,
+            error_code = stop.code(),
             encoder = stop.encoder_name(),
             attempt = attempt + 1,
-            max_attempts = GPU_START_RETRIES + 1,
+            max_attempts,
             exit_code = stop.exit_code,
             dur_ms = stop.elapsed_ms,
             out_time_s = (stop.out_time_s * 100.0).round() / 100.0,
-            "GPU encoder failed to start with nothing on stderr; same command again"
+            suspected_kill = stop.suspected_kill,
+            "GPU encoder stopped without a final result; same command again"
         );
         // The failed run's output must not be seen by the next one (ffmpeg `-y` would overwrite
         // it, but a half-written file is no evidence of anything).
@@ -632,12 +669,18 @@ async fn run_ffmpeg_once(
     }
     if !output.success() {
         let stderr = output.stderr_tail.join("\n");
-        let code = classify_failure(&stderr, output.code, started);
+        let suspected_kill =
+            is_suspected_kill(encoder, output.ending, output.code, &stderr, started);
+        let code = if suspected_kill {
+            "FFMPEG_KILLED"
+        } else {
+            classify_failure(&stderr, output.code, started)
+        };
         log_ffmpeg_end(&output, began, Some(code));
         let stderr_empty = stderr.trim().is_empty();
         if let Some(encoder) = encoder.filter(|e| e.is_gpu())
-            && code == "FFMPEG_FAILED"
-            && (stderr_empty || hardware_encoder_error(&stderr))
+            && (suspected_kill
+                || (code == "FFMPEG_FAILED" && (stderr_empty || hardware_encoder_error(&stderr))))
         {
             let elapsed_ms = crate::logging::ms_since(began);
             return Err(MediaError::EncoderStopped(Box::new(EncoderStop {
@@ -649,6 +692,7 @@ async fn run_ffmpeg_once(
                 stderr_empty,
                 stderr_tail: stderr,
                 start_failure: is_start_failure(stderr_empty, reached_s, elapsed_ms),
+                suspected_kill,
                 attempts: 1,
             })));
         }
@@ -1503,6 +1547,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn suspected_kill_requires_a_silent_code_one_gpu_exit_after_progress() {
+        assert!(is_suspected_kill(
+            Some(Encoder::Nvenc),
+            Ending::Exited,
+            Some(1),
+            " \r\n\t",
+            true
+        ));
+        for (encoder, ending, code, stderr, started) in [
+            (Some(Encoder::Nvenc), Ending::Exited, Some(1), "", false),
+            (Some(Encoder::Nvenc), Ending::Exited, Some(2), "", true),
+            (Some(Encoder::Nvenc), Ending::Exited, None, "", true),
+            (
+                Some(Encoder::Nvenc),
+                Ending::Exited,
+                Some(1),
+                "encoder error",
+                true,
+            ),
+            (Some(Encoder::X264), Ending::Exited, Some(1), "", true),
+            (None, Ending::Exited, Some(1), "", true),
+            (Some(Encoder::Nvenc), Ending::Cancelled, Some(1), "", true),
+            (Some(Encoder::Nvenc), Ending::TimedOut, Some(1), "", true),
+        ] {
+            assert!(!is_suspected_kill(encoder, ending, code, stderr, started));
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn the_wait_between_tries_ends_at_once_when_cancelled() {
         let cancel = CancellationToken::new();
@@ -1586,8 +1659,10 @@ mod tests {
             stderr_empty: true,
             stderr_tail: String::new(),
             start_failure: true,
+            suspected_kill: true,
             attempts: 3,
         };
+        assert_eq!(stop.code(), "FFMPEG_KILLED");
         assert_eq!(stop.at_seconds(), 4);
         assert!(stop.to_string().contains("h264_nvenc stopped mid-encode"));
         assert!(stop.to_string().contains("3 attempts"));

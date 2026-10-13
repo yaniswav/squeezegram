@@ -281,7 +281,7 @@ fn pick_encoder(
     }
 }
 
-/// `{ encoder, exitCode, atSeconds }` of a stopped GPU encoder (params of `FFMPEG_FAILED`).
+/// `{ encoder, exitCode, atSeconds }` of a stopped GPU encoder (failure params sent to the page).
 fn stop_params(stop: &EncoderStop) -> serde_json::Value {
     json!({
         "encoder": stop.encoder_name(),
@@ -306,7 +306,7 @@ fn stage_error(error: MediaError) -> StageError {
         MediaError::EncoderStopped(stop) => {
             let mut params = stop_params(&stop);
             params["cause"] = json!("no_cpu_encoder");
-            ("FFMPEG_FAILED", params, stop.to_string())
+            (stop.code(), params, stop.to_string())
         }
     };
     // `detail` holds paths and ffmpeg's last lines: journal only, never the UI.
@@ -325,6 +325,13 @@ fn stage_error(error: MediaError) -> StageError {
 /// The `cause` of the `ENCODER_FALLBACK` alert: it picks the sentence, which must say whether
 /// the GPU is given up for the session (`gpu_off`) or tried again on the next file.
 fn fallback_cause(stop: &EncoderStop, gpu_off: bool) -> &'static str {
+    if stop.suspected_kill {
+        return if gpu_off {
+            "suspected_kill_gpu_off"
+        } else {
+            "suspected_kill"
+        };
+    }
     match (stop.start_failure, gpu_off) {
         (true, false) => "start_failed",
         (true, true) => "start_failed_again",
@@ -371,13 +378,14 @@ pub(crate) async fn encode_with_cpu_fallback(
     let detail = stop.to_string();
     tracing::warn!(
         event = "encoder_failed_midway",
-        error_code = "FFMPEG_FAILED",
+        error_code = stop.code(),
         encoder = stop.encoder_name(),
         exit_code = stop.exit_code,
         dur_ms = stop.elapsed_ms,
         out_time_s = (stop.out_time_s * 100.0).round() / 100.0,
         stderr_empty = stop.stderr_empty,
         start_failure = stop.start_failure,
+        suspected_kill = stop.suspected_kill,
         attempts = stop.attempts,
         gpu_off,
         fallback = cpu.map(Encoder::name),
@@ -394,7 +402,7 @@ pub(crate) async fn encode_with_cpu_fallback(
             "no_cpu_encoder"
         });
         return Err(MediaError::Reported {
-            code: "FFMPEG_FAILED",
+            code: stop.code(),
             params,
             detail,
         });
@@ -451,7 +459,7 @@ pub(crate) async fn encode_with_cpu_fallback(
             params["fallback"] = json!(cpu.name());
             params["cause"] = json!("fallback_failed");
             Err(MediaError::Reported {
-                code: "FFMPEG_FAILED",
+                code: stop.code(),
                 params,
                 detail: format!("{detail}; CPU fallback {}: {other}", cpu.name()),
             })
@@ -1153,8 +1161,14 @@ mod tests {
         gpu_wait_s: u32,
         /// Every CPU encoder exits 1 too.
         cpu_fails: bool,
+        /// Printed on stderr by a failing CPU encoder.
+        cpu_stderr: Option<&'static str>,
         /// The GPU runs that fail (one counted in `gpuruns.txt` per run); the next ones succeed.
         gpu_fails: u32,
+        /// Exit code of failed GPU runs after the first one.
+        gpu_exit_code: i32,
+        /// Optional exit code used only by the first failed GPU run.
+        first_gpu_exit_code: Option<i32>,
     }
 
     /// Stops silently 3 s into the output, every time: a failure to start, as seen on the real
@@ -1164,7 +1178,16 @@ mod tests {
         gpu_stderr: None,
         gpu_wait_s: 0,
         cpu_fails: false,
+        cpu_stderr: None,
         gpu_fails: 1_000_000,
+        gpu_exit_code: 1,
+        first_gpu_exit_code: None,
+    };
+
+    /// The pre-G1 transient start failure: silent and early, but without the kill signature.
+    const ORDINARY_START_FAILURE: Fake = Fake {
+        gpu_exit_code: 2,
+        ..SILENT
     };
 
     /// Stops silently 20 s into the output, every time: past the start-failure window.
@@ -1186,7 +1209,17 @@ mod tests {
         } else {
             String::new()
         };
-        let cpu_fail = if fake.cpu_fails { "exit /b 1\r\n" } else { "" };
+        let cpu_fail = if fake.cpu_fails {
+            format!(
+                "{}exit /b 1\r\n",
+                fake.cpu_stderr
+                    .map(|line| format!("echo {line} 1>&2\r\n"))
+                    .unwrap_or_default()
+            )
+        } else {
+            String::new()
+        };
+        let first_gpu_exit = fake.first_gpu_exit_code.unwrap_or(fake.gpu_exit_code);
         let lines = [
             "@echo off",
             "setlocal",
@@ -1224,7 +1257,9 @@ mod tests {
             ")",
             gpu_stderr.trim_end(),
             gpu_wait.trim_end(),
-            "exit /b 1",
+            &format!("set GPU_EXIT={}", fake.gpu_exit_code),
+            &format!("if %RUNS% EQU 1 set GPU_EXIT={first_gpu_exit}"),
+            "exit /b %GPU_EXIT%",
         ];
         let ffmpeg = dir.join("ffmpeg.cmd");
         std::fs::write(&ffmpeg, lines.join("\r\n") + "\r\n").unwrap();
@@ -1361,16 +1396,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_late_silent_gpu_stop_is_retried_once_on_the_cpu() {
+    async fn a_late_silent_gpu_stop_gets_one_gpu_retry_then_falls_back() {
         let run = run("fallback-ok", LATE, Some(Encoder::X264), None).await;
         let produced = run.result.expect("the CPU retry succeeds");
         assert_eq!(produced.path, run.out_dir.join("clip_sq.mp4"));
         assert!(produced.path.is_file());
         no_part_left(&run.out_dir);
-        // GPU once, then x264's two passes on a fresh `.part` (the GPU one was deleted).
+        // The suspect GPU stop gets one identical retry, then x264's two fresh passes.
         assert_eq!(
             run.calls,
-            ["h264_nvenc fresh", "libx264 fresh", "libx264 fresh"]
+            [
+                "h264_nvenc fresh",
+                "h264_nvenc fresh",
+                "libx264 fresh",
+                "libx264 fresh"
+            ]
         );
         let failure = run.session.failure().expect("remembered for the session");
         assert_eq!(failure.encoder, "h264_nvenc");
@@ -1381,7 +1421,7 @@ mod tests {
         assert_eq!(alerts[0].item_id, Some(1));
         assert_eq!(alerts[0].params["from"], "h264_nvenc");
         assert_eq!(alerts[0].params["to"], "libx264");
-        assert_eq!(alerts[0].params["cause"], "silent");
+        assert_eq!(alerts[0].params["cause"], "suspected_kill_gpu_off");
         assert_eq!(alerts[0].params["atSeconds"], failure.at_seconds);
 
         let progress = run.sink.progress.lock().unwrap();
@@ -1403,18 +1443,51 @@ mod tests {
         let Err(MediaError::Reported { code, params, .. }) = run.result else {
             panic!("expected a reported failure, got {:?}", run.result);
         };
-        assert_eq!(code, "FFMPEG_FAILED");
+        assert_eq!(code, "FFMPEG_KILLED");
         assert_eq!(params["encoder"], "h264_nvenc");
         assert_eq!(params["exitCode"], 1);
         assert_eq!(params["fallback"], "libopenh264");
         assert_eq!(params["cause"], "fallback_failed");
-        // No loop: one GPU run, one CPU run, nothing after.
-        assert_eq!(run.calls, ["h264_nvenc fresh", "libopenh264 fresh"]);
+        // One suspect retry, then one CPU run, nothing after.
+        assert_eq!(
+            run.calls,
+            ["h264_nvenc fresh", "h264_nvenc fresh", "libopenh264 fresh"]
+        );
         no_part_left(&run.out_dir);
         assert_eq!(
             run.sink.alert_codes(),
             [(Some(1), "ENCODER_FALLBACK".to_owned())]
         );
+    }
+
+    #[tokio::test]
+    async fn disk_space_from_the_cpu_fallback_stays_the_final_code() {
+        let fake = Fake {
+            cpu_fails: true,
+            cpu_stderr: Some("No space left on device"),
+            ..SILENT
+        };
+        let run = run("fallback-disk-space", fake, Some(Encoder::X264), None).await;
+        assert!(
+            matches!(
+                run.result,
+                Err(MediaError::Failed {
+                    code: "DISK_SPACE",
+                    ..
+                })
+            ),
+            "{:?}",
+            run.result
+        );
+        assert_eq!(
+            run.calls,
+            ["h264_nvenc fresh", "h264_nvenc fresh", "libx264 fresh"]
+        );
+        assert_eq!(
+            run.sink.alert_codes(),
+            [(Some(1), "ENCODER_FALLBACK".to_owned())]
+        );
+        no_part_left(&run.out_dir);
     }
 
     #[tokio::test]
@@ -1467,10 +1540,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_second_retry_can_be_the_one_that_works() {
+    async fn an_ordinary_start_failure_can_still_succeed_on_the_second_retry() {
         let fake = Fake {
             gpu_fails: 2,
-            ..SILENT
+            ..ORDINARY_START_FAILURE
         };
         let run = run("retry-ok-2", fake, Some(Encoder::X264), None).await;
         assert!(run.result.is_ok(), "{:?}", run.result);
@@ -1479,8 +1552,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn three_gpu_failures_to_start_fall_back_to_the_cpu_with_the_alert() {
-        let run = run("retry-exhausted", SILENT, Some(Encoder::X264), None).await;
+    async fn three_ordinary_start_failures_fall_back_to_the_cpu_with_the_alert() {
+        let run = run(
+            "retry-exhausted",
+            ORDINARY_START_FAILURE,
+            Some(Encoder::X264),
+            None,
+        )
+        .await;
         assert!(run.result.is_ok(), "{:?}", run.result);
         // The same GPU command three times, then libx264's two passes.
         assert_eq!(
@@ -1501,13 +1580,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_late_gpu_failure_is_never_retried_on_the_gpu() {
+    async fn a_suspect_first_attempt_keeps_the_two_run_budget_and_last_diagnosis() {
+        let fake = Fake {
+            gpu_exit_code: 2,
+            first_gpu_exit_code: Some(1),
+            ..SILENT
+        };
+        let run = run("retry-mixed-suspect-first", fake, None, None).await;
+        let Err(MediaError::Reported { code, .. }) = run.result else {
+            panic!("expected a reported failure, got {:?}", run.result);
+        };
+        assert_eq!(code, "FFMPEG_FAILED", "the last attempt owns the diagnosis");
+        assert_eq!(run.calls, ["h264_nvenc fresh"; 2]);
+    }
+
+    #[tokio::test]
+    async fn a_suspect_second_attempt_lowers_the_existing_budget() {
+        let fake = Fake {
+            gpu_exit_code: 1,
+            first_gpu_exit_code: Some(2),
+            ..SILENT
+        };
+        let run = run("retry-mixed-suspect-second", fake, None, None).await;
+        let Err(MediaError::Reported { code, .. }) = run.result else {
+            panic!("expected a reported failure, got {:?}", run.result);
+        };
+        assert_eq!(code, "FFMPEG_KILLED", "the last attempt owns the diagnosis");
+        assert_eq!(run.calls, ["h264_nvenc fresh"; 2]);
+    }
+
+    #[tokio::test]
+    async fn a_late_suspected_kill_gets_only_one_gpu_retry() {
         let run = run("retry-late", LATE, Some(Encoder::X264), None).await;
         assert!(run.result.is_ok(), "{:?}", run.result);
         assert_eq!(
             run.calls,
-            ["h264_nvenc fresh", "libx264 fresh", "libx264 fresh"],
-            "one GPU run, then the CPU"
+            [
+                "h264_nvenc fresh",
+                "h264_nvenc fresh",
+                "libx264 fresh",
+                "libx264 fresh"
+            ],
+            "two GPU runs, then the CPU"
         );
         assert_eq!(run.sink.alert_codes().len(), 1);
     }
@@ -1533,7 +1647,7 @@ mod tests {
         hevc.encoder = Some("hevc_nvenc".into());
         let fake = Fake {
             gpu_fails: 2,
-            ..SILENT
+            ..ORDINARY_START_FAILURE
         };
         let run = run_plan("retry-hevc", fake, hevc, None, None).await;
         assert!(run.result.is_ok(), "{:?}", run.result);
@@ -1597,7 +1711,7 @@ mod tests {
         let journal = crate::logging::testing::TestJournal::new(&dir.path().join("logs"), "info");
         let fake = Fake {
             gpu_fails: 2,
-            ..SILENT
+            ..ORDINARY_START_FAILURE
         };
         let run = run("retry-journal-run", fake, Some(Encoder::X264), None).await;
         assert!(run.result.is_ok(), "{:?}", run.result);
@@ -1607,9 +1721,11 @@ mod tests {
         for (line, attempt) in retries.iter().zip([2, 3]) {
             assert_eq!(line["fields"]["attempt"], attempt);
             assert_eq!(line["fields"]["max_attempts"], 3);
-            assert_eq!(line["fields"]["exit_code"], 1);
+            assert_eq!(line["fields"]["exit_code"], 2);
             assert_eq!(line["fields"]["encoder"], "h264_nvenc");
             assert_eq!(line["fields"]["out_time_s"], 3.0);
+            assert_eq!(line["error_code"], "FFMPEG_FAILED");
+            assert_eq!(line["fields"]["suspected_kill"], false);
         }
         assert_eq!(
             lines
@@ -1619,6 +1735,31 @@ mod tests {
             1
         );
         assert!(lines.iter().all(|l| l["event"] != "encoder_failed_midway"));
+    }
+
+    #[tokio::test]
+    async fn a_suspected_kill_journals_one_retry_with_the_reduced_budget() {
+        let dir = TestDir::new("retry-kill-journal");
+        let journal = crate::logging::testing::TestJournal::new(&dir.path().join("logs"), "info");
+        let run = run("retry-kill-journal-run", SILENT, Some(Encoder::X264), None).await;
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        let lines = journal.lines();
+        let retries: Vec<_> = lines
+            .iter()
+            .filter(|line| line["event"] == "gpu_retry")
+            .collect();
+        assert_eq!(retries.len(), 1);
+        assert_eq!(retries[0]["fields"]["attempt"], 2);
+        assert_eq!(retries[0]["fields"]["max_attempts"], 2);
+        assert_eq!(retries[0]["fields"]["exit_code"], 1);
+        assert_eq!(retries[0]["error_code"], "FFMPEG_KILLED");
+        assert_eq!(retries[0]["fields"]["suspected_kill"], true);
+        let stopped = lines
+            .iter()
+            .find(|line| line["event"] == "encoder_failed_midway")
+            .expect("final stopped-encoder journal line");
+        assert_eq!(stopped["error_code"], "FFMPEG_KILLED");
+        assert_eq!(stopped["fields"]["suspected_kill"], true);
     }
 
     /// The alert of the one run `run` made, by its `cause`.
@@ -1633,14 +1774,14 @@ mod tests {
     async fn one_item_that_fails_to_start_does_not_turn_the_gpu_off_for_the_session() {
         let run = run("session-one", SILENT, Some(Encoder::X264), None).await;
         assert!(run.result.is_ok(), "{:?}", run.result);
-        assert_eq!(alert_cause(&run), "start_failed");
+        assert_eq!(alert_cause(&run), "suspected_kill");
         assert_eq!(run.session.failure(), None, "the next file tries the GPU");
     }
 
     #[tokio::test]
     async fn a_second_item_in_a_row_that_fails_to_start_turns_the_gpu_off() {
         let first = run("session-two-a", SILENT, Some(Encoder::X264), None).await;
-        assert_eq!(alert_cause(&first), "start_failed");
+        assert_eq!(alert_cause(&first), "suspected_kill");
 
         let second = run_in(
             "session-two-b",
@@ -1651,24 +1792,24 @@ mod tests {
         )
         .await;
         assert!(second.result.is_ok(), "{:?}", second.result);
-        assert_eq!(alert_cause(&second), "start_failed_again");
+        assert_eq!(alert_cause(&second), "suspected_kill_gpu_off");
         let failure = second.session.failure().expect("the GPU is off");
         assert_eq!(failure.encoder, "h264_nvenc");
-        // Both items paid their three GPU tries.
+        // Each item paid only the two-run suspect budget.
         assert_eq!(
             second
                 .calls
                 .iter()
                 .filter(|c| c.starts_with("h264_nvenc"))
                 .count(),
-            3
+            2
         );
     }
 
     #[tokio::test]
     async fn a_gpu_encode_that_works_between_two_start_failures_resets_the_count() {
         let first = run("session-reset-a", SILENT, Some(Encoder::X264), None).await;
-        assert_eq!(alert_cause(&first), "start_failed");
+        assert_eq!(alert_cause(&first), "suspected_kill");
 
         let works = Fake {
             gpu_fails: 0,
@@ -1695,7 +1836,7 @@ mod tests {
         .await;
         assert_eq!(
             alert_cause(&third),
-            "start_failed",
+            "suspected_kill",
             "the count started over"
         );
         assert_eq!(third.session.failure(), None);
@@ -1704,7 +1845,7 @@ mod tests {
     #[tokio::test]
     async fn a_late_or_reported_gpu_failure_turns_the_gpu_off_at_once() {
         let late = run("session-late", LATE, Some(Encoder::X264), None).await;
-        assert_eq!(alert_cause(&late), "silent");
+        assert_eq!(alert_cause(&late), "suspected_kill_gpu_off");
         assert!(late.session.failure().is_some());
 
         let fake = Fake {
@@ -1722,12 +1863,12 @@ mod tests {
         let Err(MediaError::Reported { code, params, .. }) = run.result else {
             panic!("expected a reported failure, got {:?}", run.result);
         };
-        assert_eq!(code, "FFMPEG_FAILED");
+        assert_eq!(code, "FFMPEG_KILLED");
         assert_eq!(params["cause"], "no_cpu_encoder");
         assert_eq!(params["encoder"], "h264_nvenc");
         assert_eq!(params["exitCode"], 1);
         assert!(params["atSeconds"].is_u64());
-        assert_eq!(run.calls, ["h264_nvenc fresh"]);
+        assert_eq!(run.calls, ["h264_nvenc fresh"; 2]);
         assert!(run.session.failure().is_some());
         no_part_left(&run.out_dir);
     }
@@ -2135,15 +2276,15 @@ mod tests {
         let Err(MediaError::Reported { code, params, .. }) = run.result else {
             panic!("expected a reported failure, got {:?}", run.result);
         };
-        assert_eq!(code, "FFMPEG_FAILED");
+        assert_eq!(code, "FFMPEG_KILLED");
         assert_eq!(params["cause"], "hevc_gpu_only");
         assert_eq!(params["encoder"], "hevc_nvenc");
         assert_eq!(
-            run.calls, ["hevc_nvenc fresh"; 3],
-            "the same GPU command three times, no CPU run"
+            run.calls, ["hevc_nvenc fresh"; 2],
+            "the same GPU command twice, no CPU run"
         );
         assert!(run.sink.alerts.lock().unwrap().is_empty());
-        // Three failures to start on one item are not yet a GPU to give up on.
+        // One early failed item is not yet a GPU to give up on.
         assert_eq!(run.session.failure(), None);
         no_part_left(&run.out_dir);
     }
