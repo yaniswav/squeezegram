@@ -14,6 +14,9 @@ use super::{QueueError, Result, State, db, iso, now_iso, parse_iso};
 use crate::media::plan::EncodingOverride;
 use crate::transport::ChatFolder;
 
+mod batches;
+pub use batches::{SendMetadata, SendVia};
+
 pub const HOLD_DUPLICATE: &str = "duplicate";
 /// `hold_reason` of a file found in a watched folder: it waits for the user's approval (N4).
 pub const HOLD_WATCH: &str = "watch_pending";
