@@ -1,0 +1,163 @@
+{
+  "en": {
+    "id": 1033,
+    "text": {
+      "caption": "squeezegram (Preview)",
+      "welcome": "Install",
+      "version": "Version 0.1.0 · Preview",
+      "summary": "Compress videos and photos, then send them to Telegram.",
+      "notice": "Preview only. Nothing is installed and no settings are saved.",
+      "languageName": "English",
+      "continue": "Continue",
+      "back": "Back",
+      "cancel": "Cancel",
+      "close": "Close",
+      "controls": "Try the controls",
+      "folder": "Destination folder (preview)",
+      "browse": "Browse…",
+      "shortcut": "Desktop shortcut (preview)",
+      "currentUser": "For my Windows account",
+      "disabledOption": "Disabled option (preview)",
+      "demo": "Advance demo",
+      "progress": "Sample progress. Not an installation."
+    }
+  },
+  "fr": {
+    "id": 1036,
+    "text": {
+      "caption": "squeezegram (Aperçu)",
+      "welcome": "Installer",
+      "version": "Version 0.1.0 · Aperçu",
+      "summary": "Compressez vos vidéos et photos, puis envoyez-les sur Telegram.",
+      "notice": "Aperçu uniquement. Rien n’est installé et aucun réglage n’est enregistré.",
+      "languageName": "Français",
+      "continue": "Continuer",
+      "back": "Retour",
+      "cancel": "Annuler",
+      "close": "Fermer",
+      "controls": "Tester les contrôles",
+      "folder": "Dossier de destination (aperçu)",
+      "browse": "Parcourir…",
+      "shortcut": "Raccourci sur le Bureau (aperçu)",
+      "currentUser": "Pour mon compte Windows",
+      "disabledOption": "Option désactivée (aperçu)",
+      "demo": "Avancer la démo",
+      "progress": "Progression de démonstration. Aucune installation."
+    }
+  },
+  "ru": {
+    "id": 1049,
+    "text": {
+      "caption": "squeezegram (Предпросмотр, бета)",
+      "welcome": "Установить",
+      "version": "Версия 0.1.0 · Предпросмотр (бета)",
+      "summary": "Сжимайте видео и фотографии и отправляйте их в Telegram.",
+      "notice": "Только предпросмотр. Ничего не устанавливается, настройки не сохраняются.",
+      "languageName": "Русский (бета)",
+      "continue": "Далее",
+      "back": "Назад",
+      "cancel": "Отмена",
+      "close": "Закрыть",
+      "controls": "Проверка элементов",
+      "folder": "Папка назначения (предпросмотр)",
+      "browse": "Обзор…",
+      "shortcut": "Ярлык на рабочем столе (предпросмотр)",
+      "currentUser": "Для моей учётной записи Windows",
+      "disabledOption": "Недоступный вариант (предпросмотр)",
+      "demo": "Продолжить демо",
+      "progress": "Пример хода выполнения. Без установки."
+    }
+  },
+  "es": {
+    "id": 1034,
+    "text": {
+      "caption": "squeezegram (Vista previa, beta)",
+      "welcome": "Instalar",
+      "version": "Versión 0.1.0 · Vista previa (beta)",
+      "summary": "Comprime vídeos y fotos y envíalos a Telegram.",
+      "notice": "Solo vista previa. No se instala nada ni se guardan ajustes.",
+      "languageName": "Español (beta)",
+      "continue": "Continuar",
+      "back": "Atrás",
+      "cancel": "Cancelar",
+      "close": "Cerrar",
+      "controls": "Probar los controles",
+      "folder": "Carpeta de destino (vista previa)",
+      "browse": "Examinar…",
+      "shortcut": "Acceso directo en el escritorio (vista previa)",
+      "currentUser": "Para mi cuenta de Windows",
+      "disabledOption": "Opción desactivada (vista previa)",
+      "demo": "Avanzar demo",
+      "progress": "Progreso de ejemplo. No es una instalación."
+    }
+  },
+  "ar": {
+    "id": 1025,
+    "text": {
+      "caption": "squeezegram (معاينة، تجريبي)",
+      "welcome": "تثبيت",
+      "version": "الإصدار 0.1.0 · معاينة (تجريبي)",
+      "summary": "اضغط مقاطع الفيديو والصور ثم أرسلها إلى Telegram.",
+      "notice": "معاينة فقط. لن يتم تثبيت أي شيء أو حفظ الإعدادات.",
+      "languageName": "العربية (تجريبي)",
+      "continue": "متابعة",
+      "back": "رجوع",
+      "cancel": "إلغاء",
+      "close": "إغلاق",
+      "controls": "تجربة عناصر التحكم",
+      "folder": "مجلد الوجهة (معاينة)",
+      "browse": "استعراض…",
+      "shortcut": "اختصار سطح المكتب (معاينة)",
+      "currentUser": "لحساب Windows الخاص بي",
+      "disabledOption": "خيار معطل (معاينة)",
+      "demo": "تقدم العرض",
+      "progress": "تقدم توضيحي. ليس تثبيتًا."
+    }
+  },
+  "pt-BR": {
+    "id": 1046,
+    "text": {
+      "caption": "squeezegram (Prévia, beta)",
+      "welcome": "Instalar",
+      "version": "Versão 0.1.0 · Prévia (beta)",
+      "summary": "Comprima vídeos e fotos e envie-os para o Telegram.",
+      "notice": "Somente prévia. Nada é instalado e nenhuma configuração é salva.",
+      "languageName": "Português do Brasil (beta)",
+      "continue": "Continuar",
+      "back": "Voltar",
+      "cancel": "Cancelar",
+      "close": "Fechar",
+      "controls": "Testar os controles",
+      "folder": "Pasta de destino (prévia)",
+      "browse": "Procurar…",
+      "shortcut": "Atalho na área de trabalho (prévia)",
+      "currentUser": "Para minha conta do Windows",
+      "disabledOption": "Opção desativada (prévia)",
+      "demo": "Avançar demonstração",
+      "progress": "Progresso de exemplo. Não é uma instalação."
+    }
+  },
+  "id": {
+    "id": 1057,
+    "text": {
+      "caption": "squeezegram (Pratinjau, beta)",
+      "welcome": "Instal",
+      "version": "Versi 0.1.0 · Pratinjau (beta)",
+      "summary": "Kompres video dan foto, lalu kirim ke Telegram.",
+      "notice": "Hanya pratinjau. Tidak ada yang diinstal dan pengaturan tidak disimpan.",
+      "languageName": "Bahasa Indonesia (beta)",
+      "continue": "Lanjut",
+      "back": "Kembali",
+      "cancel": "Batal",
+      "close": "Tutup",
+      "controls": "Coba kontrol",
+      "folder": "Folder tujuan (pratinjau)",
+      "browse": "Telusuri…",
+      "shortcut": "Pintasan desktop (pratinjau)",
+      "currentUser": "Untuk akun Windows saya",
+      "disabledOption": "Opsi dinonaktifkan (pratinjau)",
+      "demo": "Lanjutkan demo",
+      "progress": "Contoh progres. Bukan instalasi."
+    }
+  }
+}
