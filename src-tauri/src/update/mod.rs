@@ -2,7 +2,7 @@
 //!
 //! The installer build checks GitHub for the latest release, downloads the signed installer,
 //! lets `tauri-plugin-updater` verify its minisign signature against the public key in
-//! `tauri.conf.json`, then hands over to the installer (passive mode), which restarts the app.
+//! `tauri.conf.json`, then hands over to the installer, which restarts the app.
 //! The portable build only tells the user that a newer version exists and where to get it: it
 //! never downloads or replaces anything.
 //!
@@ -13,8 +13,10 @@
 //! address, as for any download. No identifier, no Telegram data.
 //!
 //! - this file: kinds, notices, version comparison, cadence, error codes, progress sampling
+//! - `installer`: Inno marker and validated installer arguments
 //! - `service`: the plugin calls, the cached result, the events and the journal lines
 
+mod installer;
 mod service;
 
 use std::path::Path;
@@ -44,7 +46,7 @@ pub const UPDATE_PROGRESS_EVENT: &str = "app://update-progress";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
-    /// Installed by the NSIS installer: can update itself.
+    /// Installed by a supported Windows installer: can update itself.
     Installer,
     /// Unzipped from the portable zip: tells the user, never installs.
     Portable,

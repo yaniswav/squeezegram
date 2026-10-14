@@ -151,10 +151,26 @@ impl UpdateService {
     /// The plugin's check, with our SemVer rule and the shutdown hook the installer needs.
     async fn query(&self, app: &AppHandle) -> Result<Option<Update>, UpdateError> {
         let hook_app = app.clone();
-        let updater = app
+        let mut builder = app
             .updater_builder()
             .version_comparator(|current, release| is_newer(&current, &release.version))
-            .on_before_exit(move || before_installer(&hook_app))
+            .on_before_exit(move || before_installer(&hook_app));
+        if self.kind == Kind::Installer {
+            let exe = std::env::current_exe().map_err(|_| {
+                UpdateError::new(UpdateError::CHECK_FAILED, "executable_path_unreadable")
+            })?;
+            let dir = exe.parent().ok_or_else(|| {
+                UpdateError::new(UpdateError::CHECK_FAILED, "executable_path_unreadable")
+            })?;
+            if super::installer::is_inno(dir)? {
+                let background =
+                    std::env::args_os().any(|arg| arg == crate::background::BACKGROUND_ARG);
+                builder = builder
+                    .restart_after_install(false)
+                    .installer_args(super::installer::arguments(dir, background)?);
+            }
+        }
+        let updater = builder
             .build()
             .map_err(|error| UpdateError::from_check(&error))?;
         updater
