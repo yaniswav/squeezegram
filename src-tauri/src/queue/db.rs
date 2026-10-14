@@ -9,7 +9,7 @@ use super::{QueueError, Result};
 
 /// Migrations in order: entry `i` brings the schema to version `i + 1`.
 const MIGRATIONS: &[&str] = &[
-    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7,
+    SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
 ];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
@@ -183,6 +183,19 @@ CREATE TABLE watch_seen (
   mtime     INTEGER NOT NULL,
   PRIMARY KEY (folder_id, name)
 ) WITHOUT ROWID;
+";
+
+/// v8: links and send routes for multi-destination batches. Existing rows remain independent
+/// uploads: their original queue-add boundaries cannot be reconstructed reliably.
+/// `source_item_id` is kept even if the primary row is cleared; queue coordination must
+/// resolve a missing source explicitly instead of silently treating it as a new upload.
+const SCHEMA_V8: &str = "
+ALTER TABLE items ADD COLUMN batch_id TEXT;
+ALTER TABLE items ADD COLUMN source_item_id INTEGER;
+ALTER TABLE items ADD COLUMN send_via TEXT NOT NULL DEFAULT 'upload'
+    CHECK (send_via IN ('copy', 'remote', 'upload'));
+ALTER TABLE history ADD COLUMN via TEXT NOT NULL DEFAULT 'upload'
+    CHECK (via IN ('copy', 'remote', 'upload'));
 ";
 
 /// `%APPDATA%\squeezegram\squeezegram.db`.
@@ -753,6 +766,148 @@ mod tests {
         conn.execute("DELETE FROM watch_folders WHERE id = 1", [])
             .unwrap();
         assert_eq!(seen(&conn), 0, "removed with its folder");
+    }
+
+    #[test]
+    fn v7_database_migrates_to_v8_without_grouping_existing_items() {
+        let dir = TestDir::new("db-v7-v8");
+        let path = dir.path().join("squeezegram.db");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for sql in MIGRATIONS.iter().take(7) {
+                tx.execute_batch(sql).unwrap();
+            }
+            tx.execute_batch(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '7');
+                 INSERT INTO destinations (id, peer_kind, peer_id, title)
+                 VALUES (1, 'user', 7, 'Saved Messages');
+                 INSERT INTO items (id, position, source_path, source_size, source_mtime,
+                     destination_id, send_mode, caption, state, origin, created_at, updated_at,
+                     batch_index, batch_count, output_path, tg_message_id)
+                 VALUES (3, 1, 'a.mp4', 100, 2, 1, 'video', 'caption', 'encoded',
+                         'manual', 'x', 'x', 2, 4, 'a_sq.mp4', NULL),
+                        (4, 2, 'a.mp4', 100, 2, 1, 'video', '', 'sent',
+                         'manual', 'x', 'x', 1, 1, NULL, 123);
+                 INSERT INTO history (id, content_id, source_path, file_name, destination_id,
+                     size_sent, mode, status, message_id, sent_at)
+                 VALUES (5, '100:hash', 'a.mp4', 'a.mp4', 1, 90, 'video', 'sent', 123, 'x');",
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let conn = open(&path).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        type Row = (
+            i64,
+            String,
+            String,
+            Option<String>,
+            Option<i64>,
+            i64,
+            i64,
+            Option<String>,
+            Option<i64>,
+            String,
+        );
+        let rows: Vec<Row> = conn
+            .prepare(
+                "SELECT id, state, caption, output_path, tg_message_id, batch_index, batch_count,
+                        batch_id, source_item_id, send_via FROM items ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
+                    r.get(9)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                (
+                    3,
+                    "encoded".into(),
+                    "caption".into(),
+                    Some("a_sq.mp4".into()),
+                    None,
+                    2,
+                    4,
+                    None,
+                    None,
+                    "upload".into()
+                ),
+                (
+                    4,
+                    "sent".into(),
+                    "".into(),
+                    None,
+                    Some(123),
+                    1,
+                    1,
+                    None,
+                    None,
+                    "upload".into()
+                ),
+            ]
+        );
+        let history: (i64, String, i64, String) = conn
+            .query_row(
+                "SELECT id, content_id, message_id, via FROM history",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(history, (5, "100:hash".into(), 123, "upload".into()));
+        conn.execute(
+            "UPDATE items SET batch_id = 'batch-1', source_item_id = 4, send_via = 'copy'
+             WHERE id = 3",
+            [],
+        )
+        .unwrap();
+        conn.execute("UPDATE history SET via = 'remote' WHERE id = 5", [])
+            .unwrap();
+        drop(conn);
+        let conn = open(&path).unwrap();
+        let links: (String, i64, String) = conn
+            .query_row(
+                "SELECT batch_id, source_item_id, send_via FROM items WHERE id = 3",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(links, ("batch-1".into(), 4, "copy".into()));
+        let via: String = conn
+            .query_row("SELECT via FROM history WHERE id = 5", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(via, "remote");
+        for route in ["copy", "remote", "upload"] {
+            conn.execute("UPDATE items SET send_via = ?1 WHERE id = 3", [route])
+                .unwrap();
+            conn.execute("UPDATE history SET via = ?1 WHERE id = 5", [route])
+                .unwrap();
+        }
+        for invalid in [Some("forward"), Some(""), None] {
+            assert!(
+                conn.execute("UPDATE items SET send_via = ?1 WHERE id = 3", [invalid])
+                    .is_err()
+            );
+            assert!(
+                conn.execute("UPDATE history SET via = ?1 WHERE id = 5", [invalid])
+                    .is_err()
+            );
+        }
     }
 
     #[test]
