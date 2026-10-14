@@ -41,6 +41,8 @@ impl Output {
 pub struct Spec<'a> {
     pub exe: &'a Path,
     pub args: Vec<OsString>,
+    pub env: Vec<(OsString, OsString)>,
+    pub env_remove: Vec<OsString>,
     pub timeout: Option<Duration>,
     pub cancel: Option<&'a CancellationToken>,
     pub collect_stdout: bool,
@@ -54,6 +56,8 @@ impl<'a> Spec<'a> {
         Self {
             exe,
             args: args.into_vec(),
+            env: Vec::new(),
+            env_remove: Vec::new(),
             timeout: None,
             cancel: None,
             collect_stdout: false,
@@ -81,6 +85,24 @@ impl<'a> Spec<'a> {
 
     pub fn collect_stdout(mut self) -> Self {
         self.collect_stdout = true;
+        self
+    }
+
+    /// One environment override for this child only. Environment values are deliberately absent
+    /// from `describe`: they may contain diagnostic paths or secrets inherited from the app.
+    pub fn env(
+        mut self,
+        name: impl AsRef<std::ffi::OsStr>,
+        value: impl AsRef<std::ffi::OsStr>,
+    ) -> Self {
+        self.env
+            .push((name.as_ref().to_owned(), value.as_ref().to_owned()));
+        self
+    }
+
+    /// Prevents a process-specific diagnostic variable from leaking in from the app environment.
+    pub fn env_remove(mut self, name: impl AsRef<std::ffi::OsStr>) -> Self {
+        self.env_remove.push(name.as_ref().to_owned());
         self
     }
 
@@ -126,8 +148,12 @@ impl Args {
 /// Runs a process to its end; every stdout line goes to `on_line`.
 pub async fn run<F: FnMut(&str)>(spec: Spec<'_>, mut on_line: F) -> std::io::Result<Output> {
     let mut command = Command::new(spec.exe);
+    command.args(&spec.args);
+    for name in &spec.env_remove {
+        command.env_remove(name);
+    }
     command
-        .args(&spec.args)
+        .envs(spec.env.iter().map(|(name, value)| (name, value)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -336,6 +362,33 @@ mod tests {
         assert_eq!(output.stdout, "one\ntwo\n");
         assert_eq!(output.stderr_tail, ["oops"]);
         assert!(!output.success());
+    }
+
+    #[tokio::test]
+    async fn a_child_environment_override_is_applied_but_not_described() {
+        let exe = cmd();
+        let spec = Spec::new(
+            &exe,
+            Args::new().all(&["/C", "echo %SQUEEZEGRAM_TEST_CHILD_VALUE%"]),
+        )
+        .env("SQUEEZEGRAM_TEST_CHILD_VALUE", "diagnostic-value")
+        .collect_stdout();
+        let described = spec.describe().to_string();
+        assert!(!described.contains("diagnostic-value"));
+        let output = run(spec, |_| {}).await.unwrap();
+        assert_eq!(output.stdout.trim(), "diagnostic-value");
+    }
+
+    #[tokio::test]
+    async fn an_inherited_child_environment_value_can_be_removed() {
+        let exe = cmd();
+        let spec = Spec::new(
+            &exe,
+            Args::new().all(&["/C", "if defined SystemRoot (exit /b 3) else (exit /b 0)"]),
+        )
+        .env_remove("SystemRoot");
+        let output = run(spec, |_| {}).await.unwrap();
+        assert_eq!(output.code, Some(0));
     }
 
     /// A long-running process without children (a killed `cmd` would leave its `ping` holding

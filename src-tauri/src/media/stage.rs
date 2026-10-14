@@ -376,6 +376,10 @@ pub(crate) async fn encode_with_cpu_fallback(
     };
     let gpu_off = session.record(&stop);
     let detail = stop.to_string();
+    let report_path = stop
+        .report_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned());
     tracing::warn!(
         event = "encoder_failed_midway",
         error_code = stop.code(),
@@ -389,6 +393,9 @@ pub(crate) async fn encode_with_cpu_fallback(
         attempts = stop.attempts,
         gpu_off,
         fallback = cpu.map(Encoder::name),
+        report_path = report_path.as_deref(),
+        report_ends_with_conversion_failed = stop.report_ends_with_conversion_failed,
+        external_termination_suspected = stop.report_ends_with_conversion_failed == Some(false),
         stderr_tail = stop.stderr_tail.as_str(),
         "GPU encoder stopped mid-encode"
     );
@@ -1169,6 +1176,8 @@ mod tests {
         gpu_exit_code: i32,
         /// Optional exit code used only by the first failed GPU run.
         first_gpu_exit_code: Option<i32>,
+        /// Last line written by the fake when the diagnostic retry receives `FFREPORT`.
+        diagnostic_report_tail: &'static str,
     }
 
     /// Stops silently 3 s into the output, every time: a failure to start, as seen on the real
@@ -1182,11 +1191,13 @@ mod tests {
         gpu_fails: 1_000_000,
         gpu_exit_code: 1,
         first_gpu_exit_code: None,
+        diagnostic_report_tail: "encoder stopped abruptly",
     };
 
     /// The pre-G1 transient start failure: silent and early, but without the kill signature.
     const ORDINARY_START_FAILURE: Fake = Fake {
         gpu_exit_code: 2,
+        diagnostic_report_tail: "Conversion failed!",
         ..SILENT
     };
 
@@ -1220,6 +1231,10 @@ mod tests {
             String::new()
         };
         let first_gpu_exit = fake.first_gpu_exit_code.unwrap_or(fake.gpu_exit_code);
+        let diagnostic_report = format!(
+            "if defined FFREPORT (\r\n  echo %FFREPORT%>>\"%HERE%reports.txt\"\r\n  for %%F in (\"%OUT%\") do >\"%%~dpFffmpeg-out.log\" echo {}\r\n)",
+            fake.diagnostic_report_tail
+        );
         let lines = [
             "@echo off",
             "setlocal",
@@ -1256,6 +1271,7 @@ mod tests {
             "echo progress=continue",
             ")",
             gpu_stderr.trim_end(),
+            diagnostic_report.as_str(),
             gpu_wait.trim_end(),
             &format!("set GPU_EXIT={}", fake.gpu_exit_code),
             &format!("if %RUNS% EQU 1 set GPU_EXIT={first_gpu_exit}"),
@@ -1434,6 +1450,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_late_silent_nonstandard_exit_gets_one_instrumented_retry() {
+        let fake = Fake {
+            gpu_exit_code: 2,
+            diagnostic_report_tail: "Conversion failed!",
+            ..LATE
+        };
+        let run = run("late-silent-diagnostic", fake, None, None).await;
+        let Err(MediaError::Reported { code, .. }) = run.result else {
+            panic!("expected a reported failure, got {:?}", run.result);
+        };
+        assert_eq!(code, "FFMPEG_FAILED");
+        assert_eq!(run.calls, ["h264_nvenc fresh"; 2]);
+        let report_env = std::fs::read_to_string(run._dir.path().join("reports.txt")).unwrap();
+        assert_eq!(report_env.lines().count(), 1);
+    }
+
+    #[tokio::test]
     async fn a_failing_fallback_is_final_and_names_both_encoders() {
         let fake = Fake {
             cpu_fails: true,
@@ -1580,7 +1613,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_suspect_first_attempt_keeps_the_two_run_budget_and_last_diagnosis() {
+    async fn an_incomplete_retry_report_confirms_the_first_suspect() {
         let fake = Fake {
             gpu_exit_code: 2,
             first_gpu_exit_code: Some(1),
@@ -1590,7 +1623,10 @@ mod tests {
         let Err(MediaError::Reported { code, .. }) = run.result else {
             panic!("expected a reported failure, got {:?}", run.result);
         };
-        assert_eq!(code, "FFMPEG_FAILED", "the last attempt owns the diagnosis");
+        assert_eq!(
+            code, "FFMPEG_KILLED",
+            "the instrumented retry ended without ffmpeg's failure marker"
+        );
         assert_eq!(run.calls, ["h264_nvenc fresh"; 2]);
     }
 
@@ -1754,12 +1790,77 @@ mod tests {
         assert_eq!(retries[0]["fields"]["exit_code"], 1);
         assert_eq!(retries[0]["error_code"], "FFMPEG_KILLED");
         assert_eq!(retries[0]["fields"]["suspected_kill"], true);
+        assert!(
+            retries[0]["fields"]["report_path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("ffmpeg-out.log"))
+        );
+        let starts: Vec<_> = lines
+            .iter()
+            .filter(|line| line["event"] == "ffmpeg_start")
+            .collect();
+        assert_eq!(
+            starts[0]["fields"]["command"],
+            starts[1]["fields"]["command"]
+        );
+        assert_eq!(starts[0]["fields"]["diagnostic_report"], false);
+        assert_eq!(starts[1]["fields"]["diagnostic_report"], true);
+        let failed: Vec<_> = lines
+            .iter()
+            .filter(|line| line["event"] == "ffmpeg_failed")
+            .collect();
+        assert_eq!(failed.len(), 2);
+        assert_eq!(failed[1]["fields"]["exit_code"], 1);
+        assert_eq!(failed[1]["fields"]["out_time_s"], 3.0);
+        assert_eq!(
+            failed[1]["fields"]["report_ends_with_conversion_failed"],
+            false
+        );
+        assert_eq!(failed[1]["fields"]["external_termination_suspected"], true);
         let stopped = lines
             .iter()
             .find(|line| line["event"] == "encoder_failed_midway")
             .expect("final stopped-encoder journal line");
         assert_eq!(stopped["error_code"], "FFMPEG_KILLED");
         assert_eq!(stopped["fields"]["suspected_kill"], true);
+        assert_eq!(
+            stopped["fields"]["report_ends_with_conversion_failed"],
+            false
+        );
+        assert_eq!(stopped["fields"]["external_termination_suspected"], true);
+        let report_env = std::fs::read_to_string(run._dir.path().join("reports.txt")).unwrap();
+        assert_eq!(
+            report_env.lines().count(),
+            1,
+            "only the second run has FFREPORT"
+        );
+        assert!(report_env.contains(":level=40"));
+        assert!(run.out_dir.join("ffmpeg-out.log").is_file());
+    }
+
+    #[tokio::test]
+    async fn a_complete_ffmpeg_report_overrides_the_silent_exit_heuristic() {
+        let dir = TestDir::new("retry-complete-report-journal");
+        let journal = crate::logging::testing::TestJournal::new(&dir.path().join("logs"), "info");
+        let fake = Fake {
+            diagnostic_report_tail: "Conversion failed!",
+            ..SILENT
+        };
+        let run = run("retry-complete-report-run", fake, Some(Encoder::X264), None).await;
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        assert_eq!(alert_cause(&run), "start_failed");
+        let lines = journal.lines();
+        let stopped = lines
+            .iter()
+            .find(|line| line["event"] == "encoder_failed_midway")
+            .expect("final stopped-encoder journal line");
+        assert_eq!(stopped["error_code"], "FFMPEG_FAILED");
+        assert_eq!(stopped["fields"]["suspected_kill"], false);
+        assert_eq!(
+            stopped["fields"]["report_ends_with_conversion_failed"],
+            true
+        );
+        assert_eq!(stopped["fields"]["external_termination_suspected"], false);
     }
 
     /// The alert of the one run `run` made, by its `cause`.

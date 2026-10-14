@@ -4,6 +4,8 @@
 //! ffmpeg exits 0 without writing when the file exists, and a killed encode leaves an unreadable
 //! file that must never be reused.
 
+use std::ffi::{OsStr, OsString};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -209,7 +211,7 @@ fn common_start() -> Args {
         "-hide_banner",
         "-nostdin",
         "-loglevel",
-        "error",
+        "warning",
         "-y",
         "-progress",
         "pipe:1",
@@ -400,20 +402,24 @@ pub fn is_start_failure(stderr_empty: bool, out_time_s: f64, elapsed_ms: u64) ->
     stderr_empty && out_time_s < START_FAILURE_MAX_OUT_S && elapsed_ms < START_FAILURE_MAX_RUN_MS
 }
 
-/// A silent exit after useful GPU progress is compatible with an external kill. This is only a
-/// diagnostic signature: a silent encoder failure can produce the same observable result.
+/// A silent code-1 exit after useful GPU progress is compatible with an external kill. On the
+/// instrumented retry, a complete report ending in `Conversion failed` overrides that heuristic;
+/// an incomplete report strengthens it. Neither signal proves which process stopped ffmpeg.
 fn is_suspected_kill(
     encoder: Option<Encoder>,
     ending: Ending,
     code: Option<i32>,
     stderr: &str,
     started: bool,
+    report_ends_with_conversion_failed: Option<bool>,
 ) -> bool {
-    encoder.is_some_and(|encoder| encoder.is_gpu())
-        && ending == Ending::Exited
-        && code == Some(1)
-        && stderr.trim().is_empty()
-        && started
+    if !encoder.is_some_and(|encoder| encoder.is_gpu()) || ending != Ending::Exited || !started {
+        return false;
+    }
+    match report_ends_with_conversion_failed {
+        Some(ends_cleanly) => !ends_cleanly,
+        None => code == Some(1) && stderr.trim().is_empty(),
+    }
 }
 
 /// A GPU encoder that ended with a code other than 0, not cancelled, with an empty stderr or a
@@ -436,6 +442,10 @@ pub struct EncoderStop {
     pub start_failure: bool,
     /// Matches a silent exit after progress; an external kill is possible, not established.
     pub suspected_kill: bool,
+    /// Diagnostic report of the one instrumented retry, when ffmpeg could create it.
+    pub report_path: Option<PathBuf>,
+    /// Whether the report's last non-empty line contains ffmpeg's normal failure marker.
+    pub report_ends_with_conversion_failed: Option<bool>,
     /// Runs made of the same ffmpeg command, this one included.
     pub attempts: u32,
 }
@@ -500,16 +510,109 @@ fn classify_failure(stderr: &str, code: Option<i32>, started: bool) -> &'static 
 /// Lines of ffmpeg's stderr kept for the journal when a run fails.
 const STDERR_LINES: usize = 40;
 
+/// Only the end of an FFREPORT is needed to tell a normal ffmpeg failure from an abrupt stop.
+const REPORT_TAIL_BYTES: u64 = 64 * 1024;
+
+#[derive(Debug, Clone)]
+struct DiagnosticReport {
+    path: PathBuf,
+    ends_with_conversion_failed: Option<bool>,
+}
+
+impl DiagnosticReport {
+    fn external_termination_suspected(&self) -> bool {
+        self.ends_with_conversion_failed == Some(false)
+    }
+}
+
+/// One report per queue item. Production item folders are numeric; sanitising the fallback keeps
+/// a test or future caller from copying an input name into the journal folder.
+fn diagnostic_report_path(job: &Job<'_>) -> PathBuf {
+    let item = job
+        .out_dir
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("item");
+    let item: String = item
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    #[cfg(test)]
+    let base = job.out_dir;
+    #[cfg(not(test))]
+    let base = crate::logging::dir().unwrap_or(job.out_dir);
+    base.join(format!("ffmpeg-{item}.log"))
+}
+
+/// FFREPORT uses `:` as a field separator. Forward slashes avoid backslash escaping on Windows;
+/// the drive colon and literal `%` still need ffmpeg's backslash escape.
+fn ffreport_value(path: &Path) -> OsString {
+    let path = path.to_string_lossy().replace('\\', "/");
+    let path = path.replace('%', "\\%").replace(':', "\\:");
+    OsString::from(format!("file={path}:level=40"))
+}
+
+fn prepare_diagnostic_report(path: &Path) -> Option<OsString> {
+    if let Some(parent) = path.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        tracing::warn!(
+            event = "ffmpeg_report_unavailable",
+            report_path = %path.display(),
+            error = %error,
+            "ffmpeg diagnostic report folder could not be created"
+        );
+        return None;
+    }
+    if let Err(error) = std::fs::remove_file(path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            event = "ffmpeg_report_unavailable",
+            report_path = %path.display(),
+            error = %error,
+            "stale ffmpeg diagnostic report could not be removed"
+        );
+        return None;
+    }
+    Some(ffreport_value(path))
+}
+
+fn report_ends_with_conversion_failed(path: &Path) -> Option<bool> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let from = len.saturating_sub(REPORT_TAIL_BYTES);
+    file.seek(SeekFrom::Start(from)).ok()?;
+    let mut tail = Vec::with_capacity((len - from) as usize);
+    file.read_to_end(&mut tail).ok()?;
+    String::from_utf8_lossy(&tail)
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.contains("Conversion failed"))
+}
+
 /// The ffmpeg spec of a job, with its `ffmpeg_start` journal line (command line with paths;
 /// arguments never hold a caption or any other content).
-fn ffmpeg_spec<'a>(job: &'a Job<'_>, args: Args, step: &str) -> Spec<'a> {
-    let spec = Spec::new(job.tools.ffmpeg, args)
+fn ffmpeg_spec<'a>(job: &'a Job<'_>, args: Args, step: &str, ffreport: Option<&OsStr>) -> Spec<'a> {
+    let mut spec = Spec::new(job.tools.ffmpeg, args)
         .cancel(job.cancel)
-        .stderr_lines(STDERR_LINES);
+        .stderr_lines(STDERR_LINES)
+        .env_remove("FFREPORT");
+    if let Some(value) = ffreport {
+        spec = spec.env("FFREPORT", value);
+    }
     let command = serde_json::json!({ "command": spec.describe() }).to_string();
     tracing::info!(
         event = "ffmpeg_start",
         step,
+        diagnostic_report = ffreport.is_some(),
         json = command.as_str(),
         "ffmpeg started"
     );
@@ -517,19 +620,32 @@ fn ffmpeg_spec<'a>(job: &'a Job<'_>, args: Args, step: &str) -> Spec<'a> {
 }
 
 /// `ffmpeg_exit` (success) or `ffmpeg_failed` (with the stderr tail) journal line.
-fn log_ffmpeg_end(output: &procs::Output, began: Instant, code: Option<&str>) {
+fn log_ffmpeg_end(
+    output: &procs::Output,
+    began: Instant,
+    out_time_s: f64,
+    code: Option<&str>,
+    report: Option<&DiagnosticReport>,
+) {
     let dur_ms = crate::logging::ms_since(began);
     let ending = match output.ending {
         Ending::Exited => "exited",
         Ending::TimedOut => "timed_out",
         Ending::Cancelled => "cancelled",
     };
+    let report_path = report.map(|report| report.path.to_string_lossy().into_owned());
+    let report_ends_with_conversion_failed =
+        report.and_then(|report| report.ends_with_conversion_failed);
+    let external_termination_suspected =
+        report.is_some_and(DiagnosticReport::external_termination_suspected);
     match code {
         None => tracing::info!(
             event = "ffmpeg_exit",
             dur_ms,
             exit_code = output.code,
             ending,
+            out_time_s = (out_time_s * 100.0).round() / 100.0,
+            report_path = report_path.as_deref(),
             "ffmpeg finished"
         ),
         Some(code) => {
@@ -540,6 +656,10 @@ fn log_ffmpeg_end(output: &procs::Output, began: Instant, code: Option<&str>) {
                 exit_code = output.code,
                 ending,
                 error_code = code,
+                out_time_s = (out_time_s * 100.0).round() / 100.0,
+                report_path = report_path.as_deref(),
+                report_ends_with_conversion_failed,
+                external_termination_suspected,
                 json = tail.as_str(),
                 "ffmpeg failed"
             );
@@ -549,10 +669,12 @@ fn log_ffmpeg_end(output: &procs::Output, began: Instant, code: Option<&str>) {
 
 /// `run_ffmpeg`, and when a GPU encoder fails to start (`is_start_failure`), the same command
 /// again up to `GPU_START_RETRIES` times: the failure is random and the next identical run
-/// usually succeeds, whereas falling back to the CPU turns minutes into an hour. A late failure
-/// is retried only when it has the suspected-kill signature; one with an error on stderr is
-/// returned at once, as is a cancellation (also during the wait between two tries). A pause never
-/// interrupts an encode, so it does not end this wait either: the queue pauses after the item.
+/// usually succeeds, whereas falling back to the CPU turns minutes into an hour. Every first
+/// silent GPU failure gets one instrumented retry; legacy early start failures can still use their
+/// third try when the report ends with ffmpeg's normal failure marker. A failure with an error on
+/// stderr is returned at once, as is a cancellation (also during the wait between two tries). A
+/// pause never interrupts an encode, so it does not end this wait either: the queue pauses after
+/// the item.
 async fn run_ffmpeg(
     job: &Job<'_>,
     step: &str,
@@ -563,8 +685,19 @@ async fn run_ffmpeg(
 ) -> Result<()> {
     let mut attempt = 1;
     let mut max_attempts = GPU_START_RETRIES + 1;
+    let mut next_report = None;
     loop {
-        let result = run_ffmpeg_once(job, step, args.clone(), duration_s, span, encoder).await;
+        let report = next_report.take();
+        let result = run_ffmpeg_once(
+            job,
+            step,
+            args.clone(),
+            duration_s,
+            span,
+            encoder,
+            report.as_deref(),
+        )
+        .await;
         let mut stop = match result {
             Err(MediaError::EncoderStopped(stop)) => stop,
             other => {
@@ -580,12 +713,24 @@ async fn run_ffmpeg(
             }
         };
         stop.attempts = attempt;
+        let diagnostic_retry = attempt == 1 && stop.stderr_empty;
         if stop.suspected_kill {
             max_attempts = max_attempts.min(GPU_SUSPECTED_KILL_RETRIES + 1);
         }
-        if (!stop.start_failure && !stop.suspected_kill) || attempt >= max_attempts {
+        if diagnostic_retry && !stop.start_failure {
+            max_attempts = max_attempts.min(2);
+        }
+        if (!stop.start_failure && !stop.suspected_kill && !diagnostic_retry)
+            || attempt >= max_attempts
+        {
             return Err(MediaError::EncoderStopped(stop));
         }
+        if diagnostic_retry {
+            next_report = Some(diagnostic_report_path(job));
+        }
+        let report_path = next_report
+            .as_deref()
+            .map(|path| path.to_string_lossy().into_owned());
         tracing::warn!(
             event = "gpu_retry",
             step,
@@ -597,6 +742,7 @@ async fn run_ffmpeg(
             dur_ms = stop.elapsed_ms,
             out_time_s = (stop.out_time_s * 100.0).round() / 100.0,
             suspected_kill = stop.suspected_kill,
+            report_path = report_path.as_deref(),
             "GPU encoder stopped without a final result; same command again"
         );
         // The failed run's output must not be seen by the next one (ffmpeg `-y` would overwrite
@@ -630,53 +776,79 @@ async fn run_ffmpeg_once(
     duration_s: Option<f64>,
     (start, width): (f64, f64),
     encoder: Option<Encoder>,
+    diagnostic_report: Option<&Path>,
 ) -> Result<()> {
     let mut parser = ProgressParser::new(duration_s);
     let began = Instant::now();
     let mut started = false;
     let mut reached_s = 0.0_f64;
-    let output = procs::run(ffmpeg_spec(job, args, step), |line| {
-        let Some(update) = parser.feed(line) else {
-            return;
-        };
-        started |= update.out_time_s > 0.0;
-        reached_s = update.out_time_s;
-        let elapsed = began.elapsed().as_secs_f64().max(0.001);
-        let percent = update.percent.map(|p| start + width * p / 100.0);
-        let remaining = duration_s
-            .zip(update.speed.filter(|s| *s > 0.0))
-            .map(|(d, speed)| ((d - update.out_time_s) / speed).max(0.0));
-        job.progress.report(Progress {
-            percent: percent.unwrap_or(0.0),
-            bytes_per_sec: update.total_size.map(|b| b as f64 / elapsed),
-            eta_sec: remaining,
-            phase: None,
-            detail: update.speed.map(|s| format!("{s:.1}x")),
-        });
-    })
+    let report = diagnostic_report
+        .and_then(|path| prepare_diagnostic_report(path).map(|value| (path.to_path_buf(), value)));
+    let output = procs::run(
+        ffmpeg_spec(
+            job,
+            args,
+            step,
+            report.as_ref().map(|(_, value)| value.as_os_str()),
+        ),
+        |line| {
+            let Some(update) = parser.feed(line) else {
+                return;
+            };
+            started |= update.out_time_s > 0.0;
+            reached_s = update.out_time_s;
+            let elapsed = began.elapsed().as_secs_f64().max(0.001);
+            let percent = update.percent.map(|p| start + width * p / 100.0);
+            let remaining = duration_s
+                .zip(update.speed.filter(|s| *s > 0.0))
+                .map(|(d, speed)| ((d - update.out_time_s) / speed).max(0.0));
+            job.progress.report(Progress {
+                percent: percent.unwrap_or(0.0),
+                bytes_per_sec: update.total_size.map(|b| b as f64 / elapsed),
+                eta_sec: remaining,
+                phase: None,
+                detail: update.speed.map(|s| format!("{s:.1}x")),
+            });
+        },
+    )
     .await
     .map_err(|e| MediaError::failed("FFMPEG_MISSING", e.to_string()))?;
     match output.ending {
         Ending::Cancelled => {
-            log_ffmpeg_end(&output, began, None);
+            if let Some((path, _)) = &report {
+                remove_if_exists(path);
+            }
+            log_ffmpeg_end(&output, began, reached_s, None, None);
             return Err(MediaError::Cancelled);
         }
         Ending::TimedOut => {
-            log_ffmpeg_end(&output, began, Some("FFMPEG_FAILED"));
+            log_ffmpeg_end(&output, began, reached_s, Some("FFMPEG_FAILED"), None);
             return Err(MediaError::failed("FFMPEG_FAILED", "timeout"));
         }
         Ending::Exited => {}
     }
     if !output.success() {
         let stderr = output.stderr_tail.join("\n");
-        let suspected_kill =
-            is_suspected_kill(encoder, output.ending, output.code, &stderr, started);
+        let report = report.map(|(path, _)| DiagnosticReport {
+            ends_with_conversion_failed: report_ends_with_conversion_failed(&path),
+            path,
+        });
+        let suspected_kill = is_suspected_kill(
+            encoder,
+            output.ending,
+            output.code,
+            &stderr,
+            started,
+            report
+                .as_ref()
+                .and_then(|report| report.ends_with_conversion_failed),
+        );
         let code = if suspected_kill {
             "FFMPEG_KILLED"
         } else {
             classify_failure(&stderr, output.code, started)
         };
-        log_ffmpeg_end(&output, began, Some(code));
+        log_ffmpeg_end(&output, began, reached_s, Some(code), report.as_ref());
         let stderr_empty = stderr.trim().is_empty();
         if let Some(encoder) = encoder.filter(|e| e.is_gpu())
             && (suspected_kill
@@ -693,6 +865,10 @@ async fn run_ffmpeg_once(
                 stderr_tail: stderr,
                 start_failure: is_start_failure(stderr_empty, reached_s, elapsed_ms),
                 suspected_kill,
+                report_path: report.as_ref().map(|report| report.path.clone()),
+                report_ends_with_conversion_failed: report
+                    .as_ref()
+                    .and_then(|report| report.ends_with_conversion_failed),
                 attempts: 1,
             })));
         }
@@ -701,7 +877,10 @@ async fn run_ffmpeg_once(
             format!("ffmpeg exit {:?}: {stderr}", output.code),
         ));
     }
-    log_ffmpeg_end(&output, began, None);
+    if let Some((path, _)) = report {
+        remove_if_exists(&path);
+    }
+    log_ffmpeg_end(&output, began, reached_s, None, None);
     job.progress.report(Progress {
         percent: start + width,
         ..Default::default()
@@ -1081,26 +1260,26 @@ async fn photo_inner(job: &Job<'_>) -> Result<Produced> {
 /// A photo run has no `-progress` output: only the exit status matters.
 async fn run_photo(job: &Job<'_>, args: Args) -> Result<()> {
     let began = Instant::now();
-    let output = procs::run(ffmpeg_spec(job, args, "photo"), |_| {})
+    let output = procs::run(ffmpeg_spec(job, args, "photo", None), |_| {})
         .await
         .map_err(|e| MediaError::failed("FFMPEG_MISSING", e.to_string()))?;
     match output.ending {
         Ending::Cancelled => {
-            log_ffmpeg_end(&output, began, None);
+            log_ffmpeg_end(&output, began, 0.0, None, None);
             Err(MediaError::Cancelled)
         }
         Ending::TimedOut => {
-            log_ffmpeg_end(&output, began, Some("FFMPEG_FAILED"));
+            log_ffmpeg_end(&output, began, 0.0, Some("FFMPEG_FAILED"), None);
             Err(MediaError::failed("FFMPEG_FAILED", "timeout"))
         }
         Ending::Exited if output.success() => {
-            log_ffmpeg_end(&output, began, None);
+            log_ffmpeg_end(&output, began, 0.0, None, None);
             Ok(())
         }
         Ending::Exited => {
             let stderr = output.stderr_tail.join("\n");
             let code = classify_failure(&stderr, output.code, true);
-            log_ffmpeg_end(&output, began, Some(code));
+            log_ffmpeg_end(&output, began, 0.0, Some(code), None);
             Err(MediaError::failed(
                 code,
                 format!("ffmpeg exit {:?}: {stderr}", output.code),
@@ -1554,7 +1733,8 @@ mod tests {
             Ending::Exited,
             Some(1),
             " \r\n\t",
-            true
+            true,
+            None
         ));
         for (encoder, ending, code, stderr, started) in [
             (Some(Encoder::Nvenc), Ending::Exited, Some(1), "", false),
@@ -1572,8 +1752,44 @@ mod tests {
             (Some(Encoder::Nvenc), Ending::Cancelled, Some(1), "", true),
             (Some(Encoder::Nvenc), Ending::TimedOut, Some(1), "", true),
         ] {
-            assert!(!is_suspected_kill(encoder, ending, code, stderr, started));
+            assert!(!is_suspected_kill(
+                encoder, ending, code, stderr, started, None
+            ));
         }
+        assert!(is_suspected_kill(
+            Some(Encoder::Nvenc),
+            Ending::Exited,
+            Some(2),
+            "warning",
+            true,
+            Some(false),
+        ));
+        assert!(!is_suspected_kill(
+            Some(Encoder::Nvenc),
+            Ending::Exited,
+            Some(1),
+            "",
+            true,
+            Some(true),
+        ));
+    }
+
+    #[test]
+    fn ffreport_path_is_escaped_and_only_the_last_report_line_decides() {
+        let value = ffreport_value(Path::new(r"C:\logs 100%\ffmpeg-1.log"));
+        assert_eq!(
+            value.to_string_lossy(),
+            r"file=C\:/logs 100\%/ffmpeg-1.log:level=40"
+        );
+
+        let dir = crate::queue::test_util::TestDir::new("ffreport-tail");
+        let path = dir.path().join("report.log");
+        std::fs::write(&path, "Conversion failed!\r\n\r\n").unwrap();
+        assert_eq!(report_ends_with_conversion_failed(&path), Some(true));
+        std::fs::write(&path, "frame=42\r\nencoder stopped\r\n").unwrap();
+        assert_eq!(report_ends_with_conversion_failed(&path), Some(false));
+        std::fs::write(&path, "\r\n").unwrap();
+        assert_eq!(report_ends_with_conversion_failed(&path), None);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1660,6 +1876,8 @@ mod tests {
             stderr_tail: String::new(),
             start_failure: true,
             suspected_kill: true,
+            report_path: Some(PathBuf::from(r"C:\logs\ffmpeg-1.log")),
+            report_ends_with_conversion_failed: Some(false),
             attempts: 3,
         };
         assert_eq!(stop.code(), "FFMPEG_KILLED");
@@ -1756,7 +1974,7 @@ mod tests {
             encode_args(job, Encoder::Nvenc, 1_000_000, Pass::Single, part)
         });
         assert!(text.starts_with(
-            "-hide_banner -nostdin -loglevel error -y -progress pipe:1 -nostats -i C:\\in put\\a.mkv"
+            "-hide_banner -nostdin -loglevel warning -y -progress pipe:1 -nostats -i C:\\in put\\a.mkv"
         ));
         assert!(text.contains("-map 0:0 -map 0:2 -sn -dn -map_chapters -1 -map_metadata -1"));
         assert!(text.contains("-vf scale=w=2:h=2"));
