@@ -31,7 +31,7 @@ use super::events::{
 use super::state::{Changes, Column};
 use super::store::{
     ClearOutcome, ClearScope, Destination, DestinationPatch, HistoryEntry, HistoryFilter,
-    HistoryStatus, Item, ItemPatch, NewItem, Store, remove_quietly,
+    HistoryStatus, Item, ItemPatch, NewItem, SendVia, Store, remove_quietly,
 };
 use super::{QueueError, Result, State, iso, parse_iso, recovery};
 
@@ -198,6 +198,18 @@ pub trait SendStage: Send + Sync {
         destination: &Destination,
         ctx: &StageContext,
     ) -> std::result::Result<SendOutcome, SendError>;
+
+    async fn reuse(
+        &self,
+        _item: &Item,
+        _destination: &Destination,
+        _source: &Destination,
+        _message_id: i64,
+        _via: SendVia,
+        _ctx: &StageContext,
+    ) -> std::result::Result<SendOutcome, SendError> {
+        Err(SendError::failed("TG_NOT_IMPLEMENTED"))
+    }
 }
 
 /// Stand-in when ffmpeg or Telegram is not wired: every item fails with a code.
@@ -387,7 +399,11 @@ impl Orchestrator {
     // --- commands ---
 
     pub fn add(&self, items: &[NewItem]) -> Result<Vec<i64>> {
-        let ids = self.with_store(|store| store.add_items(items))?;
+        self.add_with_copies(items, false)
+    }
+
+    pub fn add_with_copies(&self, items: &[NewItem], copies: bool) -> Result<Vec<i64>> {
+        let ids = self.with_store(|store| store.add_items_with_copies(items, copies))?;
         let mut destinations: Vec<i64> = Vec::new();
         for item in items {
             if !destinations.contains(&item.destination_id) {
@@ -511,9 +527,7 @@ impl Orchestrator {
             }
         })?;
         self.emit_changed(&[id]);
-        if state != State::Sent {
-            self.inner.wake.notify_one();
-        }
+        self.inner.wake.notify_one();
         Ok(state)
     }
 
@@ -906,12 +920,15 @@ impl Orchestrator {
 
     /// Takes the next due `ready` (→ `probing`) or `encoded` item and makes it current.
     fn pick_next(&self) -> Result<Option<(Item, CancellationToken)>> {
+        let held = self.with_store(|store| store.refresh_batch_holds())?;
+        self.emit_changed(&held);
         let mut current = lock(&self.inner.current);
         let now = self.now();
         let picked = self.with_store(|store| {
             let Some(item) = store.next_runnable(now)? else {
                 return Ok(None);
             };
+            store.promote_send_primary(item.id)?;
             if item.state == State::Ready {
                 store.transition(
                     item.id,
@@ -1182,6 +1199,54 @@ impl Orchestrator {
         })
     }
 
+    /// Reuse only a confirmed, compatible primary; uncertain results never fall back.
+    async fn send_item(
+        &self,
+        item: &Item,
+        destination: &Destination,
+        ctx: &StageContext,
+    ) -> std::result::Result<SendOutcome, SendError> {
+        let source = self
+            .with_store(|store| store.send_batch_primary(item.id))
+            .map_err(|_| SendError::failed("DB_ERROR"))?;
+        if let Some(primary) = source
+            && primary.state == State::Sent
+            && item.content_id.is_some()
+            && primary.content_id == item.content_id
+            && primary.plan_json == item.plan_json
+            && let Some(message_id) = primary.tg_message_id
+        {
+            let source = self
+                .with_store(|store| store.get_destination(primary.destination_id))
+                .map_err(|_| SendError::failed("DB_ERROR"))?;
+            for via in [SendVia::Copy, SendVia::Remote] {
+                self.with_store(|store| store.set_send_route(item.id, via))
+                    .map_err(|_| SendError::failed("DB_ERROR"))?;
+                let result = self
+                    .inner
+                    .send
+                    .reuse(item, destination, &source, message_id, via, ctx)
+                    .await;
+                match result {
+                    Err(SendError::Failed { ref code, .. })
+                        if code == "TG_UPLOAD_FAILED" || code == "TG_NOT_IMPLEMENTED" =>
+                    {
+                        tracing::info!(
+                            event = "send_reuse_fallback",
+                            via = via.as_str(),
+                            error_code = code.as_str(),
+                            "reuse refused; trying the next route"
+                        );
+                    }
+                    other => return other,
+                }
+            }
+        }
+        self.with_store(|store| store.set_send_route(item.id, SendVia::Upload))
+            .map_err(|_| SendError::failed("DB_ERROR"))?;
+        self.inner.send.upload(item, destination, ctx).await
+    }
+
     /// Upload, with `waiting_server` rounds on FLOOD_WAIT, until a final state; or, when the
     /// destination's minimum interval has not elapsed, back to the schedule.
     async fn run_upload(
@@ -1204,6 +1269,7 @@ impl Orchestrator {
                 id,
                 State::Uploading,
                 Changes::new()
+                    .send_via(SendVia::Upload)
                     .clear(Column::NextRunAt)
                     .set(Column::ProgressPhase, "uploading".to_owned())
                     .bump_attempts()
@@ -1213,7 +1279,7 @@ impl Orchestrator {
             let destination =
                 self.with_store(|store| store.get_destination(item.destination_id))?;
             let ctx = self.context(id, Phase::Uploading, cancel);
-            match self.inner.send.upload(&item, &destination, &ctx).await {
+            match self.send_item(&item, &destination, &ctx).await {
                 Ok(SendOutcome::Sent { message_id }) => {
                     self.change(
                         id,

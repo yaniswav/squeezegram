@@ -1142,6 +1142,29 @@ impl<B: TdBindings> Inner<B> {
         }
     }
 
+    /// Reload a confirmed message's main-file reference without logging its opaque value.
+    pub(super) async fn message_remote(
+        &self,
+        target: &Target,
+        message_id: i64,
+    ) -> Result<Option<String>, TransportError> {
+        let chat_id = chat_id(&self.known_chat(&target.peer).await?)?;
+        let message = self
+            .request(
+                "getMessage",
+                json!({ "@type": "getMessage", "chat_id": chat_id, "message_id": message_id }),
+                self.config.request_timeout,
+            )
+            .await?;
+        j::expect(&message, "message")?;
+        if int(&message, "id")? != message_id || int(&message, "chat_id")? != chat_id {
+            return Err(TransportError::Protocol(
+                "getMessage: unexpected message".into(),
+            ));
+        }
+        Ok(remote_file_id(&message["content"]))
+    }
+
     /// `message_link`, read only. Only supergroups and channels have message links: anything
     /// else is `None` without a request. `getMessageLink` (`chat_id`, `message_id`,
     /// `media_timestamp`, `checklist_task_id`, `poll_option_id`, `for_album`,

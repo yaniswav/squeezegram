@@ -53,6 +53,17 @@ fn same_media(left: &Item, right: &Item) -> bool {
 }
 
 impl Store {
+    pub fn set_send_route(&mut self, id: i64, via: SendVia) -> Result<()> {
+        let count = self.conn.execute(
+            "UPDATE items SET send_via = ?1, updated_at = ?2 WHERE id = ?3 AND state = 'uploading'",
+            params![via.as_str(), now_iso(), id],
+        )?;
+        if count == 0 {
+            return Err(QueueError::ItemStarted(id));
+        }
+        Ok(())
+    }
+
     pub fn send_metadata(&self, id: i64) -> Result<SendMetadata> {
         self.conn
             .query_row(
@@ -75,49 +86,67 @@ impl Store {
     /// destination, but media and encoding choices must agree before an upload can be reused.
     /// This stores intent only; `send_via` records the actual route when the send starts.
     pub fn link_send_batch(&mut self, ids: &[i64]) -> Result<String> {
-        if ids.len() < 2 {
-            return Err(incompatible());
-        }
         let tx = self.conn.transaction()?;
-        let mut items = Vec::with_capacity(ids.len());
-        let mut destinations = HashSet::new();
-        for &id in ids {
-            let item = tx
-                .query_row(
-                    &format!("SELECT {ITEM_COLUMNS} FROM items WHERE id = ?1"),
-                    [id],
-                    item_from_row,
-                )
-                .optional()?
-                .ok_or(QueueError::ItemNotFound(id))?;
-            if item.state != State::Ready {
-                return Err(QueueError::ItemStarted(id));
-            }
-            if item.hold_reason.is_some() || !destinations.insert(item.destination_id) {
-                return Err(incompatible());
-            }
-            let unlinked: bool = tx.query_row(
-                "SELECT batch_id IS NULL AND source_item_id IS NULL AND send_via = 'upload'
-                 FROM items WHERE id = ?1",
-                [id],
-                |row| row.get(0),
-            )?;
-            if !unlinked || items.first().is_some_and(|first| !same_media(first, &item)) {
-                return Err(incompatible());
-            }
-            items.push(item);
-        }
-        let batch_id = uuid::Uuid::new_v4().to_string();
-        let now = now_iso();
-        for &id in ids {
-            tx.execute(
-                "UPDATE items SET batch_id = ?1, source_item_id = ?2, updated_at = ?3
-                 WHERE id = ?4",
-                params![batch_id, (id != ids[0]).then_some(ids[0]), now, id],
-            )?;
-        }
+        let batch = link_batch(&tx, ids)?;
         tx.commit()?;
-        Ok(batch_id)
+        Ok(batch)
+    }
+
+    /// A failed/cancelled primary can be replaced, but an uncertain one never can.
+    pub fn promote_send_primary(&mut self, id: i64) -> Result<()> {
+        let Some(primary) = self.send_batch_primary(id)? else {
+            return Ok(());
+        };
+        if !matches!(primary.state, State::Failed | State::Cancelled) {
+            return Ok(());
+        }
+        let batch = self.send_metadata(id)?.batch_id;
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE items SET source_item_id = CASE WHEN id = ?1 THEN NULL ELSE ?1 END,
+                hold_reason = CASE WHEN hold_reason = 'awaiting_primary' THEN NULL ELSE hold_reason END
+             WHERE batch_id = ?2 AND source_item_id = ?3 AND state NOT IN ('sent', 'cancelled')",
+            params![id, batch, primary.id],
+        )?;
+        tx.execute(
+            "UPDATE items SET batch_id = NULL, source_item_id = NULL WHERE id = ?1",
+            [primary.id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn batch_send_ready(&self, id: i64) -> Result<bool> {
+        match self.send_batch_primary(id) {
+            Ok(None) => Ok(true),
+            Ok(Some(primary)) => Ok(matches!(
+                primary.state,
+                State::Sent | State::Failed | State::Cancelled
+            )),
+            // Keep broken links held; clearing a row must not silently authorize another send.
+            Err(QueueError::ItemNotFound(_) | QueueError::InvalidValue(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn refresh_batch_holds(&mut self) -> Result<Vec<i64>> {
+        let mut changed = Vec::new();
+        for item in self.items_in_states(&[State::Ready, State::Encoded])? {
+            if item.hold_reason.is_some() && item.hold_reason.as_deref() != Some("awaiting_primary")
+            {
+                continue;
+            }
+            let waiting = !self.batch_send_ready(item.id)?;
+            let hold = waiting.then_some("awaiting_primary");
+            if item.hold_reason.as_deref() != hold {
+                self.conn.execute(
+                    "UPDATE items SET hold_reason = ?1 WHERE id = ?2",
+                    params![hold, item.id],
+                )?;
+                changed.push(item.id);
+            }
+        }
+        Ok(changed)
     }
 
     /// A dependent's primary, or `None` for an independent upload / primary itself. Missing
@@ -144,6 +173,50 @@ impl Store {
         }
         Ok(Some(primary))
     }
+}
+
+pub(super) fn link_batch(conn: &rusqlite::Connection, ids: &[i64]) -> Result<String> {
+    if ids.len() < 2 {
+        return Err(incompatible());
+    }
+    let mut items = Vec::with_capacity(ids.len());
+    let mut destinations = HashSet::new();
+    for &id in ids {
+        let item = conn
+            .query_row(
+                &format!("SELECT {ITEM_COLUMNS} FROM items WHERE id = ?1"),
+                [id],
+                item_from_row,
+            )
+            .optional()?
+            .ok_or(QueueError::ItemNotFound(id))?;
+        if item.state != State::Ready {
+            return Err(QueueError::ItemStarted(id));
+        }
+        if item.hold_reason.is_some() || !destinations.insert(item.destination_id) {
+            return Err(incompatible());
+        }
+        let unlinked: bool = conn.query_row(
+            "SELECT batch_id IS NULL AND source_item_id IS NULL AND send_via = 'upload'
+                 FROM items WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )?;
+        if !unlinked || items.first().is_some_and(|first| !same_media(first, &item)) {
+            return Err(incompatible());
+        }
+        items.push(item);
+    }
+    let batch_id = uuid::Uuid::new_v4().to_string();
+    let now = now_iso();
+    for &id in ids {
+        conn.execute(
+            "UPDATE items SET batch_id = ?1, source_item_id = ?2, updated_at = ?3
+                 WHERE id = ?4",
+            params![batch_id, (id != ids[0]).then_some(ids[0]), now, id],
+        )?;
+    }
+    Ok(batch_id)
 }
 
 #[cfg(test)]
@@ -372,6 +445,108 @@ mod tests {
         assert!(store.transition(id, State::Uploading, &invalid).is_err());
         assert_eq!(store.get_item(id).unwrap(), before);
         assert_eq!(store.send_metadata(id).unwrap().via, SendVia::Upload);
+    }
+
+    #[test]
+    fn batch_scheduling_survives_restart_and_preserves_needed_primary_rows() {
+        use crate::queue::store::ClearScope;
+        let dir = TestDir::new("batch-schedule");
+        let path = dir.path().join("queue.db");
+        let mut store = Store::open(&path).unwrap();
+        let ids = pair(&mut store);
+        store.link_send_batch(&ids).unwrap();
+        store.reorder(&[ids[1], ids[0]]).unwrap();
+        assert_eq!(
+            store.next_runnable(chrono::Utc::now()).unwrap().unwrap().id,
+            ids[0]
+        );
+        force_state(&store, ids[0], State::Uploading);
+        crate::queue::recovery::on_startup(&mut store).unwrap();
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        store.refresh_batch_holds().unwrap();
+        assert!(store.next_runnable(chrono::Utc::now()).unwrap().is_none());
+        assert_eq!(
+            store.get_item(ids[1]).unwrap().hold_reason.as_deref(),
+            Some("awaiting_primary")
+        );
+        store.mark_sent(ids[0], Some(123)).unwrap();
+        let cleared = store.clear_items(ClearScope::Finished, None).unwrap();
+        assert!(
+            cleared.removed.is_empty(),
+            "the pending copy still needs its primary"
+        );
+        assert_eq!(
+            store.next_runnable(chrono::Utc::now()).unwrap().unwrap().id,
+            ids[1]
+        );
+        force_state(&store, ids[1], State::Sent);
+        assert_eq!(
+            store
+                .clear_items(ClearScope::Finished, None)
+                .unwrap()
+                .removed
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn media_edits_detach_the_batch_and_cancelled_primary_can_be_promoted() {
+        use crate::queue::store::ItemPatch;
+        let mut store = Store::open_in_memory().unwrap();
+        let ids = pair(&mut store);
+        store.link_send_batch(&ids).unwrap();
+        store.cancel(ids[0]).unwrap();
+        store.promote_send_primary(ids[1]).unwrap();
+        assert!(store.send_batch_primary(ids[1]).unwrap().is_none());
+        let ids = pair(&mut store);
+        store.link_send_batch(&ids).unwrap();
+        store
+            .update_item(
+                ids[1],
+                &ItemPatch {
+                    send_mode: Some(SendMode::Document),
+                    caption: None,
+                },
+            )
+            .unwrap();
+        assert!(store.send_metadata(ids[0]).unwrap().batch_id.is_none());
+        assert!(store.send_metadata(ids[1]).unwrap().batch_id.is_none());
+    }
+
+    #[test]
+    fn copied_batches_are_created_atomically_and_separate_calls_never_merge() {
+        let mut store = Store::open_in_memory().unwrap();
+        let first = pair(&mut store);
+        let rows = store.list_items().unwrap();
+        let items: Vec<_> = rows
+            .iter()
+            .map(|item| NewItem {
+                source_path: item.source_path.clone(),
+                source_size: item.source_size,
+                source_mtime: item.source_mtime,
+                destination_id: item.destination_id,
+                send_mode: item.send_mode,
+                caption: item.caption.clone(),
+            })
+            .collect();
+        let copied = store.add_items_with_copies(&items, true).unwrap();
+        assert!(store.send_metadata(first[0]).unwrap().batch_id.is_none());
+        assert_eq!(
+            store.send_batch_primary(copied[1]).unwrap().unwrap().id,
+            copied[0]
+        );
+        let another = store.add_items_with_copies(&items, true).unwrap();
+        assert_ne!(
+            store.send_metadata(copied[0]).unwrap().batch_id,
+            store.send_metadata(another[0]).unwrap().batch_id
+        );
+        let before = store.list_items().unwrap();
+        let mut invalid = items;
+        invalid[1].destination_id = 999;
+        assert!(store.add_items_with_copies(&invalid, true).is_err());
+        assert_eq!(store.list_items().unwrap(), before);
     }
 
     #[test]

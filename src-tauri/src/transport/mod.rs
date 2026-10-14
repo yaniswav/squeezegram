@@ -735,6 +735,15 @@ pub trait TelegramTransport: Send + Sync {
         cancel: CancellationToken,
     ) -> Result<Sent, TransportError>;
 
+    /// Read the opaque main-file reference of a confirmed message, including after restart.
+    async fn message_remote(
+        &self,
+        _target: &Target,
+        _message_id: i64,
+    ) -> Result<Option<String>, TransportError> {
+        Err(TransportError::NotImplemented("message_remote"))
+    }
+
     /// Read only: messages of the destination that may be this upload; the user decides.
     async fn verify_sent(&self, probe: &SentProbe) -> Result<Vec<SentCandidate>, TransportError>;
 
@@ -800,6 +809,10 @@ impl Default for NoTransport {
 
 #[async_trait]
 impl TelegramTransport for NoTransport {
+    async fn message_remote(&self, _: &Target, _: i64) -> Result<Option<String>, TransportError> {
+        self.refuse()
+    }
+
     async fn start(&self) -> Result<(), TransportError> {
         match &self.reason {
             Some(reason) => Err(reason.clone()),

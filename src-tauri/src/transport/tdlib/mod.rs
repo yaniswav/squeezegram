@@ -1081,6 +1081,14 @@ impl<B: TdBindings> TelegramTransport for TdlibJson<B> {
         self.inner.verify_sent(probe).await
     }
 
+    async fn message_remote(
+        &self,
+        target: &Target,
+        message_id: i64,
+    ) -> Result<Option<String>, TransportError> {
+        self.inner.message_remote(target, message_id).await
+    }
+
     async fn message_link(
         &self,
         target: &Target,

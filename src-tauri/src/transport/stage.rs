@@ -16,8 +16,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::service::{check_destination, item_kind, mode_kind, plan_of, target_of};
 use super::{
-    Caption, MediaKind, Payload, Phase, Progress, Sent, Target, TelegramTransport, TransportError,
-    UploadRequest,
+    Caption, CopyRequest, MediaKind, Payload, Phase, Progress, RemoteRequest, Sent, Target,
+    TelegramTransport, TransportError, UploadRequest,
 };
 use crate::caption;
 use crate::limit;
@@ -27,7 +27,7 @@ use crate::media::stage::temp_root;
 use crate::media::thumb::Thumbnails;
 use crate::queue::events::{self, Phase as QueuePhase};
 use crate::queue::orchestrator::{SendError, SendOutcome, SendStage, StageContext, StageError};
-use crate::queue::store::{Destination, Item};
+use crate::queue::store::{Destination, Item, SendVia};
 use crate::settings::SettingsStore;
 
 /// The `progress` channel is lossy (`try_send`): a few slots are enough.
@@ -392,6 +392,80 @@ impl Meter {
 
 #[async_trait]
 impl SendStage for TransportStage {
+    async fn reuse(
+        &self,
+        item: &Item,
+        destination: &Destination,
+        source: &Destination,
+        message_id: i64,
+        via: SendVia,
+        ctx: &StageContext,
+    ) -> Result<SendOutcome, SendError> {
+        let mut request = upload_request(item, destination)?;
+        let from = target_of(source).ok_or_else(|| SendError::failed("TG_UPLOAD_FAILED"))?;
+        let max_chars = limit::account(&self.transport.auth_state().borrow())
+            .map_or(STANDARD_CAPTION_CHARS, |me| me.caption_max_chars);
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        request.caption.text = rendered_caption(item, &request, &today, max_chars)?;
+        let file_name = request
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        ctx.progress.report(events::Progress {
+            percent: 0.0,
+            bytes_per_sec: None,
+            eta_sec: None,
+            phase: Some(QueuePhase::AwaitingServer),
+            detail: Some(via.as_str().into()),
+        });
+        let result = match via {
+            SendVia::Copy => {
+                self.transport
+                    .send_copy(
+                        CopyRequest {
+                            from,
+                            message_id,
+                            target: request.target,
+                            media: request.payload.media_kind(),
+                            caption: request.caption,
+                            file_name,
+                            size: request.size,
+                        },
+                        ctx.cancel.clone(),
+                    )
+                    .await
+            }
+            SendVia::Remote => {
+                let remote_id = match self.transport.message_remote(&from, message_id).await {
+                    Ok(Some(id)) => id,
+                    Ok(None)
+                    | Err(TransportError::Other {
+                        code: 400 | 404, ..
+                    }) => {
+                        return Err(SendError::failed("TG_UPLOAD_FAILED"));
+                    }
+                    Err(error) => return outcome(Err(error)),
+                };
+                self.transport
+                    .send_remote(
+                        RemoteRequest {
+                            remote_id,
+                            target: request.target,
+                            payload: request.payload,
+                            caption: request.caption,
+                            file_name,
+                            size: request.size,
+                        },
+                        ctx.cancel.clone(),
+                    )
+                    .await
+            }
+            SendVia::Upload => return self.upload(item, destination, ctx).await,
+        };
+        outcome(result)
+    }
+
     async fn preflight(&self, item: &Item, destination: &Destination) -> Result<(), StageError> {
         // A row this app did not write: the upload reports it.
         let Some(target) = target_of(destination) else {
@@ -596,6 +670,7 @@ mod tests {
     #[derive(Default)]
     struct AsIs {
         probes: AtomicUsize,
+        shared_identity: std::sync::atomic::AtomicBool,
     }
 
     #[async_trait]
@@ -603,7 +678,11 @@ mod tests {
         async fn probe(&self, item: &Item, _: &StageContext) -> Result<ProbeOutcome, StageError> {
             self.probes.fetch_add(1, Ordering::SeqCst);
             Ok(ProbeOutcome {
-                content_id: format!("{}:{}", item.source_size, item.id),
+                content_id: if self.shared_identity.load(Ordering::SeqCst) {
+                    format!("{}:{}", item.source_size, item.source_path)
+                } else {
+                    format!("{}:{}", item.source_size, item.id)
+                },
                 identity_weak: false,
                 media_json: None,
                 plan_json: None,
@@ -728,6 +807,58 @@ mod tests {
             panic!(
                 "item {id} stuck in {} instead of {state}",
                 self.item(id).state
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn real_stage_copies_and_falls_back_through_remote_then_upload() {
+        use crate::transport::mock::MOCK_ARCHIVED_CHAT;
+
+        for fallback in 0..3 {
+            let h = harness("stage-batch", MockTransport::authorized()).await;
+            h.media.shared_identity.store(true, Ordering::SeqCst);
+            let path = h.dir.file("a.mp4", b"generated");
+            let items: Vec<_> = [MOCK_SAVED, MOCK_ARCHIVED_CHAT]
+                .into_iter()
+                .map(|peer| NewItem {
+                    source_path: path.clone(),
+                    source_size: 9,
+                    source_mtime: 1,
+                    destination_id: h.destination(peer),
+                    send_mode: SendMode::Video,
+                    caption: "{name}".into(),
+                })
+                .collect();
+            let ids = h.queue.add_with_copies(&items, true).unwrap();
+            if fallback > 0 {
+                h.mock.push_copy_failure(TransportError::Other {
+                    code: 400,
+                    message: "MESSAGE_COPY_FORBIDDEN".into(),
+                });
+            }
+            if fallback > 1 {
+                h.mock.push_remote_failure(TransportError::Other {
+                    code: 400,
+                    message: "FILE_REFERENCE_EXPIRED".into(),
+                });
+            }
+            h.queue.start();
+            h.wait_state(ids[1], State::Sent).await;
+            assert_eq!(h.mock.uploads(), if fallback == 2 { 2 } else { 1 });
+            assert_eq!(h.mock.copies(), 1);
+            assert_eq!(h.mock.remote_sends(), usize::from(fallback > 0));
+            assert_eq!(h.mock.captions(), ["a", "a"]);
+            assert!(
+                !h.sink
+                    .alert_codes()
+                    .iter()
+                    .any(|(_, code)| code == "TG_NO_PROGRESS")
+            );
+            let via = h.queue.with_store(|s| s.send_metadata(ids[1])).unwrap().via;
+            assert_eq!(
+                via,
+                [SendVia::Copy, SendVia::Remote, SendVia::Upload][fallback]
             );
         }
     }

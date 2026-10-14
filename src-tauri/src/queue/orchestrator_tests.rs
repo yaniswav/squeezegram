@@ -180,6 +180,8 @@ struct FakeSend {
     gate: Notify,
     next_id: AtomicI64,
     concurrency: Arc<Concurrency>,
+    reuse_steps: Mutex<VecDeque<SendStep>>,
+    routes: Mutex<Vec<(i64, SendVia)>>,
 }
 
 impl FakeSend {
@@ -205,6 +207,35 @@ impl FakeSend {
 
 #[async_trait]
 impl SendStage for FakeSend {
+    async fn reuse(
+        &self,
+        item: &Item,
+        _: &Destination,
+        _: &Destination,
+        _: i64,
+        via: SendVia,
+        _: &StageContext,
+    ) -> std::result::Result<SendOutcome, SendError> {
+        self.routes.lock().unwrap().push((item.id, via));
+        match self
+            .reuse_steps
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(SendStep::Sent)
+        {
+            SendStep::Sent => Ok(SendOutcome::Sent {
+                message_id: self.next_id.fetch_add(1, Ordering::SeqCst),
+            }),
+            SendStep::Fail => Err(SendError::failed("TG_UPLOAD_FAILED")),
+            SendStep::Unknown => Err(SendError::unknown("TG_TIMEOUT")),
+            SendStep::FloodWait(seconds) => Ok(SendOutcome::FloodWait {
+                retry_after: Duration::from_secs(seconds),
+            }),
+            _ => Err(SendError::Cancelled),
+        }
+    }
+
     async fn upload(
         &self,
         item: &Item,
@@ -241,6 +272,111 @@ impl SendStage for FakeSend {
             }
         }
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn batch_uploads_once_then_copies_and_preserves_routes() {
+    let h = Harness::new("batch-copies", Treatment::Encode);
+    let targets: Vec<_> = h
+        .chats(3)
+        .into_iter()
+        .map(|id| (id, SendMode::Video))
+        .collect();
+    let ids = h.add_to("one.mp4", &targets);
+    h.orch.with_store(|s| s.link_send_batch(&ids)).unwrap();
+    h.orch.start();
+    h.wait_state(ids[2], State::Sent).await;
+    assert_eq!(h.send.order(), [ids[0]]);
+    assert_eq!(
+        *h.send.routes.lock().unwrap(),
+        [(ids[1], SendVia::Copy), (ids[2], SendVia::Copy)]
+    );
+    assert_eq!(h.media.encodes.load(Ordering::SeqCst), 1);
+    let routes: Vec<String> = h
+        .orch
+        .with_store(|s| {
+            let mut stmt = s.conn().prepare("SELECT via FROM history ORDER BY id")?;
+            Ok(stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    assert_eq!(routes, ["upload", "copy", "copy"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn batch_reuse_refusals_fall_back_but_unknown_never_does() {
+    for unknown in [false, true] {
+        let h = Harness::new("batch-fallback", Treatment::Skip);
+        let targets: Vec<_> = h
+            .chats(2)
+            .into_iter()
+            .map(|id| (id, SendMode::Video))
+            .collect();
+        let ids = h.add_to("one.mp4", &targets);
+        h.orch.with_store(|s| s.link_send_batch(&ids)).unwrap();
+        h.send.reuse_steps.lock().unwrap().extend(if unknown {
+            vec![SendStep::Unknown]
+        } else {
+            vec![SendStep::Fail, SendStep::Fail]
+        });
+        h.orch.start();
+        h.wait_state(ids[1], if unknown { State::Unknown } else { State::Sent })
+            .await;
+        if unknown {
+            assert_eq!(h.send.order(), [ids[0]]);
+            assert_eq!(*h.send.routes.lock().unwrap(), [(ids[1], SendVia::Copy)]);
+        } else {
+            assert_eq!(h.send.order(), [ids[0], ids[1]]);
+            assert_eq!(
+                *h.send.routes.lock().unwrap(),
+                [(ids[1], SendVia::Copy), (ids[1], SendVia::Remote)]
+            );
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn batch_primary_unknown_holds_dependents_until_manual_confirmation() {
+    let h = Harness::new("batch-unknown", Treatment::Skip);
+    let targets: Vec<_> = h
+        .chats(2)
+        .into_iter()
+        .map(|id| (id, SendMode::Video))
+        .collect();
+    let ids = h.add_to("one.mp4", &targets);
+    h.orch.with_store(|s| s.link_send_batch(&ids)).unwrap();
+    h.send_steps(&[SendStep::Unknown]);
+    h.orch.start();
+    h.wait_state(ids[0], State::Unknown).await;
+    h.idle(2).await;
+    assert_eq!(
+        h.item(ids[1]).hold_reason.as_deref(),
+        Some("awaiting_primary")
+    );
+    assert_eq!(h.send.order(), [ids[0]]);
+    h.orch
+        .resolve_unknown(ids[0], ResolveAction::MarkSent, Some(1000))
+        .unwrap();
+    h.wait_state(ids[1], State::Sent).await;
+    assert_eq!(h.send.order(), [ids[0]]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn batch_failed_primary_promotes_the_next_destination() {
+    let h = Harness::new("batch-promotion", Treatment::Skip);
+    let targets: Vec<_> = h
+        .chats(3)
+        .into_iter()
+        .map(|id| (id, SendMode::Video))
+        .collect();
+    let ids = h.add_to("one.mp4", &targets);
+    h.orch.with_store(|s| s.link_send_batch(&ids)).unwrap();
+    h.send_steps(&[SendStep::Fail, SendStep::Sent]);
+    h.orch.start();
+    h.wait_state(ids[2], State::Sent).await;
+    assert_eq!(h.send.order(), [ids[0], ids[1]]);
+    assert_eq!(*h.send.routes.lock().unwrap(), [(ids[2], SendVia::Copy)]);
 }
 
 /// Wall time that advances with tokio's (paused) clock, from the real time at creation.
@@ -290,6 +426,8 @@ impl Harness {
             analyses_cancelled: AtomicUsize::new(0),
         });
         let send = Arc::new(FakeSend {
+            reuse_steps: Mutex::new(VecDeque::new()),
+            routes: Mutex::new(Vec::new()),
             steps: Mutex::new(VecDeque::new()),
             calls: Mutex::new(Vec::new()),
             entered: Notify::new(),

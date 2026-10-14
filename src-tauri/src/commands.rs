@@ -403,14 +403,16 @@ pub fn queue_add(
     destination_ids: Vec<i64>,
     send_mode: Option<SendMode>,
     caption: Option<String>,
+    upload_once: Option<bool>,
 ) -> CommandResult<Vec<i64>> {
-    add_files(
+    add_files_with_strategy(
         &state.queue,
         state.entitlements.as_ref(),
         &paths,
         &destination_ids,
         send_mode,
         caption.as_deref(),
+        upload_once.unwrap_or(false),
     )
 }
 
@@ -421,6 +423,7 @@ pub fn queue_add(
 ///
 /// The license is asked here, in the core: a page that offers more than one destination
 /// without `Feature::MultiDestination` gets `FEATURE_NOT_LICENSED` and nothing is queued.
+#[cfg(test)]
 pub(crate) fn add_files(
     queue: &Orchestrator,
     entitlements: &dyn Entitlements,
@@ -428,6 +431,26 @@ pub(crate) fn add_files(
     destination_ids: &[i64],
     send_mode: Option<SendMode>,
     caption: Option<&str>,
+) -> CommandResult<Vec<i64>> {
+    add_files_with_strategy(
+        queue,
+        entitlements,
+        paths,
+        destination_ids,
+        send_mode,
+        caption,
+        false,
+    )
+}
+
+fn add_files_with_strategy(
+    queue: &Orchestrator,
+    entitlements: &dyn Entitlements,
+    paths: &[String],
+    destination_ids: &[i64],
+    send_mode: Option<SendMode>,
+    caption: Option<&str>,
+    upload_once: bool,
 ) -> CommandResult<Vec<i64>> {
     let mut destinations: Vec<i64> = Vec::with_capacity(destination_ids.len());
     for &id in destination_ids {
@@ -479,7 +502,7 @@ pub(crate) fn add_files(
                 });
             }
         }
-        let ids = queue.add(&items)?;
+        let ids = queue.add_with_copies(&items, upload_once)?;
         for skipped in expanded.skipped {
             queue.alert(
                 None,

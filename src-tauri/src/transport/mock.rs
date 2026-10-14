@@ -997,6 +997,20 @@ impl TelegramTransport for MockTransport {
         Ok(candidates)
     }
 
+    async fn message_remote(
+        &self,
+        target: &Target,
+        message_id: i64,
+    ) -> Result<Option<String>, TransportError> {
+        self.ensure_ready()?;
+        Ok(self
+            .lock()
+            .messages
+            .iter()
+            .find(|message| message.id == message_id && message.target.peer == target.peer)
+            .map(|message| message.remote_id.clone()))
+    }
+
     /// Supergroups and channels only, like Telegram: `https://t.me/c/<raw id>/<message id>`.
     async fn message_link(
         &self,

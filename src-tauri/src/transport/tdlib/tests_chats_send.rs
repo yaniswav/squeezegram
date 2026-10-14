@@ -771,6 +771,31 @@ async fn a_copy_replaces_the_caption_without_file_progress() {
 }
 
 #[tokio::test]
+async fn a_confirmed_remote_reference_can_be_read_after_restart() {
+    let dir = TempDir::new("remote-reload");
+    let mut part: Value = serde_json::from_str(UPLOAD_OK).unwrap();
+    let steps = part["steps"].as_array_mut().unwrap();
+    steps.retain(|step| step["expect"] == "createPrivateChat");
+    steps.push(json!({ "expect": "getMessage", "reply": {
+        "@type": "message", "chat_id": ME, "id": FINAL,
+        "content": { "@type": "messageVideo", "video": { "video": {
+            "id": 11, "remote": { "id": REMOTE_ID }
+        } } }
+    } }));
+    let transport = started(&[&part.to_string()], &dir).await;
+    assert_eq!(
+        transport
+            .message_remote(&saved(), FINAL)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(REMOTE_ID)
+    );
+    assert!(transport.bindings().sent_of("sendMessage").is_empty());
+    finish(&transport, "remote_reload").await;
+}
+
+#[tokio::test]
 async fn a_remote_file_is_sent_without_a_local_path_or_thumbnail() {
     let dir = TempDir::new("m1-remote");
     let transport = started(&[UPLOAD_OK], &dir).await;

@@ -775,6 +775,10 @@ impl Store {
     /// (`last_used_at` = now, `use_count` + 1 per call, whatever the number of files). Returns
     /// the item ids.
     pub fn add_items(&mut self, items: &[NewItem]) -> Result<Vec<i64>> {
+        self.add_items_with_copies(items, false)
+    }
+
+    pub fn add_items_with_copies(&mut self, items: &[NewItem], copies: bool) -> Result<Vec<i64>> {
         let tx = self.conn.transaction()?;
         let mut position: i64 =
             tx.query_row("SELECT COALESCE(MAX(position), 0) FROM items", [], |row| {
@@ -829,6 +833,29 @@ impl Store {
                 params![now, destination_id],
             )?;
         }
+        if copies {
+            let mut groups: Vec<Vec<(i64, &NewItem)>> = Vec::new();
+            for (&id, item) in ids.iter().zip(items) {
+                let group = groups.iter_mut().find(|group| {
+                    let first = group[0].1;
+                    first.source_path == item.source_path
+                        && first.source_size == item.source_size
+                        && first.source_mtime == item.source_mtime
+                        && first.send_mode == item.send_mode
+                        && !group
+                            .iter()
+                            .any(|(_, member)| member.destination_id == item.destination_id)
+                });
+                match group {
+                    Some(group) => group.push((id, item)),
+                    None => groups.push(vec![(id, item)]),
+                }
+            }
+            for group in groups.iter().filter(|group| group.len() > 1) {
+                let members: Vec<_> = group.iter().map(|(id, _)| *id).collect();
+                batches::link_batch(&tx, &members)?;
+            }
+        }
         tx.commit()?;
         Ok(ids)
     }
@@ -880,20 +907,28 @@ impl Store {
         if flood_wait {
             return Ok(None);
         }
-        Ok(items
-            .into_iter()
-            .find(|item| scheduled_at(item).is_none_or(|at| at <= now)))
+        for item in items {
+            if scheduled_at(&item).is_none_or(|at| at <= now) && self.batch_send_ready(item.id)? {
+                return Ok(Some(item));
+            }
+        }
+        Ok(None)
     }
 
     /// The earliest `next_run_at` after `now` among the items `next_runnable` skips: when the
     /// loop must look again although nothing woke it.
     pub fn next_scheduled(&self, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
-        Ok(self
-            .items_in_states(&[State::Ready, State::Encoded])?
-            .iter()
-            .filter_map(scheduled_at)
-            .filter(|at| *at > now)
-            .min())
+        let mut earliest = None;
+        for item in self.items_in_states(&[State::Ready, State::Encoded])? {
+            if self.batch_send_ready(item.id)?
+                && let Some(at) = scheduled_at(&item)
+                && at > now
+                && earliest.is_none_or(|first| at < first)
+            {
+                earliest = Some(at);
+            }
+        }
+        Ok(earliest)
     }
 
     /// Holds an `encoded` item until `at` (the end of its destination's minimum interval): it
@@ -1142,9 +1177,25 @@ impl Store {
             let rows = stmt.query_map([], item_from_row)?;
             rows.collect::<rusqlite::Result<_>>()?
         };
-        let (removed, kept): (Vec<&Item>, Vec<&Item>) = items
+        let kept_sources: HashSet<i64> = items
             .iter()
-            .partition(|item| scope.removes(item.state) && Some(item.id) != current);
+            .filter(|item| !scope.removes(item.state) || Some(item.id) == current)
+            .map(|item| {
+                tx.query_row(
+                    "SELECT source_item_id FROM items WHERE id = ?1",
+                    [item.id],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+            })
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        let (removed, kept): (Vec<&Item>, Vec<&Item>) = items.iter().partition(|item| {
+            scope.removes(item.state)
+                && Some(item.id) != current
+                && !kept_sources.contains(&item.id)
+        });
         let running = kept
             .iter()
             .filter(|item| item.state.is_running() || Some(item.id) == current)
@@ -1268,6 +1319,9 @@ impl Store {
             )?;
         }
         if let Some(mode) = patch.send_mode {
+            tx.execute("UPDATE items SET batch_id = NULL, source_item_id = NULL,
+                hold_reason = CASE WHEN hold_reason = 'awaiting_primary' THEN NULL ELSE hold_reason END
+                WHERE batch_id = (SELECT batch_id FROM items WHERE id = ?1)", [id])?;
             tx.execute(
                 "UPDATE items SET send_mode = ?1, updated_at = ?2,
                                   plan_json = CASE WHEN send_mode = ?1 THEN plan_json END
@@ -1296,6 +1350,12 @@ impl Store {
             return Err(QueueError::ItemStarted(id));
         }
         // The plan an analysis stored was built without these choices.
+        tx.execute(
+            "UPDATE items SET batch_id = NULL, source_item_id = NULL,
+            hold_reason = CASE WHEN hold_reason = 'awaiting_primary' THEN NULL ELSE hold_reason END
+            WHERE batch_id = (SELECT batch_id FROM items WHERE id = ?1)",
+            [id],
+        )?;
         tx.execute(
             "UPDATE items SET encoding_override = ?1, updated_at = ?2, plan_json = NULL
              WHERE id = ?3",
