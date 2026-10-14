@@ -16,7 +16,11 @@ import { useEffect, useId, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { ItemEncoding } from "@/components/item-encoding"
-import { PlanBadge, QueueStateBadge } from "@/components/queue-state-badge"
+import {
+  DeliveryBadge,
+  PlanBadge,
+  QueueStateBadge,
+} from "@/components/queue-state-badge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import {
@@ -374,6 +378,7 @@ export function QueueItem({
 
         <div className="flex shrink-0 flex-col items-end gap-1">
           <QueueStateBadge state={item.state} />
+          <DeliveryBadge item={item} progress={progress} />
           {item.state !== "cancelled" && (
             <PlanBadge kind={plan?.kind ?? null} />
           )}
@@ -545,6 +550,7 @@ function GroupPreparation({
 
   if (preparing && phase) {
     const current = progress.get(preparing.id)
+
     const own =
       current && PREPARE_PHASES.has(current.phase) ? current : undefined
 
@@ -594,6 +600,7 @@ function DestinationRow({
           <bdi>{destination}</bdi>
         </p>
         <QueueStateBadge state={item.state} />
+        <DeliveryBadge item={item} progress={progress} />
         {item.state !== "cancelled" && <PlanBadge kind={plan?.kind ?? null} />}
         {canCancel(item.state) && (
           <Button
@@ -642,6 +649,10 @@ function StatusPanel({
   const { t, i18n } = useTranslation()
   const { alerts } = useAlerts()
   const language = i18n.language
+
+  if (item.hold_reason === "awaiting_primary") {
+    return <Notice tone="attention" text={t("delivery.waiting")} />
+  }
 
   switch (item.state) {
     case "pending_review":

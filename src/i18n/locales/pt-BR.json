@@ -25,6 +25,17 @@
     "document": "Arquivo",
     "photo": "Foto"
   },
+  "delivery": {
+    "label": "Envio para vários destinos",
+    "once": "Um upload e depois cópias (recomendado)",
+    "separate": "Enviar separadamente para cada destino",
+    "hint": "Formatos e configurações iguais compartilham um upload. Se uma cópia for recusada, o arquivo poderá ser enviado novamente.",
+    "upload": "Upload",
+    "copy": "Cópia",
+    "remote": "Reutilizar arquivo enviado",
+    "waiting": "Aguardando o primeiro destino. Se o envio for incerto, confirme-o antes de continuar.",
+    "method": "Envio"
+  },
   "alerts": {
     "label": "Notificações",
     "item": "{{name}}"

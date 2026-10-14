@@ -25,6 +25,17 @@
     "document": "Berkas",
     "photo": "Foto"
   },
+  "delivery": {
+    "label": "Mengirim ke beberapa tujuan",
+    "once": "Satu unggahan, lalu salinan (disarankan)",
+    "separate": "Unggah secara terpisah ke setiap tujuan",
+    "hint": "Format dan pengaturan yang sama berbagi satu unggahan. Jika salinan ditolak, berkas dapat diunggah kembali.",
+    "upload": "Unggahan",
+    "copy": "Salinan",
+    "remote": "Gunakan kembali berkas terkirim",
+    "waiting": "Menunggu tujuan pertama. Jika hasil pengiriman belum pasti, konfirmasikan sebelum melanjutkan.",
+    "method": "Pengiriman"
+  },
   "alerts": {
     "label": "Notifikasi",
     "item": "{{name}}"

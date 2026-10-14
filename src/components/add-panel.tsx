@@ -76,14 +76,19 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
   /** The user's choice; "" until they pick one. */
   const [destinationId, setDestinationId] = useState("")
   const [mode, setMode] = useState<SendMode | "default">("default")
+  const [uploadOnce, setUploadOnce] = useState(true)
+
   // The user's text; null until they type, so the default template from Settings shows
   // (also when it loads after the panel, and again after each add).
   const [captionDraft, setCaptionDraft] = useState<string | null>(null)
+
   const [busy, setBusy] = useState(false)
+
   const [added, setAdded] = useState<{
     files: number
     destinations: number
   } | null>(null)
+
   const [extraSlots, setExtraSlots] = useState<ExtraDestination[]>([])
   const nextSlot = useRef(0)
   const [entitlements] = useEntitlementStatus()
@@ -129,6 +134,7 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
     () => mostRecent(destinations.list),
     [destinations.list],
   )
+
   const chosen =
     destinationId !== "" ? destinationId : (suggested?.id.toString() ?? "")
 
@@ -183,6 +189,7 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
         batch.map((entry) => entry.id),
         mode === "default" ? undefined : mode,
         caption.trim() === "" ? undefined : caption,
+        batch.length > 1 && uploadOnce,
       )
 
       onPathsChange([])
@@ -334,6 +341,31 @@ export function AddPanel({ paths, onPathsChange }: AddPanelProps) {
                 onChange={setDestinationId}
               />
               <DestinationCheckNotice state={checkOf(targetOf(destination))} />
+
+              {batch.length > 1 && (
+                <div className="space-y-2">
+                  <Label htmlFor={`${ids}-delivery`}>
+                    {t("delivery.label")}
+                  </Label>
+                  <Select
+                    value={uploadOnce ? "once" : "separate"}
+                    onValueChange={(value) => setUploadOnce(value === "once")}
+                  >
+                    <SelectTrigger id={`${ids}-delivery`} className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="once">{t("delivery.once")}</SelectItem>
+                      <SelectItem value="separate">
+                        {t("delivery.separate")}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-sm text-muted-foreground">
+                    {t("delivery.hint")}
+                  </p>
+                </div>
+              )}
 
               {extras.map((slot, index) => {
                 const labelId = `${ids}-extra-${slot.key}-label`

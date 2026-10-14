@@ -25,6 +25,17 @@
     "document": "File",
     "photo": "Photo"
   },
+  "delivery": {
+    "label": "Sending to multiple destinations",
+    "once": "One upload, then copies (recommended)",
+    "separate": "Upload separately to each destination",
+    "hint": "Matching formats and settings share one upload. If a copy is refused, the file may be uploaded again.",
+    "upload": "Upload",
+    "copy": "Copy",
+    "remote": "Reuse uploaded file",
+    "waiting": "Waiting for the first destination. If its send is uncertain, confirm it before continuing.",
+    "method": "Delivery"
+  },
   "alerts": {
     "label": "Notifications",
     "item": "{{name}}"

@@ -7,7 +7,8 @@ use rusqlite::{OptionalExtension, params};
 use super::{ITEM_COLUMNS, Item, Store, invalid, item_from_row};
 use crate::queue::{QueueError, Result, State, now_iso};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SendVia {
     Upload,
     Copy,
@@ -380,6 +381,10 @@ mod tests {
                 store.transition(id, state, &Changes::new()).unwrap();
                 let item = store.get_item(id).unwrap();
                 let history_id = store.record_history(&item, status).unwrap().unwrap();
+                assert_eq!(
+                    store.query_history(&Default::default()).unwrap()[0].via,
+                    via
+                );
                 store
                     .conn()
                     .execute("DELETE FROM items WHERE id = ?1", [id])

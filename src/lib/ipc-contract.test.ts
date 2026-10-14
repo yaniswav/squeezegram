@@ -57,3 +57,18 @@ test("entitlements_status is written to the command journal", () => {
   assert.match(command, /Call::new\("entitlements_status"\)/)
   assert.doesNotMatch(command, /Call::quiet\("entitlements_status"\)/)
 })
+
+test("queue_add carries the explicit single-upload choice under Tauri's argument name", () => {
+  const command = between(
+    page,
+    "export function queueAdd(",
+    "export function captionPreview(",
+  )
+
+  const rust = between(core, "pub fn queue_add(", "pub(crate) fn add_files(")
+
+  assert.match(command, /uploadOnce = false/)
+  assert.match(command, /\n\s+uploadOnce,/)
+  assert.match(rust, /upload_once: Option<bool>/)
+  assert.match(rust, /upload_once\.unwrap_or\(false\)/)
+})

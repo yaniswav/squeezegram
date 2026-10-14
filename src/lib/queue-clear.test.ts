@@ -65,3 +65,17 @@ test("items are counted per scope", () => {
   assert.equal(countClearable([], "all"), 0)
   assert.equal(countClearable([{ state: "uploading" }], "all"), 0)
 })
+
+test("a primary still needed by a kept copy is excluded from the clear count", () => {
+  const items = [
+    { id: 1, state: "sent", source_item_id: null },
+    { id: 2, state: "ready", source_item_id: 1 },
+  ]
+
+  assert.equal(countClearable(items, "finished"), 0)
+  assert.equal(countClearable(items, "all"), 2)
+  assert.equal(
+    countClearable([items[0], { ...items[1], state: "uploading" }], "all"),
+    0,
+  )
+})

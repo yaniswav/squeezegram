@@ -24,8 +24,24 @@ export function isClearable(state: string, scope: ClearScope): boolean {
 
 /** Items a clear would delete, as far as the list shown tells (the core has the last word). */
 export function countClearable(
-  items: readonly { state: string }[],
+  items: readonly {
+    id?: number
+    state: string
+    source_item_id?: number | null
+  }[],
   scope: ClearScope,
 ): number {
-  return items.filter((item) => isClearable(item.state, scope)).length
+  const needed = new Set<number>()
+
+  for (const item of items) {
+    if (!isClearable(item.state, scope) && item.source_item_id != null) {
+      needed.add(item.source_item_id)
+    }
+  }
+
+  return items.filter(
+    (item) =>
+      isClearable(item.state, scope) &&
+      (item.id === undefined || !needed.has(item.id)),
+  ).length
 }

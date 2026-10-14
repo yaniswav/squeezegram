@@ -393,6 +393,7 @@ pub struct HistoryEntry {
     pub message_id: Option<i64>,
     pub sent_at: String,
     pub imported_from: Option<String>,
+    pub via: SendVia,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1541,7 +1542,7 @@ impl Store {
     pub fn query_history(&self, filter: &HistoryFilter) -> Result<Vec<HistoryEntry>> {
         let mut sql = String::from(
             "SELECT id, content_id, source_path, file_name, destination_id, size_sent, mode,
-                    status, duration_s, encoded, message_id, sent_at, imported_from
+                    status, duration_s, encoded, message_id, sent_at, imported_from, via
              FROM history WHERE 1 = 1",
         );
         let mut values: Vec<Value> = Vec::new();
@@ -1584,6 +1585,8 @@ impl Store {
                 message_id: row.get(10)?,
                 sent_at: row.get(11)?,
                 imported_from: row.get(12)?,
+                via: SendVia::parse(&row.get::<_, String>(13)?)
+                    .map_err(|error| invalid(13, error))?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

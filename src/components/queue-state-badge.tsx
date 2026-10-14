@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next"
 import { Badge } from "@/components/ui/badge"
-import type { ItemState, PlanKind } from "@/lib/ipc"
+import type { Item, ItemState, PlanKind, QueueProgress } from "@/lib/ipc"
+import { deliveryRoute } from "@/lib/delivery"
 import { cn } from "@/lib/utils"
 
 type Tone = "neutral" | "active" | "attention" | "success" | "danger" | "muted"
@@ -35,6 +36,22 @@ export function QueueStateBadge({ state }: { state: ItemState }) {
   return (
     <Badge className={cn(TONE_CLASS[STATE_TONE[state]])}>
       {t(`queue.state.${state}`)}
+    </Badge>
+  )
+}
+
+export function DeliveryBadge({
+  item,
+  progress,
+}: {
+  item: Item
+  progress?: QueueProgress
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <Badge variant="outline">
+      {t(`delivery.${deliveryRoute(item, progress)}`)}
     </Badge>
   )
 }

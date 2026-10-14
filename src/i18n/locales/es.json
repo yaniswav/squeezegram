@@ -25,6 +25,17 @@
     "document": "Archivo",
     "photo": "Foto"
   },
+  "delivery": {
+    "label": "Envío a varios destinos",
+    "once": "Una subida y luego copias (recomendado)",
+    "separate": "Subir por separado a cada destino",
+    "hint": "Los formatos y ajustes iguales comparten una subida. Si se rechaza una copia, el archivo puede subirse de nuevo.",
+    "upload": "Subida",
+    "copy": "Copia",
+    "remote": "Reutilizar archivo enviado",
+    "waiting": "Esperando al primer destino. Si el envío es incierto, confírmalo antes de continuar.",
+    "method": "Envío"
+  },
   "alerts": {
     "label": "Notificaciones",
     "item": "{{name}}"

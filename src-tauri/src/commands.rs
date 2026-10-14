@@ -30,7 +30,7 @@ use crate::queue::intake;
 use crate::queue::orchestrator::{Orchestrator, ResolveAction};
 use crate::queue::store::{
     ClearScope, Destination, DestinationPatch, HistoryEntry, HistoryFilter, Item, ItemPatch,
-    NewItem, SendMode, WatchFolder, WatchFolderPatch,
+    NewItem, SendMode, SendVia, WatchFolder, WatchFolderPatch,
 };
 use crate::queue::{QueueError, State as ItemState};
 use crate::settings::{
@@ -516,8 +516,34 @@ fn add_files_with_strategy(
 }
 
 #[tauri::command]
-pub fn queue_list(state: State<'_, AppState>) -> CommandResult<Vec<Item>> {
-    Call::quiet("queue_list").finish(state.queue.list().map_err(Into::into))
+pub fn queue_list(state: State<'_, AppState>) -> CommandResult<Vec<QueueItem>> {
+    Call::quiet("queue_list").finish(
+        state
+            .queue
+            .with_store(|store| {
+                store
+                    .list_items()?
+                    .into_iter()
+                    .map(|item| {
+                        let metadata = store.send_metadata(item.id)?;
+                        Ok(QueueItem {
+                            item,
+                            source_item_id: metadata.source_item_id,
+                            send_via: metadata.via,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, QueueError>>()
+            })
+            .map_err(Into::into),
+    )
+}
+
+#[derive(Serialize)]
+pub struct QueueItem {
+    #[serde(flatten)]
+    item: Item,
+    source_item_id: Option<i64>,
+    send_via: SendVia,
 }
 
 #[tauri::command]
@@ -1796,6 +1822,23 @@ pub async fn debug_export(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn queue_item_payload_flattens_the_item_and_keeps_delivery_fields() {
+        let mut store = crate::queue::test_util::memory_store();
+        let id = crate::queue::test_util::add_item(&mut store, "generated.mp4");
+        let item = store.get_item(id).unwrap();
+        let value = serde_json::to_value(super::QueueItem {
+            item,
+            source_item_id: Some(7),
+            send_via: crate::queue::store::SendVia::Copy,
+        })
+        .unwrap();
+        assert_eq!(value["id"], id);
+        assert_eq!(value["source_item_id"], 7);
+        assert_eq!(value["send_via"], "copy");
+        assert!(value.get("item").is_none());
+    }
+
     #[test]
     fn explorer_is_taken_from_the_windows_folder() {
         let exe = super::explorer_exe();

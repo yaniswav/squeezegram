@@ -8,6 +8,7 @@ import { listen } from "@tauri-apps/api/event"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { open } from "@tauri-apps/plugin-dialog"
+import type { DeliveryRoute as SendVia } from "./delivery"
 // `d.string`, `d.object`…: the decoders, namespaced so they read apart from the types.
 import * as d from "./decode"
 import {
@@ -87,6 +88,8 @@ export type ItemState =
 
 export type SendMode = "video" | "document" | "photo"
 
+export type { DeliveryRoute as SendVia } from "./delivery"
+
 /** `items.hold_reason`: "duplicate" | "watch_pending"; free text in SQLite. */
 export type HoldReason = string
 
@@ -128,6 +131,8 @@ export interface Item {
   updated_at: string
   /** Encoding choices of this file (Premium); null: the global settings apply. */
   encoding_override: EncodingOverride | null
+  source_item_id: number | null
+  send_via: SendVia
 }
 
 /** `ItemPatch`: only for items not started yet. */
@@ -230,6 +235,7 @@ export interface HistoryEntry {
   message_id: number | null
   sent_at: string
   imported_from: string | null
+  via: SendVia
 }
 
 export type { ClearScope }
@@ -983,6 +989,8 @@ const itemDecoder = d.object<Item>({
   created_at: d.string,
   updated_at: d.string,
   encoding_override: d.nullable(encodingOverrideDecoder),
+  source_item_id: d.nullable(d.number),
+  send_via: d.literals<SendVia>({ upload: true, copy: true, remote: true }),
 })
 
 const itemDeltaDecoder = d.object<ItemDelta>({
@@ -1045,6 +1053,7 @@ const historyEntryDecoder = d.object<HistoryEntry>({
   message_id: d.nullable(d.number),
   sent_at: d.string,
   imported_from: d.nullable(d.string),
+  via: d.literals<SendVia>({ upload: true, copy: true, remote: true }),
 })
 
 const proxySettingsDecoder = d.object<ProxySettings>({
@@ -1365,12 +1374,14 @@ export function queueAdd(
   destinationIds: number[],
   sendMode?: SendMode,
   caption?: string,
+  uploadOnce = false,
 ): Promise<number[]> {
   return call("queue_add", d.array(d.number), {
     paths,
     destinationIds,
     sendMode,
     caption,
+    uploadOnce,
   })
 }
 
@@ -1815,6 +1826,7 @@ function subscribe<T>(
 
   let stopped = false
   let stop: (() => void) | undefined
+
   // The core emits serde_json: the payload is JSON until decoded.
   const ready = listen<Json>(event, ({ payload }) => {
     let decoded: T

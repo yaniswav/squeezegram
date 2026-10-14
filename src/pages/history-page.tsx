@@ -207,6 +207,9 @@ export function HistoryPage({ focusTitle }: { focusTitle: boolean }) {
                     {t("history.column.mode")}
                   </th>
                   <th scope="col" className="px-3 py-2 text-start font-medium">
+                    {t("delivery.method")}
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-start font-medium">
                     {t("history.column.status")}
                   </th>
                   <th scope="col" className="px-4 py-2 text-start font-medium">
@@ -243,6 +246,9 @@ export function HistoryPage({ focusTitle }: { focusTitle: boolean }) {
                         {isMode(entry.mode)
                           ? t(`mode.${entry.mode}`)
                           : entry.mode}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {t(`delivery.${entry.via}`)}
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex flex-wrap gap-1">
