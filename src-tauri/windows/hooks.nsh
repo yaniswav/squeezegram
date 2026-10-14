@@ -29,6 +29,8 @@
 ; and its state stays empty: nothing is deleted. During an update ($UpdateMode = 1) Tauri never
 ; deletes; neither does this hook.
 
+!include "${__FILEDIR__}\appearance.nsh"
+
 ; The folders deleted on a real uninstall; a test script can point them elsewhere.
 !define /ifndef SQZ_LOCAL_DATA "$LOCALAPPDATA\squeezegram"
 !define /ifndef SQZ_ROAMING_DATA "$APPDATA\squeezegram"

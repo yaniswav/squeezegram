@@ -41,3 +41,47 @@ test("installer artwork uses the native NSIS dimensions and opaque RGB bitmaps",
     assert.equal(bitmap.readUInt32LE(10) + stride * height, bitmap.length)
   }
 })
+
+test("installer styling is declarative and keeps native wizard behavior", () => {
+  const hooks = readFileSync(new URL("windows/hooks.nsh", tauriRoot), "utf8")
+
+  const appearance = readFileSync(
+    new URL("windows/appearance.nsh", tauriRoot),
+    "utf8",
+  )
+
+  assert.equal(
+    hooks.match(/!include "\$\{__FILEDIR__\}\\appearance\.nsh"/g)?.length,
+    1,
+  )
+
+  const instructions = appearance
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith(";"))
+
+  assert.deepEqual(instructions, [
+    "!ifndef SQZ_INSTALLER_APPEARANCE",
+    "!define SQZ_INSTALLER_APPEARANCE",
+    'SetFont "Segoe UI" 10',
+    '!define MUI_BGCOLOR "F9FAFB"',
+    '!define MUI_TEXTCOLOR "1F2937"',
+    '!define MUI_INSTFILESPAGE_COLORS "1F2937 F9FAFB"',
+    '!define MUI_INSTFILESPAGE_PROGRESSBAR "smooth"',
+    "!endif",
+  ])
+})
+
+test("installer header artwork matches the wizard background", () => {
+  const header = readFileSync(
+    new URL(config.bundle.windows.nsis.headerImage, tauriRoot),
+  )
+
+  const pixelOffset = header.readUInt32LE(10)
+
+  // Bottom-left pixel, outside the wordmark/logo, in BMP's BGR channel order.
+  assert.deepEqual(
+    [...header.subarray(pixelOffset, pixelOffset + 3)],
+    [251, 250, 249],
+  )
+})

@@ -23,7 +23,8 @@ try {
             $format.Alignment = [Drawing.StringAlignment]::Center
             $format.LineAlignment = [Drawing.StringAlignment]::Center
             if ($kind -eq 'header') {
-                $graphics.Clear([Drawing.Color]::White)
+                # Match MUI_BGCOLOR in appearance.nsh so the header has no visible seam.
+                $graphics.Clear([Drawing.Color]::FromArgb(249, 250, 251))
                 $graphics.DrawImage($logo, 112, 12, 33, 33)
                 $font = [Drawing.Font]::new('Segoe UI', 12, [Drawing.FontStyle]::Regular, [Drawing.GraphicsUnit]::Pixel)
                 $graphics.DrawString('squeezegram', $font, [Drawing.Brushes]::Black,
