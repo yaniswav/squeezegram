@@ -29,8 +29,9 @@ use super::chats::{ChatType, chat_id};
 use super::json::{self as j, int, int_or_zero};
 use super::{Inner, TdBindings};
 use crate::transport::{
-    AuthState, Caption, EntityKind, Forbidden, MediaKind, Payload, PeerKind, Phase, Progress, Sent,
-    SentCandidate, SentProbe, Target, Thumbnail, TransportError, UploadRequest, Verdict,
+    AuthState, Caption, CopyRequest, EntityKind, Forbidden, MediaKind, Payload, PeerKind, Phase,
+    Progress, RemoteRequest, Sent, SentCandidate, SentProbe, Target, Thumbnail, TransportError,
+    UploadRequest, Verdict,
 };
 
 /// `searchChatMessages.limit` (at most 100) and the pages read for one reconciliation.
@@ -61,6 +62,13 @@ fn local_file(path: &Path) -> Result<Value, TransportError> {
         .to_str()
         .ok_or_else(|| TransportError::FileUnreadable("path is not valid Unicode".into()))?;
     Ok(json!({ "@type": "inputFileLocal", "path": text }))
+}
+
+fn remote_file(id: &str) -> Result<Value, TransportError> {
+    if id.is_empty() {
+        return Err(TransportError::Protocol("empty remote file id".into()));
+    }
+    Ok(json!({ "@type": "inputFileRemote", "id": id }))
 }
 
 /// `inputThumbnail`, or null ("pass null to skip thumbnail uploading").
@@ -102,11 +110,14 @@ pub fn formatted_text(caption: &Caption) -> Value {
     json!({ "@type": "formattedText", "text": caption.text, "entities": entities })
 }
 
-/// `inputMessageVideo` / `inputMessageDocument` / `inputMessagePhoto` (1.8.68 shapes).
-pub fn input_content(req: &UploadRequest) -> Result<Value, TransportError> {
-    let file = local_file(&req.path)?;
-    let caption = formatted_text(&req.caption);
-    Ok(match &req.payload {
+fn input_content_with_file(
+    payload: &Payload,
+    caption: &Caption,
+    file: Value,
+    local_thumbnails: bool,
+) -> Result<Value, TransportError> {
+    let caption = formatted_text(caption);
+    Ok(match payload {
         Payload::Video {
             duration_s,
             width,
@@ -118,7 +129,7 @@ pub fn input_content(req: &UploadRequest) -> Result<Value, TransportError> {
             "video": {
                 "@type": "inputVideo",
                 "video": file,
-                "thumbnail": thumbnail(thumb.as_ref())?,
+                "thumbnail": if local_thumbnails { thumbnail(thumb.as_ref())? } else { Value::Null },
                 "cover": null,
                 "start_timestamp": 0,
                 "added_sticker_file_ids": [],
@@ -137,7 +148,7 @@ pub fn input_content(req: &UploadRequest) -> Result<Value, TransportError> {
             "document": {
                 "@type": "inputDocument",
                 "document": file,
-                "thumbnail": thumbnail(thumb.as_ref())?,
+                "thumbnail": if local_thumbnails { thumbnail(thumb.as_ref())? } else { Value::Null },
                 // Document mode is explicit: never turned back into a video by TDLib.
                 "disable_content_type_detection": true,
             },
@@ -162,6 +173,20 @@ pub fn input_content(req: &UploadRequest) -> Result<Value, TransportError> {
     })
 }
 
+/// `inputMessageVideo` / `inputMessageDocument` / `inputMessagePhoto` (1.8.68 shapes).
+pub fn input_content(req: &UploadRequest) -> Result<Value, TransportError> {
+    input_content_with_file(&req.payload, &req.caption, local_file(&req.path)?, true)
+}
+
+pub fn remote_content(req: &RemoteRequest) -> Result<Value, TransportError> {
+    input_content_with_file(
+        &req.payload,
+        &req.caption,
+        remote_file(&req.remote_id)?,
+        false,
+    )
+}
+
 /// `messageTopicForum{forum_topic_id}`, or null for the whole chat.
 pub fn message_topic(target: &Target) -> Value {
     match target.topic_id {
@@ -170,31 +195,61 @@ pub fn message_topic(target: &Target) -> Value {
     }
 }
 
+fn send_options() -> Value {
+    json!({
+        "@type": "messageSendOptions",
+        "suggested_post_info": null,
+        "disable_notification": false,
+        "from_background": false,
+        "protect_content": false,
+        "allow_paid_broadcast": false,
+        "paid_message_star_count": 0,
+        "update_order_of_installed_sticker_sets": false,
+        "scheduling_state": null,
+        "effect_id": "0",
+        "sending_id": 0,
+        "only_preview": false,
+    })
+}
+
+fn send_body(chat_id: i64, target: &Target, content: Value) -> Value {
+    json!({
+        "@type": "sendMessage",
+        "chat_id": chat_id,
+        "topic_id": message_topic(target),
+        "reply_to": null,
+        "options": send_options(),
+        "reply_markup": null,
+        "input_message_content": content,
+    })
+}
+
 /// `sendMessage` with explicit `messageSendOptions`: `paid_message_star_count` is always 0
 /// (the app never pays Stars).
 pub fn send_message_body(chat_id: i64, req: &UploadRequest) -> Result<Value, TransportError> {
-    Ok(json!({
-        "@type": "sendMessage",
-        "chat_id": chat_id,
-        "topic_id": message_topic(&req.target),
-        "reply_to": null,
-        "options": {
-            "@type": "messageSendOptions",
-            "suggested_post_info": null,
-            "disable_notification": false,
-            "from_background": false,
-            "protect_content": false,
-            "allow_paid_broadcast": false,
-            "paid_message_star_count": 0,
-            "update_order_of_installed_sticker_sets": false,
-            "scheduling_state": null,
-            "effect_id": "0",
-            "sending_id": 0,
-            "only_preview": false,
-        },
-        "reply_markup": null,
-        "input_message_content": input_content(req)?,
-    }))
+    Ok(send_body(chat_id, &req.target, input_content(req)?))
+}
+
+pub fn copy_message_body(chat_id: i64, from_chat_id: i64, req: &CopyRequest) -> Value {
+    send_body(
+        chat_id,
+        &req.target,
+        json!({
+            "@type": "inputMessageForwarded",
+            "from_chat_id": from_chat_id,
+            "message_id": req.message_id,
+            "copy_options": {
+                "@type": "messageCopyOptions",
+                "send_copy": true,
+                "replace_caption": true,
+                "new_caption": formatted_text(&req.caption),
+            },
+        }),
+    )
+}
+
+pub fn remote_message_body(chat_id: i64, req: &RemoteRequest) -> Result<Value, TransportError> {
+    Ok(send_body(chat_id, &req.target, remote_content(req)?))
 }
 
 // ---------- error mapping ----------
@@ -285,23 +340,36 @@ pub fn map_send_error(
 
 // ---------- upload state ----------
 
-/// File id of the main file of a message content (the one whose `updateFile` is progress).
-pub fn main_file_id(content: &Value) -> Option<i64> {
+fn main_file(content: &Value) -> Option<&Value> {
     match j::kind(content) {
-        "messageVideo" => int(&content["video"]["video"], "id").ok(),
-        "messageDocument" => int(&content["document"]["document"], "id").ok(),
+        "messageVideo" => Some(&content["video"]["video"]),
+        "messageDocument" => Some(&content["document"]["document"]),
         "messagePhoto" => content["photo"]["sizes"]
             .as_array()?
             .iter()
             .filter_map(|size| {
                 let file = &size["photo"];
                 let bytes = j::size(file, "size").max(j::size(file, "expected_size"));
-                int(file, "id").ok().map(|id| (bytes, id))
+                int(file, "id").ok().map(|_| (bytes, file))
             })
-            .max()
-            .map(|(_, id)| id),
+            .max_by_key(|(bytes, _)| *bytes)
+            .map(|(_, file)| file),
         _ => None,
     }
+}
+
+/// File id of the main file of a message content (the one whose `updateFile` is progress).
+pub fn main_file_id(content: &Value) -> Option<i64> {
+    int(main_file(content)?, "id").ok()
+}
+
+/// Opaque TDLib remote id of the main file. It may be absent even after a successful send;
+/// callers then fall back to another copy or a local upload.
+pub fn remote_file_id(content: &Value) -> Option<String> {
+    main_file(content)?["remote"]["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
 }
 
 #[derive(Debug)]
@@ -373,6 +441,7 @@ impl Tracker {
                         date_unix: int(message, "date")?,
                         file_name: self.file_name.clone(),
                         size: self.size,
+                        remote_id: remote_file_id(&message["content"]),
                     })
                 });
                 Event::Succeeded(sent)
@@ -445,6 +514,39 @@ impl UploadLog {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ReuseKind {
+    Copy,
+    Remote,
+}
+
+impl ReuseKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+            Self::Remote => "remote",
+        }
+    }
+}
+
+struct ReuseLog {
+    chat: String,
+    started: Instant,
+    media: MediaKind,
+    limit: u64,
+    kind: ReuseKind,
+}
+
+struct ReuseSend {
+    chat_id: i64,
+    media: MediaKind,
+    file_name: String,
+    size: u64,
+    body: Value,
+    kind: ReuseKind,
+    limit: u64,
+}
+
 impl<B: TdBindings> Inner<B> {
     /// `deleteMessages(chat_id, [id], revoke = true)` under the request timeout.
     async fn delete_message(&self, chat_id: i64, message_id: i64) -> Result<(), TransportError> {
@@ -485,6 +587,301 @@ impl<B: TdBindings> Inner<B> {
             "Telegram refused the message; nothing was sent"
         );
         mapped
+    }
+
+    async fn reuse_send_failed(
+        &self,
+        log: &ReuseLog,
+        chat_id: i64,
+        failed_id: i64,
+        error: &Value,
+        sending_state: &Value,
+    ) -> TransportError {
+        let mapped = map_send_error(error, sending_state, log.media, log.limit);
+        let deleted = self.delete_message(chat_id, failed_id).await;
+        let (code, _) = mapped.code_and_params();
+        tracing::warn!(
+            event = "reuse_send_failed",
+            via = log.kind.as_str(),
+            chat = log.chat.as_str(),
+            dur_ms = crate::logging::ms_since(log.started),
+            error_code = code,
+            tg_code = int_or_zero(error, "code"),
+            tg_message = error["message"].as_str().unwrap_or_default(),
+            retry_after_s = match &mapped {
+                TransportError::FloodWait { retry_after } => Some(retry_after.as_secs()),
+                _ => None,
+            },
+            failed_message_deleted = deleted.is_ok(),
+            "Telegram refused the reused message; nothing was sent"
+        );
+        mapped
+    }
+
+    async fn send_reuse(
+        &self,
+        send: ReuseSend,
+        cancel: CancellationToken,
+    ) -> Result<Sent, TransportError> {
+        if cancel.is_cancelled() {
+            return Err(TransportError::Cancelled);
+        }
+        let log = ReuseLog {
+            chat: redact(send.chat_id),
+            started: Instant::now(),
+            media: send.media,
+            limit: send.limit,
+            kind: send.kind,
+        };
+        // Subscribe before `sendMessage`; copies deliberately do not track `updateFile`.
+        let mut updates = self.listeners.subscribe();
+        let mut auth = self.auth.subscribe();
+        let message = match self
+            .request("sendMessage", send.body, self.config.request_timeout)
+            .await
+        {
+            Ok(message) => message,
+            Err(TransportError::Timeout(what)) => return Err(TransportError::Timeout(what)),
+            Err(error) => {
+                let error = match error {
+                    TransportError::Other { code, message } => map_send_error(
+                        &json!({ "@type": "error", "code": code, "message": message }),
+                        &Value::Null,
+                        send.media,
+                        send.limit,
+                    ),
+                    other => other,
+                };
+                tracing::warn!(
+                    event = "reuse_send_failed",
+                    via = send.kind.as_str(),
+                    chat = log.chat.as_str(),
+                    dur_ms = crate::logging::ms_since(log.started),
+                    error_code = error.code_and_params().0,
+                    step = "sendMessage",
+                    "sendMessage refused; nothing was sent"
+                );
+                return Err(error);
+            }
+        };
+        j::expect(&message, "message")?;
+        let temp_id = int(&message, "id")?;
+        if int(&message, "chat_id")? != send.chat_id {
+            return Err(TransportError::Protocol(
+                "sendMessage: message of another chat".into(),
+            ));
+        }
+        let mut tracker = Tracker {
+            chat_id: send.chat_id,
+            temp_id,
+            // Server-side copies and remote reuse have no local byte progress to report.
+            file_id: None,
+            total: send.size,
+            file_name: send.file_name,
+            size: send.size,
+            awaiting: false,
+        };
+        tracing::info!(
+            event = "reuse_send_accepted",
+            via = send.kind.as_str(),
+            chat = log.chat.as_str(),
+            media = send.media.as_str(),
+            size = send.size,
+            dur_ms = crate::logging::ms_since(log.started),
+            "temporary message created, waiting for the server"
+        );
+        loop {
+            tokio::select! {
+                biased;
+                update = updates.recv() => {
+                    let Some(update) = update else {
+                        return Err(TransportError::Protocol("TDLib stopped during the send".into()));
+                    };
+                    match tracker.on_update(&update) {
+                        Event::Nothing | Event::Progress(_) => {}
+                        Event::Succeeded(sent) => return sent,
+                        Event::Failed { error, sending_state, failed_id } => {
+                            return Err(self
+                                .reuse_send_failed(&log, send.chat_id, failed_id, &error, &sending_state)
+                                .await);
+                        }
+                        Event::Deleted => {
+                            return Err(TransportError::Protocol(
+                                "the message was deleted while being sent".into(),
+                            ));
+                        }
+                    }
+                }
+                () = cancel.cancelled() => {
+                    return self.cancel_reuse(&log, &mut tracker, &mut updates).await;
+                }
+                changed = auth.changed() => {
+                    let closed = changed.is_err()
+                        || matches!(
+                            *auth.borrow_and_update(),
+                            AuthState::Closed | AuthState::LoggingOut | AuthState::StartFailed(_)
+                        );
+                    if closed {
+                        return Err(TransportError::Protocol("TDLib closed during the send".into()));
+                    }
+                }
+            }
+        }
+    }
+
+    async fn cancel_reuse(
+        &self,
+        log: &ReuseLog,
+        tracker: &mut Tracker,
+        updates: &mut super::Subscription,
+    ) -> Result<Sent, TransportError> {
+        while let Ok(update) = updates.try_recv() {
+            match tracker.on_update(&update) {
+                Event::Succeeded(sent) => {
+                    tracing::info!(
+                        event = "reuse_send_cancel",
+                        via = log.kind.as_str(),
+                        step = "too_late",
+                        chat = log.chat.as_str(),
+                        "cancel arrived after the message was sent"
+                    );
+                    return sent;
+                }
+                Event::Failed {
+                    error,
+                    sending_state,
+                    failed_id,
+                } => {
+                    return Err(self
+                        .reuse_send_failed(log, tracker.chat_id, failed_id, &error, &sending_state)
+                        .await);
+                }
+                _ => {}
+            }
+        }
+        let deleted = self.delete_message(tracker.chat_id, tracker.temp_id).await;
+        let grace = tokio::time::sleep(self.config.cancel_grace);
+        tokio::pin!(grace);
+        loop {
+            tokio::select! {
+                biased;
+                update = updates.recv() => {
+                    let Some(update) = update else { break };
+                    match tracker.on_update(&update) {
+                        Event::Succeeded(sent) => {
+                            tracing::info!(event = "reuse_send_cancel", via = log.kind.as_str(), step = "too_late", chat = log.chat.as_str(), "the message went out before the cancel took effect");
+                            return sent;
+                        }
+                        Event::Failed { .. } | Event::Deleted => break,
+                        _ => {}
+                    }
+                }
+                () = &mut grace => break,
+            }
+        }
+        match deleted {
+            Ok(()) => {
+                tracing::info!(
+                    event = "reuse_send_cancel",
+                    via = log.kind.as_str(),
+                    step = "deleted",
+                    chat = log.chat.as_str(),
+                    dur_ms = crate::logging::ms_since(log.started),
+                    "temporary message deleted, send cancelled"
+                );
+                Err(TransportError::Cancelled)
+            }
+            Err(error) => {
+                let code = error.code_and_params().0;
+                tracing::warn!(
+                    event = "reuse_send_cancel",
+                    via = log.kind.as_str(),
+                    step = "delete_failed",
+                    chat = log.chat.as_str(),
+                    error_code = code,
+                    error = %error,
+                    "deleteMessages failed: the message may have been sent"
+                );
+                Err(TransportError::Protocol(format!(
+                    "cancel: deleteMessages failed ({code})"
+                )))
+            }
+        }
+    }
+
+    pub(super) async fn send_copy(
+        &self,
+        req: CopyRequest,
+        cancel: CancellationToken,
+    ) -> Result<Sent, TransportError> {
+        if cancel.is_cancelled() {
+            return Err(TransportError::Cancelled);
+        }
+        let me = self.cached_me().await?;
+        let chat = self.known_chat(&req.target.peer).await?;
+        let destination_chat_id = chat_id(&chat)?;
+        let check = self
+            .check_rights(&chat, &req.target, req.media, me.user_id, false)
+            .await?;
+        if let Verdict::Denied(forbidden) = check.verdict {
+            return Err(TransportError::WriteForbidden(forbidden));
+        }
+        let from_chat_id = if req.from.peer == req.target.peer {
+            destination_chat_id
+        } else {
+            chat_id(&self.known_chat(&req.from.peer).await?)?
+        };
+        let body = copy_message_body(destination_chat_id, from_chat_id, &req);
+        self.send_reuse(
+            ReuseSend {
+                chat_id: destination_chat_id,
+                media: req.media,
+                file_name: req.file_name,
+                size: req.size,
+                body,
+                kind: ReuseKind::Copy,
+                limit: me.upload_limit_bytes,
+            },
+            cancel,
+        )
+        .await
+    }
+
+    pub(super) async fn send_remote(
+        &self,
+        req: RemoteRequest,
+        cancel: CancellationToken,
+    ) -> Result<Sent, TransportError> {
+        if cancel.is_cancelled() {
+            return Err(TransportError::Cancelled);
+        }
+        if req.remote_id.is_empty() {
+            return Err(TransportError::Protocol("empty remote file id".into()));
+        }
+        let me = self.cached_me().await?;
+        let media = req.payload.media_kind();
+        let chat = self.known_chat(&req.target.peer).await?;
+        let chat_id = chat_id(&chat)?;
+        let check = self
+            .check_rights(&chat, &req.target, media, me.user_id, false)
+            .await?;
+        if let Verdict::Denied(forbidden) = check.verdict {
+            return Err(TransportError::WriteForbidden(forbidden));
+        }
+        let body = remote_message_body(chat_id, &req)?;
+        self.send_reuse(
+            ReuseSend {
+                chat_id,
+                media,
+                file_name: req.file_name,
+                size: req.size,
+                body,
+                kind: ReuseKind::Remote,
+                limit: me.upload_limit_bytes,
+            },
+            cancel,
+        )
+        .await
     }
 
     pub(super) async fn upload(
@@ -1192,6 +1589,41 @@ mod tests {
             (&json!(800), &json!(600))
         );
         assert_eq!(content["photo"]["video"], Value::Null);
+
+        let copy = CopyRequest {
+            from: Target {
+                peer: Peer {
+                    kind: PeerKind::User,
+                    raw_id: 9,
+                },
+                topic_id: None,
+            },
+            message_id: 11,
+            target: video.target,
+            media: MediaKind::Video,
+            caption: video.caption.clone(),
+            file_name: "a_sq.mp4".into(),
+            size: 10,
+        };
+        let forwarded = copy_message_body(-1_000_000_000_005, 9, &copy);
+        assert_eq!(
+            forwarded["topic_id"],
+            json!({ "@type": "messageTopicForum", "forum_topic_id": 7 })
+        );
+        assert_eq!(
+            forwarded["input_message_content"],
+            json!({
+                "@type": "inputMessageForwarded",
+                "from_chat_id": 9,
+                "message_id": 11,
+                "copy_options": {
+                    "@type": "messageCopyOptions",
+                    "send_copy": true,
+                    "replace_caption": true,
+                    "new_caption": formatted_text(&copy.caption),
+                },
+            })
+        );
     }
 
     #[test]
@@ -1206,6 +1638,11 @@ mod tests {
             { "type": "y", "photo": { "id": 14, "size": 0, "expected_size": 5000 } },
         ] } });
         assert_eq!(main_file_id(&photo), Some(14));
+        assert_eq!(remote_file_id(&photo), None);
+        let with_remote = json!({ "@type": "messageDocument", "document": {
+            "document": { "id": 12, "remote": { "id": "opaque" } }
+        } });
+        assert_eq!(remote_file_id(&with_remote).as_deref(), Some("opaque"));
         assert_eq!(main_file_id(&json!({ "@type": "messageText" })), None);
     }
 

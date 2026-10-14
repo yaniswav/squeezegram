@@ -453,6 +453,59 @@ pub struct UploadRequest {
     pub limit_bytes: Option<u64>,
 }
 
+/// Copy a message Telegram already holds. The source and destination may be forum topics;
+/// TDLib only needs the source chat and message id, while `target.topic_id` selects the
+/// destination topic.
+#[derive(Clone)]
+pub struct CopyRequest {
+    pub from: Target,
+    pub message_id: i64,
+    pub target: Target,
+    pub media: MediaKind,
+    pub caption: Caption,
+    pub file_name: String,
+    pub size: u64,
+}
+
+impl fmt::Debug for CopyRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CopyRequest")
+            .field("from", &REDACTED)
+            .field("message_id", &self.message_id)
+            .field("target", &REDACTED)
+            .field("media", &self.media)
+            .field("caption_chars", &self.caption.text.chars().count())
+            .field("file_name", &self.file_name)
+            .field("size", &self.size)
+            .finish()
+    }
+}
+
+/// Send media again from Telegram's remote file cache, without reading or uploading a local
+/// file. This is the fallback when Telegram refuses a message copy.
+#[derive(Clone)]
+pub struct RemoteRequest {
+    pub remote_id: String,
+    pub target: Target,
+    pub payload: Payload,
+    pub caption: Caption,
+    pub file_name: String,
+    pub size: u64,
+}
+
+impl fmt::Debug for RemoteRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RemoteRequest")
+            .field("remote_id", &REDACTED)
+            .field("target", &REDACTED)
+            .field("payload", &self.payload)
+            .field("caption_chars", &self.caption.text.chars().count())
+            .field("file_name", &self.file_name)
+            .field("size", &self.size)
+            .finish()
+    }
+}
+
 /// There is no `Waiting { retry_after }` phase: the orchestrator carries the wait.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -470,12 +523,27 @@ pub struct Progress {
     pub total: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Sent {
     pub message_id: i64,
     pub date_unix: i64,
     pub file_name: String,
     pub size: u64,
+    /// TDLib `remoteFile.id`; opaque and never logged. `None` if Telegram omitted it, in
+    /// which case a later destination must copy the message or upload the local file.
+    pub remote_id: Option<String>,
+}
+
+impl fmt::Debug for Sent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sent")
+            .field("message_id", &self.message_id)
+            .field("date_unix", &self.date_unix)
+            .field("file_name", &self.file_name)
+            .field("size", &self.size)
+            .field("remote_id", &self.remote_id.as_ref().map(|_| REDACTED))
+            .finish()
+    }
 }
 
 /// Fingerprint for the reconciliation of an `unknown` item.
@@ -650,6 +718,23 @@ pub trait TelegramTransport: Send + Sync {
         cancel: CancellationToken,
     ) -> Result<Sent, TransportError>;
 
+    /// Copy a confirmed message to another destination, replacing its caption. There is no
+    /// byte progress for a server-side copy; success is still confirmed by
+    /// `updateMessageSendSucceeded`.
+    async fn send_copy(
+        &self,
+        req: CopyRequest,
+        cancel: CancellationToken,
+    ) -> Result<Sent, TransportError>;
+
+    /// Reuse TDLib's opaque remote file id when a copy is unavailable. There is no local
+    /// upload and therefore no byte progress.
+    async fn send_remote(
+        &self,
+        req: RemoteRequest,
+        cancel: CancellationToken,
+    ) -> Result<Sent, TransportError>;
+
     /// Read only: messages of the destination that may be this upload; the user decides.
     async fn verify_sent(&self, probe: &SentProbe) -> Result<Vec<SentCandidate>, TransportError>;
 
@@ -763,6 +848,22 @@ impl TelegramTransport for NoTransport {
         self.refuse()
     }
 
+    async fn send_copy(
+        &self,
+        _: CopyRequest,
+        _: CancellationToken,
+    ) -> Result<Sent, TransportError> {
+        self.refuse()
+    }
+
+    async fn send_remote(
+        &self,
+        _: RemoteRequest,
+        _: CancellationToken,
+    ) -> Result<Sent, TransportError> {
+        self.refuse()
+    }
+
     async fn verify_sent(&self, _: &SentProbe) -> Result<Vec<SentCandidate>, TransportError> {
         self.refuse()
     }
@@ -854,6 +955,36 @@ mod tests {
         }
         assert!(text.contains("StartFailed(TG_PROXY_FAILED)"), "{text}");
         assert!(text.contains("is_premium: true"));
+
+        let remote = "opaque-remote-secret";
+        let sent = Sent {
+            message_id: 1,
+            date_unix: 2,
+            file_name: "a.mp4".into(),
+            size: 3,
+            remote_id: Some(remote.into()),
+        };
+        let request = RemoteRequest {
+            remote_id: remote.into(),
+            target: Target {
+                peer: Peer {
+                    kind: PeerKind::User,
+                    raw_id: 42,
+                },
+                topic_id: None,
+            },
+            payload: Payload::Document { thumbnail: None },
+            caption: Caption {
+                text: "private caption".into(),
+                entities: Vec::new(),
+            },
+            file_name: "a.mp4".into(),
+            size: 3,
+        };
+        let text = format!("{sent:?} {request:?}");
+        for secret in [remote, "private caption", "raw_id: 42"] {
+            assert!(!text.contains(secret), "{text}");
+        }
     }
 
     #[test]

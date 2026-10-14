@@ -1217,6 +1217,7 @@ mod tests {
             date_unix: 0,
             file_name: "a".into(),
             size: 1,
+            remote_id: None,
         };
         assert_eq!(outcome(Ok(sent)), Ok(SendOutcome::Sent { message_id: 9 }));
         let wait = Duration::from_secs(70);

@@ -30,8 +30,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::proxy::Proxy;
 use super::{
-    AuthInput, AuthState, ChatFolder, Dialog, Me, MediaKind, Peer, Progress, SendCheck, Sent,
-    SentCandidate, SentProbe, Target, TelegramTransport, Topic, TransportError, UploadRequest,
+    AuthInput, AuthState, ChatFolder, CopyRequest, Dialog, Me, MediaKind, Peer, Progress,
+    RemoteRequest, SendCheck, Sent, SentCandidate, SentProbe, Target, TelegramTransport, Topic,
+    TransportError, UploadRequest,
 };
 use crate::media::plan::MIB;
 
@@ -1058,6 +1059,22 @@ impl<B: TdBindings> TelegramTransport for TdlibJson<B> {
         cancel: CancellationToken,
     ) -> Result<Sent, TransportError> {
         self.inner.upload(req, progress, cancel).await
+    }
+
+    async fn send_copy(
+        &self,
+        req: CopyRequest,
+        cancel: CancellationToken,
+    ) -> Result<Sent, TransportError> {
+        self.inner.send_copy(req, cancel).await
+    }
+
+    async fn send_remote(
+        &self,
+        req: RemoteRequest,
+        cancel: CancellationToken,
+    ) -> Result<Sent, TransportError> {
+        self.inner.send_remote(req, cancel).await
     }
 
     async fn verify_sent(&self, probe: &SentProbe) -> Result<Vec<SentCandidate>, TransportError> {

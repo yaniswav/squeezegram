@@ -19,7 +19,9 @@ use super::*;
 use crate::logging::testing::TestJournal;
 use crate::queue::orchestrator::{SendError, SendOutcome};
 use crate::transport::stage::outcome;
-use crate::transport::{Caption, Forbidden, Payload, PeerKind, Phase, Verdict};
+use crate::transport::{
+    Caption, CopyRequest, Forbidden, Payload, PeerKind, Phase, RemoteRequest, Verdict,
+};
 
 const DIALOGS: &str = include_str!("fixtures/dialogs.json");
 const DIALOGS_WITHOUT_SAVED: &str = include_str!("fixtures/dialogs_without_saved.json");
@@ -49,6 +51,7 @@ const FAILED: i64 = 2_097_154;
 const FINAL: i64 = 3_145_728;
 const NOT_BEFORE: i64 = 1_760_000_000;
 const CAPTION: &str = "caption text";
+const REMOTE_ID: &str = "remote-video-opaque";
 
 fn peer(kind: PeerKind, raw_id: i64) -> Peer {
     Peer { kind, raw_id }
@@ -679,6 +682,7 @@ async fn upload_succeeds_only_on_update_message_send_succeeded() {
     assert_eq!(sent.date_unix, 1_760_000_000);
     assert_eq!(sent.file_name, "clip_sq.mp4");
     assert_eq!(sent.size, 1000);
+    assert_eq!(sent.remote_id.as_deref(), Some(REMOTE_ID));
     assert_eq!(
         phases,
         [
@@ -721,6 +725,157 @@ async fn upload_succeeds_only_on_update_message_send_succeeded() {
     assert!(!text.contains(CAPTION), "caption leaked");
     assert!(!text.contains("777000001"), "raw chat id leaked");
     finish(&transport, "upload_ok").await;
+}
+
+#[tokio::test]
+async fn a_copy_replaces_the_caption_without_file_progress() {
+    let dir = TempDir::new("m1-copy");
+    let journal = TestJournal::new(&dir.path().join("logs"), "debug");
+    let transport = started(&[UPLOAD_OK], &dir).await;
+    let sent = transport
+        .send_copy(
+            CopyRequest {
+                from: saved(),
+                message_id: 123,
+                target: saved(),
+                media: MediaKind::Video,
+                caption: Caption {
+                    text: "different caption".into(),
+                    entities: Vec::new(),
+                },
+                file_name: "clip_sq.mp4".into(),
+                size: 1000,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent.message_id, FINAL);
+    assert_eq!(sent.remote_id.as_deref(), Some(REMOTE_ID));
+    let send = &transport.bindings().sent_of("sendMessage")[0];
+    let content = &send["input_message_content"];
+    assert_eq!(content["@type"], "inputMessageForwarded");
+    assert_eq!(content["from_chat_id"], ME);
+    assert_eq!(content["message_id"], 123);
+    assert_eq!(content["copy_options"]["@type"], "messageCopyOptions");
+    assert_eq!(content["copy_options"]["send_copy"], true);
+    assert_eq!(content["copy_options"]["replace_caption"], true);
+    assert_eq!(
+        content["copy_options"]["new_caption"]["text"],
+        "different caption"
+    );
+    let text = journal.text();
+    assert!(!text.contains(REMOTE_ID), "remote id leaked");
+    assert!(text.contains("reuse_send_accepted"));
+    finish(&transport, "copy_ok").await;
+}
+
+#[tokio::test]
+async fn a_remote_file_is_sent_without_a_local_path_or_thumbnail() {
+    let dir = TempDir::new("m1-remote");
+    let transport = started(&[UPLOAD_OK], &dir).await;
+    let sent = transport
+        .send_remote(
+            RemoteRequest {
+                remote_id: REMOTE_ID.into(),
+                target: saved(),
+                payload: Payload::Video {
+                    duration_s: 61,
+                    width: 1920,
+                    height: 1080,
+                    supports_streaming: true,
+                    thumbnail: Some(crate::transport::Thumbnail {
+                        path: dir.path().join("does-not-need-to-exist.jpg"),
+                        width: 320,
+                        height: 180,
+                    }),
+                },
+                caption: Caption {
+                    text: CAPTION.into(),
+                    entities: Vec::new(),
+                },
+                file_name: "clip_sq.mp4".into(),
+                size: 1000,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent.remote_id.as_deref(), Some(REMOTE_ID));
+    let send = &transport.bindings().sent_of("sendMessage")[0];
+    let video = &send["input_message_content"]["video"];
+    assert_eq!(video["video"]["@type"], "inputFileRemote");
+    assert_eq!(video["video"]["id"], REMOTE_ID);
+    assert_eq!(video["thumbnail"], Value::Null);
+    finish(&transport, "remote_ok").await;
+}
+
+#[tokio::test]
+async fn a_failed_copy_is_typed_and_its_temporary_message_is_deleted() {
+    let dir = TempDir::new("m1-copy-failed");
+    let transport = started(&[UPLOAD_FAILED], &dir).await;
+    let result = transport
+        .send_copy(
+            CopyRequest {
+                from: saved(),
+                message_id: 123,
+                target: saved(),
+                media: MediaKind::Video,
+                caption: Caption::default(),
+                file_name: "clip_sq.mp4".into(),
+                size: 1000,
+            },
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(TransportError::Other { code: 400, .. })
+    ));
+    assert_eq!(
+        transport.bindings().sent_of("deleteMessages")[0]["message_ids"],
+        json!([FAILED])
+    );
+    finish(&transport, "copy_failed").await;
+}
+
+#[tokio::test]
+async fn cancelling_a_copy_deletes_its_temporary_message() {
+    let dir = TempDir::new("m1-copy-cancel");
+    let transport = started(&[UPLOAD_CANCEL], &dir).await;
+    let cancel = CancellationToken::new();
+    let task = {
+        let transport = Arc::clone(&transport);
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            transport
+                .send_copy(
+                    CopyRequest {
+                        from: saved(),
+                        message_id: 123,
+                        target: saved(),
+                        media: MediaKind::Video,
+                        caption: Caption::default(),
+                        file_name: "clip_sq.mp4".into(),
+                        size: 1000,
+                    },
+                    cancel,
+                )
+                .await
+        })
+    };
+    until("sendMessage", || {
+        !transport.bindings().sent_of("sendMessage").is_empty()
+    })
+    .await;
+    cancel.cancel();
+    let result = task.await.unwrap();
+    assert!(matches!(result, Err(TransportError::Cancelled)));
+    assert_eq!(
+        transport.bindings().sent_of("deleteMessages")[0]["message_ids"],
+        json!([TEMP])
+    );
+    finish(&transport, "copy_cancel").await;
 }
 
 #[tokio::test]

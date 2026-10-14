@@ -22,9 +22,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::proxy::Proxy;
 use super::{
-    AuthInput, AuthState, ChatFolder, ChatKind, Dialog, Forbidden, Me, MediaKind, Payload, Peer,
-    PeerKind, Progress, SendCheck, Sent, SentCandidate, SentProbe, SlowMode, Target,
-    TelegramTransport, Topic, TransportError, UploadRequest, Verdict,
+    AuthInput, AuthState, ChatFolder, ChatKind, CopyRequest, Dialog, Forbidden, Me, MediaKind,
+    Payload, Peer, PeerKind, Progress, RemoteRequest, SendCheck, Sent, SentCandidate, SentProbe,
+    SlowMode, Target, TelegramTransport, Topic, TransportError, UploadRequest, Verdict,
 };
 
 pub const MOCK_CODE: &str = "12345";
@@ -188,6 +188,7 @@ struct Message {
     size: u64,
     caption: String,
     date_unix: i64,
+    remote_id: String,
 }
 
 #[derive(Default)]
@@ -195,6 +196,8 @@ struct Script {
     flood_waits: VecDeque<Duration>,
     failures: VecDeque<TransportError>,
     stalls: VecDeque<Duration>,
+    copy_failures: VecDeque<TransportError>,
+    remote_failures: VecDeque<TransportError>,
 }
 
 struct MockState {
@@ -206,6 +209,8 @@ struct MockState {
     messages: Vec<Message>,
     next_message_id: i64,
     uploads: usize,
+    copies: usize,
+    remote_sends: usize,
     /// Calls to `can_send`.
     checks: usize,
     /// The thumbnail of each video upload: its size and whether the file was there.
@@ -241,6 +246,8 @@ impl MockTransport {
                 messages: Vec::new(),
                 next_message_id: 1,
                 uploads: 0,
+                copies: 0,
+                remote_sends: 0,
                 checks: 0,
                 thumbnails: Vec::new(),
                 revoked: Vec::new(),
@@ -308,6 +315,16 @@ impl MockTransport {
         self.lock().script.stalls.push_back(duration);
     }
 
+    /// Refuses the next server-side copy after local destination checks.
+    pub fn push_copy_failure(&self, error: TransportError) {
+        self.lock().script.copy_failures.push_back(error);
+    }
+
+    /// Refuses the next remote-file send after local destination checks.
+    pub fn push_remote_failure(&self, error: TransportError) {
+        self.lock().script.remote_failures.push_back(error);
+    }
+
     /// The phone scanned the QR code.
     pub fn confirm_qr(&self) {
         if matches!(*self.auth.borrow(), AuthState::WaitQr { .. }) {
@@ -327,6 +344,7 @@ impl MockTransport {
         let mut state = self.lock();
         let id = state.next_message_id;
         state.next_message_id += 1;
+        let remote_id = format!("mock-remote-{id}");
         state.messages.push(Message {
             id,
             target,
@@ -335,6 +353,7 @@ impl MockTransport {
             size,
             caption: String::new(),
             date_unix,
+            remote_id,
         });
         id
     }
@@ -347,6 +366,14 @@ impl MockTransport {
     /// Calls to `upload`, whatever their outcome.
     pub fn uploads(&self) -> usize {
         self.lock().uploads
+    }
+
+    pub fn copies(&self) -> usize {
+        self.lock().copies
+    }
+
+    pub fn remote_sends(&self) -> usize {
+        self.lock().remote_sends
     }
 
     /// Calls to `can_send`: what a pre-send check costs in TDLib requests.
@@ -817,6 +844,7 @@ impl TelegramTransport for MockTransport {
         let mut state = self.lock();
         let id = state.next_message_id;
         state.next_message_id += 1;
+        let remote_id = format!("mock-remote-{id}");
         state.messages.push(Message {
             id,
             target: req.target,
@@ -825,12 +853,112 @@ impl TelegramTransport for MockTransport {
             size: req.size,
             caption: req.caption.text,
             date_unix,
+            remote_id: remote_id.clone(),
         });
         Ok(Sent {
             message_id: id,
             date_unix,
             file_name,
             size: req.size,
+            remote_id: Some(remote_id),
+        })
+    }
+
+    async fn send_copy(
+        &self,
+        req: CopyRequest,
+        cancel: CancellationToken,
+    ) -> Result<Sent, TransportError> {
+        self.ensure_ready()?;
+        if cancel.is_cancelled() {
+            return Err(TransportError::Cancelled);
+        }
+        if let Verdict::Denied(forbidden) = self.current_check(&req.target, req.media)?.verdict {
+            return Err(TransportError::WriteForbidden(forbidden));
+        }
+        let mut state = self.lock();
+        state.copies += 1;
+        if let Some(error) = state.script.copy_failures.pop_front() {
+            return Err(error);
+        }
+        let source = state
+            .messages
+            .iter()
+            .find(|message| message.id == req.message_id && message.target.peer == req.from.peer)
+            .cloned()
+            .ok_or_else(|| rejected("MESSAGE_ID_INVALID"))?;
+        if source.kind != req.media {
+            return Err(TransportError::Protocol(
+                "copy source media does not match the request".into(),
+            ));
+        }
+        let id = state.next_message_id;
+        state.next_message_id += 1;
+        let date_unix = now_unix();
+        state.messages.push(Message {
+            id,
+            target: req.target,
+            kind: req.media,
+            file_name: req.file_name.clone(),
+            size: req.size,
+            caption: req.caption.text,
+            date_unix,
+            remote_id: source.remote_id.clone(),
+        });
+        Ok(Sent {
+            message_id: id,
+            date_unix,
+            file_name: req.file_name,
+            size: req.size,
+            remote_id: Some(source.remote_id),
+        })
+    }
+
+    async fn send_remote(
+        &self,
+        req: RemoteRequest,
+        cancel: CancellationToken,
+    ) -> Result<Sent, TransportError> {
+        self.ensure_ready()?;
+        if cancel.is_cancelled() {
+            return Err(TransportError::Cancelled);
+        }
+        let media = req.payload.media_kind();
+        if let Verdict::Denied(forbidden) = self.current_check(&req.target, media)?.verdict {
+            return Err(TransportError::WriteForbidden(forbidden));
+        }
+        let mut state = self.lock();
+        state.remote_sends += 1;
+        if let Some(error) = state.script.remote_failures.pop_front() {
+            return Err(error);
+        }
+        if req.remote_id.is_empty()
+            || !state
+                .messages
+                .iter()
+                .any(|message| message.remote_id == req.remote_id && message.kind == media)
+        {
+            return Err(rejected("FILE_REFERENCE_INVALID"));
+        }
+        let id = state.next_message_id;
+        state.next_message_id += 1;
+        let date_unix = now_unix();
+        state.messages.push(Message {
+            id,
+            target: req.target,
+            kind: media,
+            file_name: req.file_name.clone(),
+            size: req.size,
+            caption: req.caption.text,
+            date_unix,
+            remote_id: req.remote_id.clone(),
+        });
+        Ok(Sent {
+            message_id: id,
+            date_unix,
+            file_name: req.file_name,
+            size: req.size,
+            remote_id: Some(req.remote_id),
         })
     }
 
@@ -914,7 +1042,7 @@ mod tests {
 
     use super::*;
     use crate::queue::test_util::TestDir;
-    use crate::transport::{Caption, Payload, Phase};
+    use crate::transport::{Caption, CopyRequest, Payload, Phase, RemoteRequest};
 
     fn whole(peer: Peer) -> Target {
         Target {
@@ -1170,6 +1298,137 @@ mod tests {
         assert_eq!(phases.last(), Some(&(Phase::AwaitingServer, 1000)));
         assert!(phases.windows(2).all(|w| w[0].1 <= w[1].1), "monotonic");
         assert_eq!(mock.sent().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn copy_and_remote_reuse_keep_the_file_and_replace_the_caption() {
+        let dir = TestDir::new("mock-reuse");
+        let path = PathBuf::from(dir.file("clip_sq.mp4", &[0u8; 1000]));
+        let mock = MockTransport::authorized();
+        let source_target = whole(MOCK_SAVED);
+        let (tx, _rx) = mpsc::channel(64);
+        let source = mock
+            .upload(
+                request(path, source_target, video()),
+                tx,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let remote_id = source.remote_id.clone().unwrap();
+        let copy = mock
+            .send_copy(
+                CopyRequest {
+                    from: source_target,
+                    message_id: source.message_id,
+                    target: Target {
+                        peer: MOCK_FORUM,
+                        topic_id: Some(2),
+                    },
+                    media: MediaKind::Video,
+                    caption: Caption {
+                        text: "copy caption".into(),
+                        entities: Vec::new(),
+                    },
+                    file_name: source.file_name.clone(),
+                    size: source.size,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(copy.remote_id.as_deref(), Some(remote_id.as_str()));
+
+        let remote = mock
+            .send_remote(
+                RemoteRequest {
+                    remote_id: remote_id.clone(),
+                    target: whole(MOCK_ARCHIVED_CHAT),
+                    payload: video(),
+                    caption: Caption {
+                        text: "remote caption".into(),
+                        entities: Vec::new(),
+                    },
+                    file_name: source.file_name,
+                    size: source.size,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(remote.remote_id.as_deref(), Some(remote_id.as_str()));
+        assert_eq!(mock.copies(), 1);
+        assert_eq!(mock.remote_sends(), 1);
+        assert_eq!(mock.uploads(), 1);
+        assert_eq!(mock.captions(), ["hello", "copy caption", "remote caption"]);
+    }
+
+    #[tokio::test]
+    async fn reuse_can_be_refused_without_sending() {
+        let mock = MockTransport::authorized();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let result = mock
+            .send_remote(
+                RemoteRequest {
+                    remote_id: "unknown".into(),
+                    target: whole(MOCK_SAVED),
+                    payload: video(),
+                    caption: Caption::default(),
+                    file_name: "a.mp4".into(),
+                    size: 1,
+                },
+                cancel,
+            )
+            .await;
+        assert!(matches!(result, Err(TransportError::Cancelled)));
+        assert!(mock.sent().is_empty());
+
+        let source_target = whole(MOCK_SAVED);
+        let source_id = mock.seed_message(source_target, MediaKind::Video, "a.mp4", 1, 1);
+        mock.push_copy_failure(TransportError::Other {
+            code: 400,
+            message: "MESSAGE_COPY_FORBIDDEN".into(),
+        });
+        let copy = mock
+            .send_copy(
+                CopyRequest {
+                    from: source_target,
+                    message_id: source_id,
+                    target: whole(MOCK_ARCHIVED_CHAT),
+                    media: MediaKind::Video,
+                    caption: Caption::default(),
+                    file_name: "a.mp4".into(),
+                    size: 1,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(matches!(copy, Err(TransportError::Other { code: 400, .. })));
+        mock.push_remote_failure(TransportError::Other {
+            code: 400,
+            message: "FILE_REFERENCE_INVALID".into(),
+        });
+        let remote = mock
+            .send_remote(
+                RemoteRequest {
+                    remote_id: "mock-remote-1".into(),
+                    target: whole(MOCK_ARCHIVED_CHAT),
+                    payload: video(),
+                    caption: Caption::default(),
+                    file_name: "a.mp4".into(),
+                    size: 1,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(matches!(
+            remote,
+            Err(TransportError::Other { code: 400, .. })
+        ));
+        assert_eq!(mock.copies(), 1);
+        assert_eq!(mock.remote_sends(), 1);
+        assert_eq!(mock.sent().len(), 1, "only the seeded source exists");
     }
 
     #[tokio::test(start_paused = true)]

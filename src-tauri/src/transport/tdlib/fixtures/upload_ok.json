@@ -504,7 +504,7 @@
                   },
                   "remote": {
                     "@type": "remoteFile",
-                    "id": "",
+                    "id": "remote-video-opaque",
                     "unique_id": "",
                     "is_uploading_active": true,
                     "is_uploading_completed": false,
