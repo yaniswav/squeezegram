@@ -169,3 +169,24 @@ test("plain-path diagnostic changes only the path control class", () => {
     "PathEdit := TNewPathEdit.Create(WizardForm);",
   )
 })
+
+test("header logo has scaled top and right margins without changing the welcome logo", () => {
+  assert.match(
+    source,
+    /WizardSmallBitmapImage.SetBounds\(\s*WizardForm.MainPanel.ClientWidth - ScaleX\(60\), ScaleY\(12\), ScaleX\(36\), ScaleY\(36\)\)/,
+  )
+  assert.match(source, /WizardSmallBitmapImage.Stretch := True/)
+  assert.match(
+    source,
+    /WelcomeLogo.SetBounds\(WizardForm.ClientWidth - ScaleX\(144\), ScaleY\(52\), ScaleX\(112\), ScaleY\(112\)\)/,
+  )
+
+  for (const dpi of [96, 120, 144, 192, 288]) {
+    const scale = (value: number) => Math.round((value * dpi) / 96)
+    const rightMargin = scale(60) - scale(36)
+
+    assert.ok(rightMargin >= scale(24) - 1)
+    assert.ok(scale(12) > 0)
+    assert.ok(scale(12) + scale(36) < scale(58))
+  }
+})

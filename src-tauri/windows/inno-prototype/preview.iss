@@ -114,6 +114,9 @@ begin
   WelcomeLogo.SetBounds(WizardForm.ClientWidth - ScaleX(144), ScaleY(52), ScaleX(112), ScaleY(112));
   WelcomeLogo.PngImage.Assign(WizardForm.WizardSmallBitmapImage.PngImage);
   WelcomeLogo.Stretch := True;
+  WizardForm.WizardSmallBitmapImage.SetBounds(
+    WizardForm.MainPanel.ClientWidth - ScaleX(60), ScaleY(12), ScaleX(36), ScaleY(36));
+  WizardForm.WizardSmallBitmapImage.Stretch := True;
   WizardForm.WelcomeLabel2.Left := ScaleX(32);
   WizardForm.WelcomeLabel2.Top := WizardForm.WelcomeLabel1.Top + ScaleY(112);
   WizardForm.WelcomeLabel2.Width := WizardForm.ClientWidth - ScaleX(64);
