@@ -281,6 +281,100 @@ mod tests {
     }
 
     #[test]
+    fn history_keeps_the_actual_route_after_the_queue_item_is_removed() {
+        use crate::queue::state::Changes;
+        use crate::queue::store::HistoryStatus;
+
+        for via in [SendVia::Upload, SendVia::Copy, SendVia::Remote] {
+            for (state, status) in [
+                (State::Sent, HistoryStatus::Sent),
+                (State::Failed, HistoryStatus::Failed),
+                (State::Unknown, HistoryStatus::Unknown),
+            ] {
+                let mut store = Store::open_in_memory().unwrap();
+                let id = pair(&mut store)[0];
+                store
+                    .conn()
+                    .execute(
+                        "UPDATE items SET content_id = '100:test' WHERE id = ?1",
+                        [id],
+                    )
+                    .unwrap();
+                force_state(&store, id, State::Encoded);
+                store
+                    .transition(id, State::Uploading, &Changes::new().send_via(via))
+                    .unwrap();
+                store.transition(id, state, &Changes::new()).unwrap();
+                let item = store.get_item(id).unwrap();
+                let history_id = store.record_history(&item, status).unwrap().unwrap();
+                store
+                    .conn()
+                    .execute("DELETE FROM items WHERE id = ?1", [id])
+                    .unwrap();
+                let recorded: (String, String) = store
+                    .conn()
+                    .query_row(
+                        "SELECT via, status FROM history WHERE id = ?1",
+                        [history_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .unwrap();
+                assert_eq!(recorded, (via.as_str().into(), status.as_str().into()));
+            }
+        }
+    }
+
+    #[test]
+    fn reconciliation_keeps_the_route_of_the_uncertain_send() {
+        use crate::queue::state::Changes;
+
+        let mut store = Store::open_in_memory().unwrap();
+        let id = pair(&mut store)[0];
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET content_id = '100:test' WHERE id = ?1",
+                [id],
+            )
+            .unwrap();
+        force_state(&store, id, State::Encoded);
+        store
+            .transition(
+                id,
+                State::Uploading,
+                &Changes::new().send_via(SendVia::Copy),
+            )
+            .unwrap();
+        store
+            .transition(id, State::Unknown, &Changes::new())
+            .unwrap();
+        store.mark_sent(id, Some(123)).unwrap();
+        let recorded: (String, i64) = store
+            .conn()
+            .query_row("SELECT via, message_id FROM history", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(recorded, ("copy".into(), 123));
+    }
+
+    #[test]
+    fn a_refused_route_rolls_back_the_state_and_attempt_counter() {
+        use crate::queue::state::{Changes, Column};
+
+        let mut store = Store::open_in_memory().unwrap();
+        let id = pair(&mut store)[0];
+        force_state(&store, id, State::Encoded);
+        let before = store.get_item(id).unwrap();
+        let invalid = Changes::new()
+            .set(Column::SendVia, "forward".to_owned())
+            .bump_attempts();
+        assert!(store.transition(id, State::Uploading, &invalid).is_err());
+        assert_eq!(store.get_item(id).unwrap(), before);
+        assert_eq!(store.send_metadata(id).unwrap().via, SendVia::Upload);
+    }
+
+    #[test]
     fn a_write_failure_rolls_back_the_whole_batch() {
         let mut store = Store::open_in_memory().unwrap();
         let ids = pair(&mut store);

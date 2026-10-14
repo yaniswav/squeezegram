@@ -141,6 +141,7 @@ pub enum Column {
     NextRunAt,
     TgMessageId,
     TgSentAt,
+    SendVia,
 }
 
 impl Column {
@@ -160,6 +161,7 @@ impl Column {
             Column::NextRunAt => "next_run_at",
             Column::TgMessageId => "tg_message_id",
             Column::TgSentAt => "tg_sent_at",
+            Column::SendVia => "send_via",
         }
     }
 }
@@ -185,6 +187,11 @@ impl Changes {
 
     pub fn clear(self, column: Column) -> Self {
         self.set(column, Value::Null)
+    }
+
+    /// Persist the route together with the state so a crash cannot leave them disagreeing.
+    pub fn send_via(self, via: super::store::SendVia) -> Self {
+        self.set(Column::SendVia, via.as_str().to_owned())
     }
 
     pub fn bump_attempts(mut self) -> Self {

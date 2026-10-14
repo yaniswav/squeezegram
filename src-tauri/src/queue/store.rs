@@ -1456,10 +1456,11 @@ impl Store {
             .output_path
             .as_deref()
             .is_some_and(|out| out != item.source_path);
+        let via = self.send_metadata(item.id)?.via;
         self.conn.execute(
             "INSERT INTO history (content_id, source_path, file_name, destination_id, size_sent,
-                                  mode, status, encoded, message_id, sent_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                                  mode, status, encoded, message_id, sent_at, via)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 content_id,
                 item.source_path,
@@ -1470,7 +1471,8 @@ impl Store {
                 status.as_str(),
                 encoded,
                 item.tg_message_id,
-                item.tg_sent_at.clone().unwrap_or_else(now_iso)
+                item.tg_sent_at.clone().unwrap_or_else(now_iso),
+                via.as_str(),
             ],
         )?;
         Ok(Some(self.conn.last_insert_rowid()))
