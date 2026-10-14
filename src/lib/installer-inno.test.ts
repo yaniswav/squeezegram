@@ -145,3 +145,27 @@ test("Inno study stays outside production packaging and updater configuration", 
     )
   }
 })
+
+test("plain-path diagnostic changes only the path control class", () => {
+  const branches = [
+    ...source.matchAll(
+      /#ifdef PlainPathField\s+([\s\S]*?)#else\s+([\s\S]*?)#endif/g,
+    ),
+  ]
+
+  assert.equal(branches.length, 2)
+  assert.equal(branches[0][1].trim(), "PathEdit: TNewEdit;")
+  assert.equal(branches[0][2].trim(), "PathEdit: TNewPathEdit;")
+
+  const withoutComments = (code: string) =>
+    code.replace(/\/\/ Diagnostic[^\n]*\n/, "").trim()
+
+  assert.equal(
+    withoutComments(branches[1][1]),
+    "PathEdit := TNewEdit.Create(WizardForm);",
+  )
+  assert.equal(
+    branches[1][2].trim(),
+    "PathEdit := TNewPathEdit.Create(WizardForm);",
+  )
+})

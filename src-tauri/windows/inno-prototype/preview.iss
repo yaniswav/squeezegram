@@ -49,7 +49,11 @@ Name: "id"; MessagesFile: "{#IndonesianMessages}"
 [Code]
 var
   ControlsPage: TWizardPage;
+  #ifdef PlainPathField
+  PathEdit: TNewEdit;
+  #else
   PathEdit: TNewPathEdit;
+  #endif
   DemoButton: TNewButton;
   DemoProgress: TNewProgressBar;
 
@@ -118,7 +122,12 @@ begin
     CustomMessage('version') + #13#10#13#10 + CustomMessage('notice') + #13#10 + CustomMessage('languageName');
   ControlsPage := CreateCustomPage(wpWelcome, CustomMessage('controls'), CustomMessage('notice'));
   AddLabel(CustomMessage('folder'), 4);
+  #ifdef PlainPathField
+  // Diagnostic only: isolate the path control's Windows shell autocomplete initialization.
+  PathEdit := TNewEdit.Create(WizardForm);
+  #else
   PathEdit := TNewPathEdit.Create(WizardForm);
+  #endif
   PathEdit.Parent := ControlsPage.Surface;
   PathEdit.SetBounds(0, ScaleY(32), ControlsPage.SurfaceWidth - ScaleX(120), ScaleY(24));
   PathEdit.Text := ExpandConstant('{localappdata}\Programs\squeezegram-preview');
