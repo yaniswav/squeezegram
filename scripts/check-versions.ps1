@@ -42,7 +42,7 @@ $distinct = @($versions.Values | Sort-Object -Unique)
 if ($distinct.Count -ne 1) {
     throw ('Versions differ: ' + (($versions.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', '))
 }
-if ($distinct[0] -notmatch '^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$') {
+if ($distinct[0] -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$') {
     throw "Version '$($distinct[0])' is not a semantic version"
 }
 

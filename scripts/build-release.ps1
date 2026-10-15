@@ -8,7 +8,7 @@
       2. scripts\stage-tdjson.ps1     pinned tdjson.dll (SHA-256 checked) into the staging folder
       3. scripts\generate-notices.ps1 THIRD-PARTY-NOTICES.txt (needs the pinned cargo-about, see
                                       scripts\install-cargo-about.ps1, and `pnpm install`)
-      4. pnpm tauri build             NSIS installer (per-user, no admin rights)
+      4. pnpm tauri build             Inno installer (per-user, no admin rights)
       5. scripts\make-portable.ps1    dist-release\squeezegram-<version>-portable-x64.zip
       6. scripts\make-checksums.ps1   dist-release\SHA256SUMS.txt
     Then it prints the size and SHA-256 of each artefact.
@@ -26,10 +26,10 @@
 
     Update artefacts: when the environment variable TAURI_SIGNING_PRIVATE_KEY is set (the
     private updater key, as a path or as its content; TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-    carries its password if it has one), the same overlay turns on bundle.createUpdaterArtifacts
-    so Tauri signs the installer and writes its .sig, copied next to the installer in dist-release.
+    carries its password if it has one), Tauri signs the Inno installer with the app version.
+    The optional -InstallerEngine Nsis keeps Tauri's bundle.createUpdaterArtifacts signing.
     Without the variable the build is the same as before and has no update signature. The key
-    is read by Tauri from the environment only: this script never reads, prints or stores it,
+    is consumed by Tauri from the environment only: this script only tests its presence,
     and it must never be placed in a file of the repository. latest.json (the update manifest)
     is not written here.
 
@@ -40,7 +40,7 @@
     pwsh -File scripts\build-release.ps1
 #>
 [CmdletBinding()]
-param()
+param([ValidateSet('Inno', 'Nsis')][string] $InstallerEngine = 'Inno')
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -72,42 +72,69 @@ $noticesRelative = ($notices.Substring($srcTauri.Length + 1)) -replace '\\', '/'
 $bundle = @{ resources = @{ $stagedRelative = 'tdjson.dll'; $noticesRelative = 'THIRD-PARTY-NOTICES.txt' } }
 # Only the presence of the variable is tested, never its value.
 $signUpdates = -not [string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY)
-if ($signUpdates) { $bundle.createUpdaterArtifacts = $true }
+if ($signUpdates -and $InstallerEngine -eq 'Nsis') { $bundle.createUpdaterArtifacts = $true }
 $config = @{ bundle = $bundle } | ConvertTo-Json -Depth 5
 if ($signUpdates) { Write-Host 'TAURI_SIGNING_PRIVATE_KEY is set: the installer will be signed for updates.' }
 else { Write-Host 'TAURI_SIGNING_PRIVATE_KEY is not set: no update signature (local test build).' }
 [IO.File]::WriteAllText($overlay, $config, (New-Object System.Text.UTF8Encoding($false)))
 
-$nsisDir = Join-Path $root 'src-tauri\target\release\bundle\nsis'
-if (Test-Path -LiteralPath $nsisDir) { Remove-Item -LiteralPath $nsisDir -Recurse -Force }
+$targetDirectory = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR, $root) } else { Join-Path $srcTauri 'target' }
+$nsisDir = Join-Path $targetDirectory 'release\bundle\nsis'
+New-Item -ItemType Directory -Force -Path $dist | Out-Null
+$installerOut = Join-Path $dist "squeezegram-$version-setup-x64.exe"
+# An unsigned rebuild must not retain a signature from an older signed build.
+if (Test-Path -LiteralPath "$installerOut.sig") { Remove-Item -LiteralPath "$installerOut.sig" -Force }
+if ($InstallerEngine -eq 'Nsis') {
+    $installer = Join-Path $nsisDir "squeezegram_${version}_x64-setup.exe"
+    foreach ($old in @($installer, "$installer.sig")) {
+        if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force }
+    }
+}
 Push-Location $root
 try {
-    & pnpm tauri build --config $overlay
+    if ($InstallerEngine -eq 'Inno') { & pnpm tauri build --no-bundle --config $overlay }
+    else { & pnpm tauri build --config $overlay }
     Assert-Native 'pnpm tauri build'
 }
 finally { Pop-Location }
 
-$installer = Join-Path $nsisDir "squeezegram_${version}_x64-setup.exe"
-if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
-    throw "Installer not found: $installer (an antivirus may have removed it)"
+if ($InstallerEngine -eq 'Inno') {
+    $bootstrapper = Join-Path (Split-Path -Parent $staged) 'MicrosoftEdgeWebview2Setup.exe'
+    if (-not (Test-Path -LiteralPath $bootstrapper -PathType Leaf)) {
+        Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrapper
+    }
+    # build-inno-installer verifies Microsoft's Authenticode signature before embedding it.
+    $installerOut = & (Join-Path $PSScriptRoot 'build-inno-installer.ps1') `
+        -AppSource (Join-Path $targetDirectory 'release\squeezegram.exe') `
+        -TdjsonSource $staged -NoticesSource $notices -LicenseSource (Join-Path $root 'LICENSE') `
+        -BootstrapperSource $bootstrapper -Version $version -OutputDirectory $dist `
+        -OutputFilename "squeezegram-$version-setup-x64" | Select-Object -Last 1
+    if ($signUpdates) {
+        Push-Location $root
+        try {
+            & pnpm tauri signer sign --app-version $version $installerOut
+            Assert-Native 'pnpm tauri signer sign'
+        }
+        finally { Pop-Location }
+        if (-not (Test-Path -LiteralPath "$installerOut.sig" -PathType Leaf)) { throw 'Inno update signature missing.' }
+    }
 }
-New-Item -ItemType Directory -Force -Path $dist | Out-Null
-Get-ChildItem -LiteralPath $dist -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -like 'squeezegram-*' -or $_.Name -eq 'SHA256SUMS.txt' } |
-    Remove-Item -Force
-$installerOut = Join-Path $dist "squeezegram-$version-setup-x64.exe"
-Copy-Item -LiteralPath $installer -Destination $installerOut -Force
-if ($signUpdates) {
-    # The signature covers the file content, so the renamed copy keeps it valid.
-    if (-not (Test-Path -LiteralPath "$installer.sig" -PathType Leaf)) { throw "Update signature not found: $installer.sig" }
-    Copy-Item -LiteralPath "$installer.sig" -Destination "$installerOut.sig" -Force
+else {
+    if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+        throw "Installer not found: $installer (an antivirus may have removed it)"
+    }
+    Copy-Item -LiteralPath $installer -Destination $installerOut -Force
+    if ($signUpdates) {
+        if (-not (Test-Path -LiteralPath "$installer.sig" -PathType Leaf)) { throw "Update signature not found: $installer.sig" }
+        Copy-Item -LiteralPath "$installer.sig" -Destination "$installerOut.sig" -Force
+    }
 }
 
 Write-Host '== 5/6 portable zip'
-$zip = & (Join-Path $PSScriptRoot 'make-portable.ps1') -Version $version -DllPath $staged -NoticesPath $notices | Select-Object -Last 1
+$zip = & (Join-Path $PSScriptRoot 'make-portable.ps1') -Version $version -ExePath (Join-Path $targetDirectory 'release\squeezegram.exe') -DllPath $staged -NoticesPath $notices | Select-Object -Last 1
 
 Write-Host '== 6/6 checksums'
-& (Join-Path $PSScriptRoot 'make-checksums.ps1') -Directory $dist
+& (Join-Path $PSScriptRoot 'make-checksums.ps1') -Directory $dist -FileNames @([IO.Path]::GetFileName($installerOut), [IO.Path]::GetFileName($zip))
 
 Write-Host ''
 Write-Host "== Artefacts (version $version, LOCAL builds: do not publish)"
