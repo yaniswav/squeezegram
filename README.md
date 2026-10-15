@@ -13,7 +13,7 @@ Windows 10 or 11, x64 only.
 
 Get the latest version from the [Releases page](https://github.com/yaniswav/squeezegram/releases):
 
-- **Installer** (`squeezegram-<version>-setup-x64.exe`): installs for the current user, no administrator rights needed, and updates itself (the app downloads a new version only when you press "Download and install").
+- **Installer** (`squeezegram-<version>-setup-x64.exe`): Inno Setup installer for the current user, with no administrator rights needed for the app itself. The app downloads a new version only when you press "Download and install". Microsoft WebView2 Runtime is required; the installer runs Microsoft's bootstrapper if it is missing.
 - **Portable zip** (`squeezegram-<version>-portable-x64.zip`): unzip anywhere and run `squeezegram.exe`. It does not update itself; it only shows a link to the release page when a newer version exists.
 
 Each release lists the SHA-256 of both files in `SHA256SUMS.txt`. To check what you downloaded:
@@ -23,6 +23,8 @@ Get-FileHash .\squeezegram-<version>-setup-x64.exe -Algorithm SHA256
 ```
 
 If the hash differs from the one in `SHA256SUMS.txt`, do not run the file.
+
+If you used an earlier NSIS installer, uninstall that version from Windows Settings without selecting "Delete the application data", then run the new installer. The Inno installer refuses to install while the old NSIS installation is registered. Updates between Inno installations keep the same installation folder.
 
 ### SmartScreen and antivirus
 
@@ -63,7 +65,7 @@ squeezegram Premium is a lifetime licence bought once in Telegram Stars from `@s
 
 ## Privacy
 
-squeezegram has no analytics or telemetry and no server of its own. Your files, settings, queue, Telegram session and logs stay on your computer, in `%LOCALAPPDATA%\squeezegram`.
+squeezegram has no analytics or telemetry and no server of its own. Your files stay on your computer until you choose to send them. Settings, the queue and the licence key are stored in `%APPDATA%\squeezegram`; the Telegram session, ffmpeg and logs are stored in `%LOCALAPPDATA%\squeezegram`. Temporary files use `%LOCALAPPDATA%\squeezegram\tmp` by default, or the temporary folder selected in Settings.
 
 What leaves your computer:
 
@@ -72,9 +74,11 @@ What leaves your computer:
 - **To GitHub**, to look for a newer version: at startup at most once every 24 hours (Settings, Updates, "Check automatically" turns this off) and when you press "Check now". It is a plain HTTPS request for `latest.json`; GitHub sees your IP address, as for any download. No identifier, Windows version or usage data is sent.
 - **To your proxy**, if you set one, which then carries all connections to Telegram.
 
+During installation, Microsoft's WebView2 bootstrapper may download the WebView2 Runtime from Microsoft if it is missing.
+
 The Telegram session is stored in an encrypted TDLib database whose key is protected with Windows DPAPI. The local journal is kept for 7 days at most, never contains your phone number, codes, passwords, e-mail address or captions, and is exported only if you create a debug report yourself.
 
-To remove everything, uninstall squeezegram from Windows Settings (Apps) and tick "Delete the application data": it also deletes `%LOCALAPPDATA%\squeezegram` (Telegram session, logs, ffmpeg) and `%APPDATA%\squeezegram` (queue, settings, licence key). Both are kept during an update, and when a new installer removes the installed version before reinstalling, even if that box is ticked.
+Uninstall squeezegram from Windows Settings (Apps). The Inno uninstaller removes the application but always keeps its data, as do updates. There is no data-deletion checkbox. To remove the remaining data yourself after uninstalling and closing every copy of the app, delete only `%LOCALAPPDATA%\squeezegram` (Telegram session, logs, ffmpeg and temporary files) and `%APPDATA%\squeezegram` (queue, settings and licence key). This cannot be undone without a backup.
 
 ### A warning about Telegram
 
@@ -133,6 +137,16 @@ Checks (the CI workflow in `.github/workflows/build.yml` runs all of them; for t
 pnpm typecheck; pnpm lint; pnpm format:check
 cd src-tauri; cargo fmt --check; cargo clippy --locked -- -D warnings; cargo test
 ```
+
+### Local installer and portable zip
+
+```powershell
+cmd /c "start /low /wait /b pwsh -NoProfile -File scripts\build-release.ps1"
+```
+
+The script stages the pinned TDLib library, generates notices, builds the app, compiles the Inno installer and creates the portable zip and `SHA256SUMS.txt` in `dist-release`. It downloads and verifies the pinned Inno Setup compiler and Microsoft's WebView2 bootstrapper when needed. The compiler preparation does not install squeezegram. `-InstallerEngine Nsis` selects the older packaging path explicitly.
+
+Do not publish these local outputs: the executable embeds the Telegram API identity supplied at build time, including values from your local `.env`. Public release artifacts are built by the release workflow with the intended release identity. Updater signatures are separate from Windows code signing; a local build without the updater signing environment has no `.sig` file.
 
 ## License
 

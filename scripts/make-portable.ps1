@@ -68,16 +68,18 @@ REQUIREMENTS
   (x64).
 
 FFMPEG
-  ffmpeg is not in this zip. The app downloads it on first launch and keeps it in
-  %LOCALAPPDATA%\squeezegram\sidecars.
+  ffmpeg is not in this zip. On first setup, press "Download ffmpeg (LGPL)" or select
+  your own ffmpeg. A downloaded copy is kept in %LOCALAPPDATA%\squeezegram\sidecars.
 
 WHERE YOUR DATA GOES (EVEN IN THE PORTABLE VERSION)
   "Portable" only means no installer. The app still writes outside its own folder, in your
   Windows user profile:
     %APPDATA%\squeezegram       settings and the send-queue database
     %LOCALAPPDATA%\squeezegram  Telegram session and database, ffmpeg, temporary files, logs
-  Nothing is written to the registry by the app itself. To remove every trace, delete the
-  program folder and those two folders.
+  If you enable "Start with Windows", the app writes a startup entry to your Windows
+  user's registry. Disable that option before moving or removing a portable copy.
+  To remove its files and data, close every copy of the app, then delete the program
+  folder and those two data folders. This cannot be undone without a backup.
 
 UPDATES
   This build never updates itself. Once a day at startup (Settings > Updates > Check
