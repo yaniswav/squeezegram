@@ -6,9 +6,13 @@
 //! No account signed in is a wait, not an error: the license applies once its account signs
 //! in. A missing, unreadable or corrupt file is never an error for the app: the plan is free.
 //!
+//! A key covers the app majors up to its `maj`. The order of the checks is: signature, then
+//! coverage of this build's major, then account: a key of an older major is `LIC_OLDER_MAJOR`
+//! whether or not an account is signed in, and whichever account it was issued to.
+//!
 //! Journal: `license_status` (once per new verdict), `license_set` and `license_cleared`, with
-//! the plan, the `LIC_*` code and the `kid` of a verified license. The token and its `sub` never
-//! reach the journal, a `Debug` or an error text.
+//! the plan, the `LIC_*` code, and the `kid` and `maj` (`covers_major`) of a verified license.
+//! The token and its `sub` never reach the journal, a `Debug` or an error text.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -24,6 +28,22 @@ use crate::limit;
 use crate::transport::AuthState;
 
 pub const FILE_NAME: &str = "license.txt";
+/// Major version of this build, read from the package version at compile time: a malformed
+/// value stops the build instead of panicking at run time.
+const BUILD_MAJOR: u32 = parse_major(env!("CARGO_PKG_VERSION_MAJOR"));
+
+const fn parse_major(text: &str) -> u32 {
+    let digits = text.as_bytes();
+    assert!(!digits.is_empty(), "empty major version");
+    let mut major = 0u32;
+    let mut at = 0;
+    while at < digits.len() {
+        assert!(digits[at].is_ascii_digit(), "major version is not a number");
+        major = major * 10 + (digits[at] - b'0') as u32;
+        at += 1;
+    }
+    major
+}
 /// A license is about 400 bytes; a larger file is not one and is not read whole.
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 
@@ -76,12 +96,14 @@ enum Verdict {
     Applies(License),
     /// Verified, but not for the account signed in now: `NoAccount` or `WrongAccount`.
     NotThisAccount(License, LicenseError),
+    /// Verified, but it covers only majors below this build's: wins over the account checks.
+    OlderMajor(License),
     /// Not a license this build accepts.
     Invalid(LicenseError),
 }
 
 impl Verdict {
-    fn of(stored: &Stored, keys: &KeyRing, user_id: Option<i64>) -> Self {
+    fn of(stored: &Stored, keys: &KeyRing, user_id: Option<i64>, build_major: u32) -> Self {
         let token = match stored {
             Stored::Absent => return Verdict::NoLicense,
             Stored::Unreadable(_) => return Verdict::Invalid(LicenseError::Malformed),
@@ -89,10 +111,15 @@ impl Verdict {
         };
         match license::verify(token, keys) {
             Err(error) => Verdict::Invalid(error),
-            Ok(license) => match license::check_account(&license, user_id) {
-                Ok(()) => Verdict::Applies(license),
-                Err(error) => Verdict::NotThisAccount(license, error),
-            },
+            Ok(license) => {
+                if license::check_coverage(&license, build_major).is_err() {
+                    return Verdict::OlderMajor(license);
+                }
+                match license::check_account(&license, user_id) {
+                    Ok(()) => Verdict::Applies(license),
+                    Err(error) => Verdict::NotThisAccount(license, error),
+                }
+            }
         }
     }
 
@@ -100,15 +127,23 @@ impl Verdict {
         match self {
             Verdict::NoLicense | Verdict::Applies(_) => None,
             Verdict::NotThisAccount(_, error) | Verdict::Invalid(error) => Some(*error),
+            Verdict::OlderMajor(_) => Some(LicenseError::OlderMajor),
+        }
+    }
+
+    /// The license whose signature verified, whatever else keeps it from applying.
+    fn verified(&self) -> Option<&License> {
+        match self {
+            Verdict::Applies(license)
+            | Verdict::NotThisAccount(license, _)
+            | Verdict::OlderMajor(license) => Some(license),
+            Verdict::NoLicense | Verdict::Invalid(_) => None,
         }
     }
 
     /// Only for a license whose signature verified: an unverified `kid` is attacker text.
     fn kid(&self) -> Option<&str> {
-        match self {
-            Verdict::Applies(license) | Verdict::NotThisAccount(license, _) => Some(&license.kid),
-            Verdict::NoLicense | Verdict::Invalid(_) => None,
-        }
+        self.verified().map(|license| license.kid.as_str())
     }
 
     fn allows(&self, feature: Feature) -> bool {
@@ -121,6 +156,7 @@ impl Verdict {
             source,
             features: Vec::new(),
             account_matches,
+            covers_major: self.verified().map(|license| license.maj),
             reason: self.error().map(LicenseError::code),
         };
         match self {
@@ -135,13 +171,15 @@ impl Verdict {
                     .filter(|feature| feature.shipped())
                     .collect(),
                 account_matches: Some(true),
+                covers_major: Some(license.maj),
                 reason: None,
             },
             Verdict::NotThisAccount(_, LicenseError::NoAccount) => {
                 free(EntitlementSource::Pending, None)
             }
             Verdict::NotThisAccount(..) => free(EntitlementSource::Rejected, Some(false)),
-            Verdict::Invalid(_) => free(EntitlementSource::Rejected, None),
+            // The account is not compared once the major is refused: nothing to say about it.
+            Verdict::OlderMajor(_) | Verdict::Invalid(_) => free(EntitlementSource::Rejected, None),
         }
     }
 }
@@ -165,6 +203,8 @@ pub struct LicenseEntitlements {
     keys: KeyRing,
     /// `None`: no transport, never an account (a stored license then waits for one).
     auth: Option<watch::Receiver<AuthState>>,
+    /// Major version of the build: `BUILD_MAJOR`, except in tests.
+    build_major: u32,
     inner: Mutex<Inner>,
 }
 
@@ -210,6 +250,7 @@ impl LicenseEntitlements {
             path,
             keys,
             auth,
+            build_major: BUILD_MAJOR,
             inner: Mutex::new(Inner {
                 stored,
                 generation: 0,
@@ -221,6 +262,13 @@ impl LicenseEntitlements {
     /// `load` with the production keys (`keys::PRODUCTION_KEYS`).
     pub fn production(path: PathBuf, auth: Option<watch::Receiver<AuthState>>) -> Self {
         Self::load(path, keys::production(), auth)
+    }
+
+    /// A store that judges coverage as the build of major `build_major`.
+    #[cfg(test)]
+    fn with_build_major(mut self, build_major: u32) -> Self {
+        self.build_major = build_major;
+        self
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -245,7 +293,7 @@ impl LicenseEntitlements {
             .as_ref()
             .is_some_and(|c| c.generation == inner.generation && c.user_id == user_id);
         if !fresh {
-            let verdict = Verdict::of(&inner.stored, &self.keys, user_id);
+            let verdict = Verdict::of(&inner.stored, &self.keys, user_id, self.build_major);
             let status = verdict.status();
             let fields = serde_json::json!({ "features": status.features }).to_string();
             let io_error = match inner.stored {
@@ -259,6 +307,7 @@ impl LicenseEntitlements {
                 json = fields.as_str(),
                 error_code = status.reason,
                 kid = verdict.kid(),
+                covers_major = status.covers_major,
                 io_error = io_error.as_deref(),
                 "license evaluated"
             );
@@ -275,19 +324,20 @@ impl LicenseEntitlements {
     }
 
     /// Verifies then stores `token` (surrounding whitespace dropped). Refused, and the file
-    /// left as it was, when it does not verify or belongs to another signed-in account; kept
-    /// when no account is signed in yet (checked at sign-in).
+    /// left as it was, when it does not verify, covers only older majors than this build or
+    /// belongs to another signed-in account; kept when no account is signed in yet (checked at
+    /// sign-in).
     pub fn save(&self, token: &str) -> Result<EntitlementStatus, StoreError> {
         let token = token.trim();
         let verified = license::verify(token, &self.keys);
         let kid = verified.as_ref().ok().map(|license| license.kid.clone());
-        let checked =
-            verified.and_then(
-                |license| match license::check_account(&license, self.user_id()) {
-                    Err(LicenseError::NoAccount) => Ok(()),
-                    other => other,
-                },
-            );
+        let checked = verified.and_then(|license| {
+            license::check_coverage(&license, self.build_major)?;
+            match license::check_account(&license, self.user_id()) {
+                Err(LicenseError::NoAccount) => Ok(()),
+                other => other,
+            }
+        });
         if let Err(error) = checked {
             tracing::warn!(
                 event = "license_set",
@@ -387,6 +437,7 @@ mod tests {
     fn status(
         source: EntitlementSource,
         account_matches: Option<bool>,
+        covers_major: Option<u32>,
         reason: Option<&'static str>,
     ) -> EntitlementStatus {
         EntitlementStatus {
@@ -394,16 +445,32 @@ mod tests {
             source,
             features: Vec::new(),
             account_matches,
+            covers_major,
             reason,
         }
     }
 
     fn free_none() -> EntitlementStatus {
-        status(EntitlementSource::None, None, None)
+        status(EntitlementSource::None, None, None, None)
     }
 
     fn pending() -> EntitlementStatus {
-        status(EntitlementSource::Pending, None, Some("LIC_NO_ACCOUNT"))
+        status(
+            EntitlementSource::Pending,
+            None,
+            Some(1),
+            Some("LIC_NO_ACCOUNT"),
+        )
+    }
+
+    /// A key that verifies (`maj` 1 unless said) but covers only majors below the build's.
+    fn older_major(covers_major: u32) -> EntitlementStatus {
+        status(
+            EntitlementSource::Rejected,
+            None,
+            Some(covers_major),
+            Some("LIC_OLDER_MAJOR"),
+        )
     }
 
     /// The `valid` vector on its own account: it lists two features, a lifetime licence
@@ -414,6 +481,7 @@ mod tests {
             source: EntitlementSource::License,
             features: Feature::ALL.into_iter().filter(|f| f.shipped()).collect(),
             account_matches: Some(true),
+            covers_major: Some(1),
             reason: None,
         }
     }
@@ -547,7 +615,7 @@ mod tests {
             let store = store(&dir, &vectors, &account);
             assert_eq!(
                 store.status(),
-                status(EntitlementSource::Rejected, None, Some(code))
+                status(EntitlementSource::Rejected, None, None, Some(code))
             );
             assert!(Feature::ALL.iter().all(|f| !store.allows(*f)));
         }
@@ -571,6 +639,7 @@ mod tests {
             status(
                 EntitlementSource::Rejected,
                 Some(false),
+                Some(1),
                 Some("LIC_WRONG_ACCOUNT")
             )
         );
@@ -617,6 +686,256 @@ mod tests {
         assert_eq!(signed_out.problem(), Some(LicenseError::NoAccount));
     }
 
+    /// A store on `dir` that judges coverage as the build of major `build_major`.
+    fn store_for_major(
+        dir: &TestDir,
+        vectors: &Vectors,
+        transport: &dyn TelegramTransport,
+        build_major: u32,
+    ) -> LicenseEntitlements {
+        store(dir, vectors, transport).with_build_major(build_major)
+    }
+
+    #[test]
+    fn the_build_major_is_the_package_major_read_at_compile_time() {
+        assert_eq!(BUILD_MAJOR.to_string(), env!("CARGO_PKG_VERSION_MAJOR"));
+        for (text, major) in [("0", 0), ("1", 1), ("12", 12), ("999", 999), ("007", 7)] {
+            assert_eq!(parse_major(text), major, "{text}");
+        }
+        let dir = TestDir::new("license-build-major");
+        let vectors = test_vectors::load();
+        let loaded =
+            LicenseEntitlements::load(dir.path().join(FILE_NAME), vectors.key_ring(), None);
+        assert_eq!(loaded.build_major, BUILD_MAJOR);
+        let production = LicenseEntitlements::production(dir.path().join(FILE_NAME), None);
+        assert_eq!(production.build_major, BUILD_MAJOR);
+    }
+
+    #[test]
+    fn a_key_applies_to_the_majors_up_to_its_maj() {
+        let dir = TestDir::new("license-coverage");
+        let vectors = test_vectors::load();
+        let account = MockTransport::authorized();
+        let one = token(&vectors, "valid");
+        let two = token(&vectors, "maj_2");
+        let two_status = EntitlementStatus {
+            covers_major: Some(2),
+            ..lifetime()
+        };
+        // (token, build major, what the store says): maj 1 covers 0.x and 1.x, not 2.x.
+        for (key, build_major, expected) in [
+            (&one, 0, lifetime()),
+            (&one, 1, lifetime()),
+            (&one, 2, older_major(1)),
+            (&one, 3, older_major(1)),
+            (&two, 0, two_status.clone()),
+            (&two, 1, two_status.clone()),
+            (&two, 2, two_status.clone()),
+            (&two, 3, older_major(2)),
+        ] {
+            fs::write(dir.path().join(FILE_NAME), key).unwrap();
+            let store = store_for_major(&dir, &vectors, &account, build_major);
+            let granted = expected.plan == Plan::Lifetime;
+            assert_eq!(store.status(), expected, "build {build_major}");
+            for feature in Feature::ALL {
+                assert_eq!(store.allows(feature), granted, "build {build_major}");
+            }
+            let problem = (!granted).then_some(LicenseError::OlderMajor);
+            assert_eq!(store.problem(), problem, "build {build_major}");
+        }
+    }
+
+    #[test]
+    fn an_older_major_wins_over_the_account_checks() {
+        let dir = TestDir::new("license-priority");
+        let vectors = test_vectors::load();
+        let account = MockTransport::authorized();
+        let valid = token(&vectors, "valid");
+        let other = token(&vectors, "other_account");
+        let path = dir.path().join(FILE_NAME);
+
+        // Signed in, the key is for another account: wrong account while the major is covered,
+        // older major (and nothing said about the account) once it is not.
+        fs::write(&path, &other).unwrap();
+        let covered = store_for_major(&dir, &vectors, &account, 1);
+        assert_eq!(
+            covered.status(),
+            status(
+                EntitlementSource::Rejected,
+                Some(false),
+                Some(1),
+                Some("LIC_WRONG_ACCOUNT")
+            )
+        );
+        let refused = store_for_major(&dir, &vectors, &account, 2);
+        assert_eq!(refused.status(), older_major(1));
+        assert_eq!(refused.problem(), Some(LicenseError::OlderMajor));
+
+        // Nobody signed in: pending while covered, older major (not pending) once it is not.
+        fs::write(&path, &valid).unwrap();
+        let load = |major| {
+            LicenseEntitlements::load(path.clone(), vectors.key_ring(), None)
+                .with_build_major(major)
+        };
+        assert_eq!(load(1).status(), pending());
+        assert_eq!(load(2).status(), older_major(1));
+        assert_eq!(load(2).problem(), Some(LicenseError::OlderMajor));
+        assert!(!load(2).allows(Feature::AdvancedEncoding));
+
+        // The signature still comes first: an unverified key says nothing about its major.
+        fs::write(&path, token(&vectors, "payload_byte_altered")).unwrap();
+        let invalid = store_for_major(&dir, &vectors, &account, 2);
+        assert_eq!(
+            invalid.status(),
+            status(
+                EntitlementSource::Rejected,
+                None,
+                None,
+                Some("LIC_BAD_SIGNATURE")
+            )
+        );
+    }
+
+    #[test]
+    fn save_refuses_an_older_major_and_keeps_the_file() {
+        let dir = TestDir::new("license-save-major");
+        let vectors = test_vectors::load();
+        let account = MockTransport::authorized();
+        let path = dir.path().join(FILE_NAME);
+        let store = store_for_major(&dir, &vectors, &account, 2);
+        // Nothing stored yet: the refusal creates no file.
+        for name in ["valid", "other_account"] {
+            let error = store.save(&token(&vectors, name)).unwrap_err();
+            assert_eq!(
+                error,
+                StoreError::License(LicenseError::OlderMajor),
+                "{name}"
+            );
+            assert_eq!(error.code(), "LIC_OLDER_MAJOR");
+        }
+        assert!(!path.exists());
+        assert_eq!(store.status(), free_none());
+
+        // A key that covers the build is stored, and a later older-major key leaves it be.
+        let two = token(&vectors, "maj_2");
+        let applies = EntitlementStatus {
+            covers_major: Some(2),
+            ..lifetime()
+        };
+        assert_eq!(store.save(&two), Ok(applies.clone()));
+        assert_eq!(
+            store.save(&token(&vectors, "valid")),
+            Err(StoreError::License(LicenseError::OlderMajor))
+        );
+        assert_eq!(store.status(), applies);
+        assert_eq!(fs::read_to_string(&path).unwrap(), format!("{two}\n"));
+
+        // Signed out, a key is normally kept for sign-in; not one that cannot apply anyway.
+        let signed_out = LicenseEntitlements::load(
+            dir.path().join("other").join(FILE_NAME),
+            vectors.key_ring(),
+            None,
+        )
+        .with_build_major(2);
+        assert_eq!(
+            signed_out.save(&token(&vectors, "valid")),
+            Err(StoreError::License(LicenseError::OlderMajor))
+        );
+        assert!(!dir.path().join("other").join(FILE_NAME).exists());
+        assert_eq!(
+            signed_out.save(&two).unwrap().source,
+            EntitlementSource::Pending
+        );
+
+        // The major it was bought for is still accepted by a build that covers it.
+        let covered = store_for_major(&dir, &vectors, &account, 1);
+        assert_eq!(covered.save(&token(&vectors, "valid")), Ok(lifetime()));
+    }
+
+    #[test]
+    fn the_status_page_shape_carries_covers_major() {
+        let dir = TestDir::new("license-shape");
+        let vectors = test_vectors::load();
+        let account = MockTransport::authorized();
+        let path = dir.path().join(FILE_NAME);
+        let shape = |build_major: u32, name: &str| {
+            fs::write(&path, token(&vectors, name)).unwrap();
+            serde_json::to_value(store_for_major(&dir, &vectors, &account, build_major).status())
+                .unwrap()
+        };
+        assert_eq!(
+            shape(1, "valid"),
+            json!({
+                "plan": "lifetime",
+                "source": "license",
+                "features": ["advanced_encoding", "multi_destination", "watched_folder", "background"],
+                "account_matches": true,
+                "covers_major": 1,
+                "reason": null
+            })
+        );
+        assert_eq!(
+            shape(2, "valid"),
+            json!({
+                "plan": "free",
+                "source": "rejected",
+                "features": [],
+                "account_matches": null,
+                "covers_major": 1,
+                "reason": "LIC_OLDER_MAJOR"
+            })
+        );
+        assert_eq!(shape(2, "maj_2")["covers_major"], json!(2));
+        // Not verified: no `maj` to show, whatever the token claims.
+        for name in [
+            "payload_byte_altered",
+            "unknown_kid",
+            "truncated",
+            "maj_missing",
+            "maj_string",
+        ] {
+            let status = shape(1, name);
+            assert_eq!(status["covers_major"], json!(null), "{name}");
+            assert_ne!(status["reason"], json!(null), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_older_major_is_journalled_with_the_code_and_the_maj_only() {
+        let dir = TestDir::new("license-older-major-journal");
+        let journal = TestJournal::new(&dir.path().join("logs"), "info");
+        let vectors = test_vectors::load();
+        let account = MockTransport::authorized();
+        let store = store_for_major(&dir, &vectors, &account, 2);
+        store.save(&token(&vectors, "valid")).unwrap_err();
+        fs::write(dir.path().join(FILE_NAME), token(&vectors, "valid")).unwrap();
+        let reloaded = store_for_major(&dir, &vectors, &account, 2);
+        assert_eq!(reloaded.status(), older_major(1));
+        let lines = journal.lines();
+        let set = lines.iter().find(|l| l["event"] == "license_set").unwrap();
+        assert_eq!(set["error_code"], json!("LIC_OLDER_MAJOR"));
+        assert_eq!(set["fields"]["kid"], json!("test-1"));
+        let evaluated = lines
+            .iter()
+            .find(|l| l["event"] == "license_status")
+            .unwrap();
+        assert_eq!(evaluated["error_code"], json!("LIC_OLDER_MAJOR"));
+        assert_eq!(evaluated["fields"]["source"], json!("rejected"));
+        assert_eq!(evaluated["fields"]["kid"], json!("test-1"));
+        assert_eq!(evaluated["fields"]["covers_major"], json!(1));
+        let logged = journal.text();
+        let valid = token(&vectors, "valid");
+        let license = license::verify(&valid, &vectors.key_ring()).unwrap();
+        for secret in [
+            valid.as_str(),
+            valid.split('.').nth(1).unwrap(),
+            &license.sub,
+            &license.jti,
+        ] {
+            assert!(!logged.contains(secret));
+        }
+    }
+
     #[tokio::test]
     async fn the_verdict_follows_the_signed_in_account() {
         let dir = TestDir::new("license-auth");
@@ -655,6 +974,7 @@ mod tests {
                 json!({
                     "source": l["fields"]["source"],
                     "kid": l["fields"]["kid"],
+                    "covers_major": l["fields"]["covers_major"],
                     "features": l["fields"]["features"],
                 })
             })
@@ -662,10 +982,11 @@ mod tests {
         assert_eq!(
             lines,
             [
-                json!({ "source": "pending", "kid": "test-1", "features": [] }),
+                json!({ "source": "pending", "kid": "test-1", "covers_major": 1, "features": [] }),
                 json!({
                     "source": "license",
                     "kid": "test-1",
+                    "covers_major": 1,
                     "features": [
                         "advanced_encoding",
                         "multi_destination",
@@ -673,8 +994,8 @@ mod tests {
                         "background"
                     ],
                 }),
-                json!({ "source": "pending", "kid": "test-1", "features": [] }),
-                json!({ "source": "none", "kid": null, "features": [] }),
+                json!({ "source": "pending", "kid": "test-1", "covers_major": 1, "features": [] }),
+                json!({ "source": "none", "kid": null, "covers_major": null, "features": [] }),
             ],
             "one line per change, none for repeated reads"
         );

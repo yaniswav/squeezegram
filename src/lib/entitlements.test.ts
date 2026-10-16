@@ -36,6 +36,7 @@ const FREE_BUILD = {
   source: "build",
   features: [],
   account_matches: null,
+  covers_major: null,
   reason: null,
 }
 
@@ -46,6 +47,7 @@ const STATUSES = {
     source: "none",
     features: [],
     account_matches: null,
+    covers_major: null,
     reason: null,
   },
   /** A lifetime licence lists every shipped feature, whatever its `feat` (store.rs). */
@@ -59,6 +61,7 @@ const STATUSES = {
       "background",
     ],
     account_matches: true,
+    covers_major: 1,
     reason: null,
   },
   pending: {
@@ -66,6 +69,7 @@ const STATUSES = {
     source: "pending",
     features: [],
     account_matches: null,
+    covers_major: 1,
     reason: "LIC_NO_ACCOUNT",
   },
   otherAccount: {
@@ -73,13 +77,24 @@ const STATUSES = {
     source: "rejected",
     features: [],
     account_matches: false,
+    covers_major: 1,
     reason: "LIC_WRONG_ACCOUNT",
+  },
+  /** The key verifies but covers only majors below this build's (store.rs, `OlderMajor`). */
+  olderMajor: {
+    plan: "free",
+    source: "rejected",
+    features: [],
+    account_matches: null,
+    covers_major: 1,
+    reason: "LIC_OLDER_MAJOR",
   },
   corrupt: {
     plan: "free",
     source: "rejected",
     features: [],
     account_matches: null,
+    covers_major: null,
     reason: "LIC_MALFORMED",
   },
 } satisfies Record<string, EntitlementStatus>
@@ -133,6 +148,8 @@ test("a payload that breaks the contract names the mismatch", () => {
     [{ ...FREE_BUILD, features: ["teleport"] }, "$.features[0]"],
     [{ ...FREE_BUILD, account_matches: "yes" }, "$.account_matches"],
     [{ ...FREE_BUILD, account_matches: undefined }, "$.account_matches"],
+    [{ ...FREE_BUILD, covers_major: "1" }, "$.covers_major"],
+    [{ ...FREE_BUILD, covers_major: undefined }, "$.covers_major"],
     [{ ...FREE_BUILD, reason: "LIC_EXPIRED" }, "$.reason"],
   ]
 
@@ -170,6 +187,10 @@ test("the License section shows each verdict, never anything personal", () => {
     kind: "invalid",
     code: "LIC_MALFORMED",
   })
+  assert.deepEqual(licenseView(STATUSES.olderMajor), {
+    kind: "invalid",
+    code: "LIC_OLDER_MAJOR",
+  })
 })
 
 test("remove is offered for a stored license, applied or not", () => {
@@ -177,9 +198,9 @@ test("remove is offered for a stored license, applied or not", () => {
   // SAFETY: FREE_BUILD has the fields of a status.
   assert.equal(hasStoredLicense(FREE_BUILD as EntitlementStatus), false)
 
-  const { premium, pending, otherAccount, corrupt } = STATUSES
+  const { premium, pending, otherAccount, olderMajor, corrupt } = STATUSES
 
-  for (const status of [premium, pending, otherAccount, corrupt])
+  for (const status of [premium, pending, otherAccount, olderMajor, corrupt])
     assert.equal(hasStoredLicense(status), true, status.source)
 })
 
@@ -197,9 +218,9 @@ test("a feature is granted only by the features of an applied license", () => {
   assert.equal(grants(limited, "advanced_encoding"), true)
   assert.equal(grants(limited, "background"), false)
 
-  const { none, pending, otherAccount, corrupt } = STATUSES
+  const { none, pending, otherAccount, olderMajor, corrupt } = STATUSES
 
-  for (const status of [none, pending, otherAccount, corrupt])
+  for (const status of [none, pending, otherAccount, olderMajor, corrupt])
     assert.equal(grants(status, "advanced_encoding"), false, status.source)
   assert.equal(grants(null, "advanced_encoding"), false)
 })
@@ -267,6 +288,7 @@ test("every license code and feature has an English text", () => {
     "LIC_BAD_SIGNATURE",
     "LIC_WRONG_ACCOUNT",
     "LIC_NO_ACCOUNT",
+    "LIC_OLDER_MAJOR",
   ]) {
     assert.ok(isJsonString(text.errors[code]), code)
   }

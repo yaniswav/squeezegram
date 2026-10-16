@@ -31,6 +31,7 @@ export type LicenseCode =
   | "LIC_BAD_SIGNATURE"
   | "LIC_WRONG_ACCOUNT"
   | "LIC_NO_ACCOUNT"
+  | "LIC_OLDER_MAJOR"
 
 /** `EntitlementStatus`. No identifier: neither the license nor the account. */
 export interface EntitlementStatus {
@@ -43,6 +44,11 @@ export interface EntitlementStatus {
   features: Feature[]
   /** The stored license was issued to the signed-in account; null when nothing to compare. */
   account_matches: boolean | null
+  /**
+   * The highest app major version the stored key covers; null unless its signature verified
+   * (a key of an older major still reports it, with `reason` `LIC_OLDER_MAJOR`).
+   */
+  covers_major: number | null
   reason: LicenseCode | null
 }
 
@@ -84,6 +90,7 @@ export const entitlementStatusDecoder = d.object<EntitlementStatus>({
     }),
   ),
   account_matches: d.nullable(d.boolean),
+  covers_major: d.nullable(d.number),
   reason: d.nullable(
     d.literals<LicenseCode>({
       LIC_MALFORMED: true,
@@ -91,6 +98,7 @@ export const entitlementStatusDecoder = d.object<EntitlementStatus>({
       LIC_BAD_SIGNATURE: true,
       LIC_WRONG_ACCOUNT: true,
       LIC_NO_ACCOUNT: true,
+      LIC_OLDER_MAJOR: true,
     }),
   ),
 })

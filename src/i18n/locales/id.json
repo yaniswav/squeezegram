@@ -134,6 +134,7 @@
     "LIC_BAD_SIGNATURE": "Lisensi ini gagal pemeriksaan tanda tangannya. Salin ulang dari pesan bot tanpa mengubah apa pun.",
     "LIC_WRONG_ACCOUNT": "Lisensi ini milik akun Telegram lain. Masuk dengan akun tempat lisensi ini dibeli.",
     "LIC_NO_ACCOUNT": "Masuk ke Telegram untuk memeriksa lisensi ini.",
+    "LIC_OLDER_MAJOR": "Lisensi ini hanya mencakup versi squeezegram yang lebih lama. Versi ini memerlukan lisensi baru.",
     "FEATURE_NOT_LICENSED": "Fitur ini termasuk dalam squeezegram Premium. Tambahkan lisensi di Pengaturan, lalu coba lagi."
   },
   "sidecars": {

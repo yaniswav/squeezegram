@@ -2237,6 +2237,7 @@ mod tests {
                 source: EntitlementSource::License,
                 features: Feature::ALL.to_vec(),
                 account_matches: Some(true),
+                covers_major: Some(1),
                 reason: None,
             }
         }

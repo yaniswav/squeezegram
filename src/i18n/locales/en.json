@@ -135,6 +135,7 @@
     "LIC_BAD_SIGNATURE": "This license failed its signature check. Copy it again from the bot's message, without changing anything.",
     "LIC_WRONG_ACCOUNT": "This license belongs to another Telegram account. Sign in with the account it was bought for.",
     "LIC_NO_ACCOUNT": "Sign in to Telegram to check this license.",
+    "LIC_OLDER_MAJOR": "This license covers earlier versions of squeezegram only. This version needs a new license.",
     "FEATURE_NOT_LICENSED": "This feature is included with squeezegram Premium. Add a license in Settings, then try again."
   },
   "sidecars": {

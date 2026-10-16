@@ -4,11 +4,15 @@
 //!   trailing bits are malformed.
 //! - The signature is Ed25519 (`verify_strict`) over the ASCII bytes `SQZ1.<payload part>` exactly
 //!   as received: nothing is decoded and re-encoded before verification.
-//! - The payload is JSON: `v` (1), `kid`, `sub`, `plan` (`lifetime`), `feat`, `iat`, `jti`.
-//!   Unknown fields and unknown feature names are ignored; `iat` is informational (a date in
-//!   the future is accepted: the user's clock is not trusted either way).
+//! - The payload is JSON: `v` (1), `kid`, `sub`, `plan` (`lifetime`), `maj`, `feat`, `iat`,
+//!   `jti`. Unknown fields and unknown feature names are ignored; `iat` is informational (a date
+//!   in the future is accepted: the user's clock is not trusted either way).
+//! - `maj` is the highest app major version the key covers, an integer in 1..=999 and required:
+//!   a token without it is malformed. Every key sold today has `maj` 1, which covers 0.x and 1.x;
+//!   a build of a later major refuses it (`OlderMajor`, see `check_coverage`).
 //! - `feat` is parsed and kept, but a `lifetime` licence grants every feature whatever it lists
-//!   (`Plan::grants_every_feature`): licences issued before a feature existed unlock it too.
+//!   (`Plan::grants_every_feature`): licences issued before a feature existed unlock it too, as
+//!   long as the app major is covered by `maj`.
 //! - `sub` binds the license to a Telegram account without carrying its id: see `subject_for`.
 //!
 //! Neither the token nor the payload ever reaches a `Debug`, a `Display` or the journal.
@@ -27,6 +31,9 @@ use super::{Feature, Plan};
 pub const PREFIX: &str = "SQZ1";
 /// `v` of the payload for `SQZ1`.
 pub const PAYLOAD_VERSION: u32 = 1;
+/// Bounds of `maj` (an issuer bug, not a real major, beyond them).
+pub const MAJOR_MIN: u64 = 1;
+pub const MAJOR_MAX: u64 = 999;
 /// Domain separation of `subject_for`.
 pub const SUBJECT_DOMAIN: &[u8] = b"squeezegram-lic-v1";
 /// Far above any issued key (about 400 characters); longer input is refused before decoding.
@@ -45,6 +52,8 @@ pub enum LicenseError {
     WrongAccount,
     #[error("no Telegram account is signed in to check the license key against")]
     NoAccount,
+    #[error("license key covers only older major versions of the app")]
+    OlderMajor,
 }
 
 impl LicenseError {
@@ -55,6 +64,7 @@ impl LicenseError {
             LicenseError::BadSignature => "LIC_BAD_SIGNATURE",
             LicenseError::WrongAccount => "LIC_WRONG_ACCOUNT",
             LicenseError::NoAccount => "LIC_NO_ACCOUNT",
+            LicenseError::OlderMajor => "LIC_OLDER_MAJOR",
         }
     }
 }
@@ -109,6 +119,8 @@ pub struct License {
     pub kid: String,
     pub sub: String,
     pub plan: Plan,
+    /// Highest app major version the key covers: every Premium feature of the majors up to it.
+    pub maj: u32,
     /// The `feat` list: known features only, in license order. What the licence names, not
     /// what it grants: see `allows`.
     pub features: Vec<Feature>,
@@ -131,11 +143,13 @@ impl License {
     }
 }
 
-/// Written by hand: `sub` and `jti` identify a purchase; only the plan and a count show.
+/// Written by hand: `sub` and `jti` identify a purchase; only the plan, the major and a count
+/// show.
 impl fmt::Debug for License {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("License")
             .field("plan", &self.plan)
+            .field("maj", &self.maj)
             .field("features", &self.features.len())
             .finish_non_exhaustive()
     }
@@ -148,9 +162,25 @@ struct Payload {
     kid: String,
     sub: String,
     plan: String,
+    /// Raw JSON, judged after the signature (like `plan` and `sub`): a wrongly typed `maj` must
+    /// not turn the error of an unsigned or badly signed token into `Malformed`. Absent and
+    /// `null` both land on `None`.
+    #[serde(default)]
+    maj: Option<serde_json::Value>,
     feat: Vec<String>,
     iat: i64,
     jti: String,
+}
+
+/// `maj` as a JSON unsigned integer in `MAJOR_MIN..=MAJOR_MAX`: not a float (`1.0` included), a
+/// string, a bool, `null`, a negative or a number too large for `u64`.
+fn major_of(value: Option<&serde_json::Value>) -> Option<u32> {
+    let major = value?.as_u64()?;
+    if (MAJOR_MIN..=MAJOR_MAX).contains(&major) {
+        u32::try_from(major).ok()
+    } else {
+        None
+    }
 }
 
 /// `hex(SHA-256(b"squeezegram-lic-v1" || decimal ASCII of user_id))`, lowercase: what `sub`
@@ -200,6 +230,7 @@ pub fn verify(token: &str, keys: &KeyRing) -> Result<License, LicenseError> {
         "lifetime" => Plan::Lifetime,
         _ => return Err(LicenseError::Malformed),
     };
+    let maj = major_of(payload.maj.as_ref()).ok_or(LicenseError::Malformed)?;
     let sub_ok = payload.sub.len() == 64
         && payload
             .sub
@@ -222,10 +253,20 @@ pub fn verify(token: &str, keys: &KeyRing) -> Result<License, LicenseError> {
         kid: payload.kid,
         sub: payload.sub,
         plan,
+        maj,
         features,
         iat: payload.iat,
         jti: payload.jti,
     })
+}
+
+/// The key covers the app major version `build_major` (`maj` is the highest one it covers).
+pub fn check_coverage(license: &License, build_major: u32) -> Result<(), LicenseError> {
+    if build_major <= license.maj {
+        Ok(())
+    } else {
+        Err(LicenseError::OlderMajor)
+    }
 }
 
 /// The license applies only to the account it was issued to.
@@ -238,7 +279,8 @@ pub fn check_account(license: &License, user_id: Option<i64>) -> Result<(), Lice
     }
 }
 
-/// `verify` then `check_account`.
+/// `verify` then `check_account`. The major version of the build is not checked here: the store
+/// does it (`check_coverage`) before the account.
 pub fn verify_for(
     token: &str,
     keys: &KeyRing,
@@ -314,31 +356,46 @@ pub(crate) mod test_vectors {
         /// A token for `payload`, signed with the test key (its seed is public): for a payload
         /// the vectors do not have.
         pub fn sign(&self, payload: &serde_json::Value) -> String {
+            self.sign_text(&serde_json::to_string(payload).unwrap())
+        }
+
+        /// Like `sign`, for payload text `serde_json::Value` cannot hold as written (`1.0`, a
+        /// number beyond `u64`).
+        pub fn sign_text(&self, payload: &str) -> String {
             use base64::Engine;
             use base64::engine::general_purpose::URL_SAFE_NO_PAD;
             use ed25519_dalek::{Signer, SigningKey};
 
-            let signed = format!(
-                "{}.{}",
-                super::PREFIX,
-                URL_SAFE_NO_PAD.encode(serde_json::to_vec(payload).unwrap())
-            );
+            let signed = format!("{}.{}", super::PREFIX, URL_SAFE_NO_PAD.encode(payload));
             let signature =
                 SigningKey::from_bytes(&hex32(&self.test_key.seed_hex)).sign(signed.as_bytes());
             format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
         }
 
-        /// A `lifetime` licence for `user_id` whose `feat` is `feat`.
-        pub fn lifetime_token(&self, user_id: i64, feat: &[&str], jti: &str) -> String {
+        /// A `lifetime` licence for `user_id` covering up to major `maj`, whose `feat` is `feat`.
+        pub fn lifetime_token_for_major(
+            &self,
+            user_id: i64,
+            maj: u32,
+            feat: &[&str],
+            jti: &str,
+        ) -> String {
             self.sign(&serde_json::json!({
                 "v": 1,
                 "kid": self.test_key.kid,
                 "sub": super::subject_for(user_id),
                 "plan": "lifetime",
+                "maj": maj,
                 "feat": feat,
                 "iat": 1_700_000_000,
                 "jti": jti,
             }))
+        }
+
+        /// A `lifetime` licence for `user_id` covering major 1 (what is sold), whose `feat` is
+        /// `feat`.
+        pub fn lifetime_token(&self, user_id: i64, feat: &[&str], jti: &str) -> String {
+            self.lifetime_token_for_major(user_id, 1, feat, jti)
         }
     }
 }
@@ -363,7 +420,7 @@ mod tests {
     fn every_vector_gives_its_expected_result() {
         let vectors = test_vectors::load();
         let keys = vectors.key_ring();
-        assert!(vectors.cases.len() >= 12);
+        assert!(vectors.cases.len() >= 22);
         for case in &vectors.cases {
             let result = verify_for(&case.token, &keys, case.user_id);
             let got = match &result {
@@ -387,6 +444,7 @@ mod tests {
         // Lifetime: every feature, listed or not.
         assert!(Feature::ALL.iter().all(|f| license.allows(*f)));
         assert_eq!(license.kid, "test-1");
+        assert_eq!(license.maj, 1);
         // An unknown feature name (`teleport`) and an unknown field are ignored.
         let tolerant = verify(&vectors.case("unknown_field_tolerated").token, &keys).unwrap();
         assert_eq!(tolerant.features, [Feature::AdvancedEncoding]);
@@ -455,6 +513,7 @@ mod tests {
             "kid": vectors.test_key.kid,
             "sub": subject_for(777000001),
             "plan": "limited",
+            "maj": 1,
             "feat": ["advanced_encoding"],
             "iat": 1_700_000_000,
             "jti": "limited",
@@ -467,6 +526,7 @@ mod tests {
             kid: "test-1".into(),
             sub: subject_for(777000001),
             plan: Plan::Free,
+            maj: 1,
             features: vec![Feature::AdvancedEncoding],
             iat: 0,
             jti: "limited".into(),
@@ -482,6 +542,107 @@ mod tests {
         assert_eq!(
             limited.granted().collect::<Vec<_>>(),
             [Feature::AdvancedEncoding]
+        );
+    }
+
+    /// The payload of `lifetime_token` with `maj` written as the JSON text `maj` (or left out).
+    fn payload_with_maj(kid: &str, maj: Option<&str>) -> String {
+        let maj = maj
+            .map(|text| format!(r#""maj":{text},"#))
+            .unwrap_or_default();
+        format!(
+            r#"{{"v":1,"kid":"{kid}","sub":"{}","plan":"lifetime",{maj}"feat":[],"iat":1700000000,"jti":"maj"}}"#,
+            subject_for(777000001),
+        )
+    }
+
+    #[test]
+    fn maj_is_required_and_must_be_an_integer_from_1_to_999() {
+        let vectors = test_vectors::load();
+        let keys = vectors.key_ring();
+        for (maj, expected) in [
+            (Some("1"), Some(1)),
+            (Some("2"), Some(2)),
+            (Some("999"), Some(999)),
+            (None, None),
+            (Some("null"), None),
+            (Some("0"), None),
+            (Some("-1"), None),
+            (Some("1.5"), None),
+            (Some("1.0"), None),
+            (Some("1e0"), None),
+            (Some(r#""1""#), None),
+            (Some("true"), None),
+            (Some("false"), None),
+            (Some("[1]"), None),
+            (Some("{}"), None),
+            (Some("1000"), None),
+            (Some("4294967297"), None),
+            (Some("18446744073709551616"), None),
+            (Some("99999999999999999999999999"), None),
+        ] {
+            let token = vectors.sign_text(&payload_with_maj("test-1", maj));
+            let got = verify(&token, &keys).map(|license| license.maj);
+            let want = expected.ok_or(LicenseError::Malformed);
+            assert_eq!(got, want, "maj {maj:?}");
+        }
+    }
+
+    #[test]
+    fn a_bad_maj_never_changes_the_error_of_a_token_that_does_not_verify() {
+        // The signature is checked first, `maj` after (like `plan` and `sub`): whatever type
+        // `maj` has, an unknown key id stays `UnknownKid` and a wrong signature `BadSignature`.
+        let vectors = test_vectors::load();
+        let keys = vectors.key_ring();
+        let valid_signature = vectors.case("valid").token.rsplit('.').next().unwrap();
+        for maj in [
+            None,
+            Some("null"),
+            Some("0"),
+            Some("1.0"),
+            Some(r#""1""#),
+            Some("true"),
+            Some("18446744073709551616"),
+        ] {
+            let unknown = vectors.sign_text(&payload_with_maj("prod-9", maj));
+            assert_eq!(
+                verify(&unknown, &keys),
+                Err(LicenseError::UnknownKid),
+                "{maj:?}"
+            );
+            let signed = vectors.sign_text(&payload_with_maj("test-1", maj));
+            let (head, _) = signed.rsplit_once('.').unwrap();
+            let forged = format!("{head}.{valid_signature}");
+            assert_eq!(
+                verify(&forged, &keys),
+                Err(LicenseError::BadSignature),
+                "{maj:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_covers_the_majors_up_to_its_maj() {
+        let vectors = test_vectors::load();
+        let keys = vectors.key_ring();
+        let one = verify(&vectors.case("valid").token, &keys).unwrap();
+        let two = verify(&vectors.case("maj_2").token, &keys).unwrap();
+        assert_eq!((one.maj, two.maj), (1, 2));
+        // What is sold today: 0.x and 1.x, not 2.x.
+        assert_eq!(check_coverage(&one, 0), Ok(()));
+        assert_eq!(check_coverage(&one, 1), Ok(()));
+        assert_eq!(check_coverage(&one, 2), Err(LicenseError::OlderMajor));
+        assert_eq!(check_coverage(&one, 999), Err(LicenseError::OlderMajor));
+        assert_eq!(check_coverage(&two, 0), Ok(()));
+        assert_eq!(check_coverage(&two, 1), Ok(()));
+        assert_eq!(check_coverage(&two, 2), Ok(()));
+        assert_eq!(check_coverage(&two, 3), Err(LicenseError::OlderMajor));
+        assert_eq!(LicenseError::OlderMajor.code(), "LIC_OLDER_MAJOR");
+        // A key that covers a major is still bound to its account: `verify_for` does not look
+        // at the build major.
+        assert_eq!(
+            verify_for(&vectors.case("valid").token, &keys, Some(1)),
+            Err(LicenseError::WrongAccount)
         );
     }
 

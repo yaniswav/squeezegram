@@ -83,10 +83,10 @@ impl Feature {
 
 /// The plan in effect.
 ///
-/// `Lifetime` is what is sold, "squeezegram Premium, lifetime": every Premium feature of every
-/// version, including features added after the licence was issued. Its `feat` list therefore
-/// does not limit it (`License::allows`); the list stays in the format for a future plan that
-/// grants only what it names.
+/// `Lifetime` is what is sold, "squeezegram Premium, lifetime": every Premium feature of the app
+/// majors up to the key's `maj` (today 0.x and 1.x), including features added after the licence
+/// was issued. Its `feat` list therefore does not limit it (`License::allows`); the list stays
+/// in the format for a future plan that grants only what it names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Plan {
@@ -127,8 +127,8 @@ pub enum EntitlementSource {
     /// A stored license verifies, and no account is signed in to check it against: it applies
     /// once its account signs in.
     Pending,
-    /// A license is stored but does not apply (malformed, unknown key, bad signature, or
-    /// another account); `reason` has the code.
+    /// A license is stored but does not apply (malformed, unknown key, bad signature, another
+    /// account, or a key that covers only older major versions); `reason` has the code.
     Rejected,
 }
 
@@ -156,6 +156,9 @@ pub struct EntitlementStatus {
     /// Whether the stored license was issued to the signed-in account; `null` when there is no
     /// verified license or no account to compare with.
     pub account_matches: Option<bool>,
+    /// The highest app major version the stored key covers (its `maj`); `null` unless its
+    /// signature verified, whatever the account or this build's major.
+    pub covers_major: Option<u32>,
     /// The `LIC_*` code that keeps a stored license from applying.
     pub reason: Option<&'static str>,
 }
@@ -166,6 +169,7 @@ impl EntitlementStatus {
         source: EntitlementSource::Build,
         features: Vec::new(),
         account_matches: None,
+        covers_major: None,
         reason: None,
     };
 }
@@ -224,6 +228,7 @@ mod tests {
                 "source": "build",
                 "features": [],
                 "account_matches": null,
+                "covers_major": null,
                 "reason": null
             })
         );
