@@ -279,8 +279,10 @@ pub fn check_account(license: &License, user_id: Option<i64>) -> Result<(), Lice
     }
 }
 
-/// `verify` then `check_account`. The major version of the build is not checked here: the store
-/// does it (`check_coverage`) before the account.
+/// `verify` then `check_account`, for the tests. The major version of the build is not checked
+/// here: the store does it (`check_coverage`) before the account, so nothing outside the tests
+/// may grant from this.
+#[cfg(test)]
 pub fn verify_for(
     token: &str,
     keys: &KeyRing,
