@@ -20,7 +20,7 @@
     different one replaces the old one, after the same confirmation).
 
     The release is a pre-release on purpose: it is not "the latest release" of the project, so
-    it never answers releases/latest/download/latest.json for the updater. The tag is created
+    it never becomes the project's latest release (the updater reads channel-v<N>, not this tag). The tag is created
     on the current head of the default branch; the DLL does not come from that commit (it is built
     from TDLib's sources, see the notices), the tag is only a name for the release.
 

@@ -11,7 +11,7 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path (Split-Path -Parent $PSScriptRoot) 'lib\channel.ps1')
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'lib/channel.ps1')
 
 $checks = 0
 function Assert-Equal($Actual, $Expected, [string] $What) {
