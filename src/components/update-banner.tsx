@@ -1,20 +1,32 @@
-import { CircleArrowUp, Download, ExternalLink, X } from "lucide-react"
+import {
+  CircleArrowUp,
+  Download,
+  ExternalLink,
+  KeyRound,
+  X,
+} from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { formatPercent } from "@/lib/format"
+import { isDesktop, licenseOpenPurchase } from "@/lib/ipc"
+import { newKeyNeeded } from "@/lib/update"
+import { useAlerts } from "@/state/alerts"
 import { useQueue } from "@/state/queue"
 import { useUpdate } from "@/state/update"
 
 /**
  * A newer version exists. The installer build offers "Download and install" (the core checks
  * the signature, closes the app and runs the installer, which restarts it); the portable
- * build only links to the release page. Shown on every page until dismissed for that version.
+ * build only links to the release page. When the license does not cover the new major, both
+ * builds get the same text instead: get a license, or open the download page. Shown on every
+ * page until dismissed for that version.
  */
 export function UpdateBanner() {
   const { t, i18n } = useTranslation()
+  const { pushError } = useAlerts()
   const { notice, progress, installing, install, openPage } = useUpdate()
   const { running } = useQueue()
   const [dismissed, setDismissed] = useState<string | null>(null)
@@ -25,6 +37,7 @@ export function UpdateBanner() {
     found !== null && (installing || dismissed !== found.version) ? found : null
 
   const portable = shown?.kind === "portable"
+  const newKey = shown ? newKeyNeeded(shown) : null
   // Closing to install ends an upload in progress; the user pauses the queue first.
   const queueBusy = running === true
   const handingOver = progress?.phase === "installing"
@@ -47,9 +60,25 @@ export function UpdateBanner() {
               aria-hidden
             />
             <p id="update-title" className="min-w-0 flex-1 text-sm">
-              {t("update.banner.title", { version: shown.version })}
+              {newKey
+                ? t("update.banner.needsKey", {
+                    version: shown.version,
+                    major: newKey.covers,
+                    newMajor: newKey.next,
+                  })
+                : t("update.banner.title", { version: shown.version })}
             </p>
-            {portable ? (
+            {newKey && (
+              <Button
+                size="sm"
+                disabled={!isDesktop()}
+                onClick={() => void licenseOpenPurchase().catch(pushError)}
+              >
+                <KeyRound data-icon="inline-start" />
+                {t("update.banner.getLicense")}
+              </Button>
+            )}
+            {newKey || portable ? (
               <Button
                 variant="outline"
                 size="sm"
@@ -80,13 +109,19 @@ export function UpdateBanner() {
             )}
           </div>
 
-          {portable && (
+          {newKey && (
+            <p className="text-xs text-muted-foreground">
+              {t("update.banner.needsKeyNote")}
+            </p>
+          )}
+
+          {portable && !newKey && (
             <p className="text-xs text-muted-foreground">
               {t("update.banner.portableHint")}
             </p>
           )}
 
-          {!portable && queueBusy && !installing && (
+          {!portable && !newKey && queueBusy && !installing && (
             <p className="text-xs text-muted-foreground">
               {t("update.banner.queueRunning")}
             </p>

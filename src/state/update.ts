@@ -15,7 +15,7 @@ export interface UpdateApi {
   check(): Promise<UpdateNotice | null>
   /** Download, verify, install, restart (installer build only). */
   install(): Promise<void>
-  /** Opens the release page in the browser (portable build). */
+  /** Opens the release page in the browser. */
   openPage(): Promise<void>
 }
 

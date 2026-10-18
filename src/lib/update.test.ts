@@ -5,12 +5,15 @@ import { test } from "node:test"
 import { DecodeError, type Decoder } from "./decode.ts"
 import { isJson, isJsonObject, isJsonString } from "./json.ts"
 import {
+  newKeyNeeded,
   updateInfoDecoder,
   updateNoticeDecoder,
   updateProgressDecoder,
 } from "./update.ts"
 
 const RELEASES = "https://github.com/yaniswav/squeezegram/releases/latest"
+
+const TAG = "https://github.com/yaniswav/squeezegram/releases/tag/v"
 
 /** Where the decoder says the payload breaks its contract; null if it decodes. */
 function failurePath(run: () => void): string | null {
@@ -29,10 +32,59 @@ test("an update notice as the core emits it decodes", () => {
     version: "0.2.0",
     kind: "portable",
     notes: "Fixes",
-    url: RELEASES,
+    url: `${TAG}0.2.0`,
+    requires_new_key: false,
   }
 
   assert.deepEqual(updateNoticeDecoder(payload, "$"), payload)
+})
+
+test("a notice that needs a new key carries the covered major", () => {
+  const payload = {
+    available: true,
+    version: "2.0.0",
+    kind: "installer",
+    url: `${TAG}2.0.0`,
+    requires_new_key: true,
+    covers_major: 1,
+  }
+
+  const notice = updateNoticeDecoder(payload, "$")
+
+  assert.deepEqual(notice, payload)
+  assert.deepEqual(newKeyNeeded(notice), { covers: 1, next: 2 })
+})
+
+test("the new-key text needs the flag, the covered major and a readable version", () => {
+  const base = {
+    available: true,
+    version: "2.1.0-rc.1",
+    kind: "portable" as const,
+    url: RELEASES,
+  }
+
+  assert.deepEqual(
+    newKeyNeeded({ ...base, requires_new_key: true, covers_major: 0 }),
+    { covers: 0, next: 2 },
+  )
+  assert.equal(newKeyNeeded({ ...base, requires_new_key: false }), null)
+
+  assert.equal(
+    newKeyNeeded({ ...base, requires_new_key: false, covers_major: 1 }),
+    null,
+  )
+
+  assert.equal(newKeyNeeded({ ...base, requires_new_key: true }), null)
+
+  assert.equal(
+    newKeyNeeded({
+      ...base,
+      version: "next",
+      requires_new_key: true,
+      covers_major: 1,
+    }),
+    null,
+  )
 })
 
 test("notes are optional and the 'no update' notice decodes", () => {
@@ -41,6 +93,7 @@ test("notes are optional and the 'no update' notice decodes", () => {
     version: "0.1.0",
     kind: "installer",
     url: RELEASES,
+    requires_new_key: false,
   }
 
   const notice = updateNoticeDecoder(payload, "$")
@@ -62,7 +115,8 @@ test("the info of a session with and without a notice decodes", () => {
     available: true,
     version: "0.2.0",
     kind: "installer",
-    url: RELEASES,
+    url: `${TAG}0.2.0`,
+    requires_new_key: false,
   }
 
   assert.deepEqual(
@@ -109,7 +163,12 @@ test("extra keys are left out", () => {
 })
 
 test("a payload that breaks a contract names the mismatch", () => {
-  const notice = { available: true, version: "0.2.0", kind: "installer" }
+  const notice = {
+    available: true,
+    version: "0.2.0",
+    kind: "installer",
+    requires_new_key: false,
+  }
 
   const progress = {
     phase: "downloading",
@@ -125,6 +184,21 @@ test("a payload that breaks a contract names the mismatch", () => {
     ["notice", { ...notice, url: RELEASES, version: 2 }, "$.version"],
     ["notice", { ...notice, url: RELEASES, notes: 3 }, "$.notes"],
     ["notice", notice, "$.url"],
+    [
+      "notice",
+      { ...notice, url: RELEASES, requires_new_key: "no" },
+      "$.requires_new_key",
+    ],
+    [
+      "notice",
+      { ...notice, url: RELEASES, requires_new_key: true, covers_major: "1" },
+      "$.covers_major",
+    ],
+    [
+      "notice",
+      { available: true, version: "0.2.0", kind: "installer", url: RELEASES },
+      "$.requires_new_key",
+    ],
     ["progress", { ...progress, phase: "verifying" }, "$.phase"],
     ["progress", { ...progress, downloaded: "1" }, "$.downloaded"],
     ["progress", { phase: "downloading", downloaded: 1 }, "$.total"],
@@ -168,6 +242,7 @@ test("every update error code the core can return has an English text", () => {
     "UPDATE_DOWNLOAD_FAILED",
     "UPDATE_SIGNATURE_INVALID",
     "UPDATE_INSTALL_FAILED",
+    "UPDATE_NEEDS_NEW_KEY",
   ]) {
     assert.ok(isJsonString(text.errors[code]), code)
   }

@@ -29,8 +29,9 @@ use crate::transport::AuthState;
 
 pub const FILE_NAME: &str = "license.txt";
 /// Major version of this build, read from the package version at compile time: a malformed
-/// value stops the build instead of panicking at run time.
-const BUILD_MAJOR: u32 = parse_major(env!("CARGO_PKG_VERSION_MAJOR"));
+/// value stops the build instead of panicking at run time. The updater compares against the
+/// same value, so the two never disagree about which major is running.
+pub const BUILD_MAJOR: u32 = parse_major(env!("CARGO_PKG_VERSION_MAJOR"));
 
 const fn parse_major(text: &str) -> u32 {
     let digits = text.as_bytes();

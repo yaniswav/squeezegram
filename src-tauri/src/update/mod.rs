@@ -12,7 +12,12 @@
 //! version, the Windows version and the architecture are not sent either. GitHub sees the IP
 //! address, as for any download. No identifier, no Telegram data.
 //!
-//! - this file: kinds, notices, version comparison, cadence, error codes, progress sampling
+//! A key covers the app up to a major version (`maj`). The updater never moves a covered user
+//! to a major the key does not cover: the notice says so (`requires_new_key`) and the install
+//! refuses, both decided in the core by `needs_new_key`.
+//!
+//! - this file: kinds, notices, version comparison, key rule, cadence, error codes, progress
+//!   sampling
 //! - `installer`: Inno marker and validated installer arguments
 //! - `service`: the plugin calls, the cached result, the events and the journal lines
 
@@ -30,8 +35,10 @@ pub use service::UpdateService;
 
 use crate::settings::Updates;
 
-/// Page of the latest release: where a portable build sends the user.
+/// Page of the latest release: where the user is sent when no newer version was announced.
 pub const RELEASES_PAGE: &str = "https://github.com/yaniswav/squeezegram/releases/latest";
+/// Pages of the tagged releases; the tag is `v` plus the version.
+const RELEASE_TAG_PAGE: &str = "https://github.com/yaniswav/squeezegram/releases/tag/v";
 /// Empty file the portable zip puts next to the executable.
 pub const PORTABLE_FLAG: &str = "portable.flag";
 /// Minimum time between two automatic checks.
@@ -88,18 +95,27 @@ pub struct UpdateNotice {
     /// Release notes of the manifest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
-    /// Page of the release, for the portable build's "open the download page".
-    pub url: &'static str,
+    /// Page of the announced release (the latest one when nothing newer exists), for "open the
+    /// download page".
+    pub url: String,
+    /// The stored key does not cover the announced version's major: the page offers a new key
+    /// instead of the install, which the core would refuse anyway.
+    pub requires_new_key: bool,
+    /// The highest major the key covers; only present with `requires_new_key`, for the text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub covers_major: Option<u32>,
 }
 
 impl UpdateNotice {
     pub fn available(version: String, kind: Kind, notes: Option<String>) -> Self {
         Self {
             available: true,
+            url: release_page(&version),
             version,
             kind,
             notes,
-            url: RELEASES_PAGE,
+            requires_new_key: false,
+            covers_major: None,
         }
     }
 
@@ -109,8 +125,18 @@ impl UpdateNotice {
             version: current_version,
             kind,
             notes: None,
-            url: RELEASES_PAGE,
+            url: RELEASES_PAGE.to_owned(),
+            requires_new_key: false,
+            covers_major: None,
         }
+    }
+
+    /// Records the key rule's answer: the major the key covers when the announced version
+    /// needs a new key, else `None`.
+    pub fn with_missing_coverage(mut self, covers_major: Option<u32>) -> Self {
+        self.requires_new_key = covers_major.is_some();
+        self.covers_major = covers_major;
+        self
     }
 }
 
@@ -132,6 +158,38 @@ pub fn is_newer(current: &Version, candidate: &Version) -> bool {
         }
     }
     core(candidate) > core(current)
+}
+
+/// Page of the release `version` on GitHub, or the latest-release page when the text is not a
+/// plain SemVer version: the text ends up in a URL that is handed to the shell, so only the
+/// SemVer characters go through.
+pub fn release_page(version: &str) -> String {
+    let plain = !version.is_empty()
+        && version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
+        && Version::parse(version).is_ok();
+    if plain {
+        format!("{RELEASE_TAG_PAGE}{version}")
+    } else {
+        RELEASES_PAGE.to_owned()
+    }
+}
+
+/// Whether installing a release of major `candidate_major` would leave a user the key covers
+/// today without coverage. True when a stored key's signature verified (`covers_major`), this
+/// build is still within it, and the candidate is beyond it. A build already beyond the key has
+/// nothing left to lose, and a free user has no key: neither is ever blocked. A candidate whose
+/// major cannot be read (`None`) counts as beyond, so the rule fails closed.
+pub fn needs_new_key(
+    covers_major: Option<u32>,
+    build_major: u32,
+    candidate_major: Option<u64>,
+) -> bool {
+    let Some(covers) = covers_major else {
+        return false;
+    };
+    build_major <= covers && candidate_major.is_none_or(|major| major > u64::from(covers))
 }
 
 /// Whether 24 hours have passed since `last_check_at`. A missing, unreadable or future time
@@ -183,6 +241,7 @@ impl UpdateError {
     pub const DOWNLOAD_FAILED: &'static str = "UPDATE_DOWNLOAD_FAILED";
     pub const SIGNATURE_INVALID: &'static str = "UPDATE_SIGNATURE_INVALID";
     pub const INSTALL_FAILED: &'static str = "UPDATE_INSTALL_FAILED";
+    pub const NEEDS_NEW_KEY: &'static str = "UPDATE_NEEDS_NEW_KEY";
 
     fn new(code: &'static str, cause: &'static str) -> Self {
         Self { code, cause }
@@ -193,6 +252,11 @@ impl UpdateError {
         Self::new(Self::INSTALL_FAILED, "portable")
     }
 
+    /// The stored key does not cover the major of the update.
+    pub fn needs_new_key() -> Self {
+        Self::new(Self::NEEDS_NEW_KEY, "major_not_covered")
+    }
+
     fn busy() -> Self {
         Self::new(Self::INSTALL_FAILED, "busy")
     }
@@ -201,7 +265,7 @@ impl UpdateError {
     pub fn phase(&self) -> &'static str {
         match self.code {
             Self::CHECK_FAILED | Self::NOT_PUBLISHED => "check",
-            Self::INSTALL_FAILED => "install",
+            Self::INSTALL_FAILED | Self::NEEDS_NEW_KEY => "install",
             _ => "download",
         }
     }
@@ -492,17 +556,108 @@ mod tests {
                 "version": "0.2.0",
                 "kind": "portable",
                 "notes": "Fixes",
-                "url": "https://github.com/yaniswav/squeezegram/releases/latest"
+                "url": "https://github.com/yaniswav/squeezegram/releases/tag/v0.2.0",
+                "requires_new_key": false
             })
+        );
+        let blocked = UpdateNotice::available("2.0.0".into(), Kind::Installer, None)
+            .with_missing_coverage(Some(1));
+        assert_eq!(
+            serde_json::to_value(&blocked).unwrap(),
+            serde_json::json!({
+                "available": true,
+                "version": "2.0.0",
+                "kind": "installer",
+                "url": "https://github.com/yaniswav/squeezegram/releases/tag/v2.0.0",
+                "requires_new_key": true,
+                "covers_major": 1
+            })
+        );
+        assert!(
+            !blocked.with_missing_coverage(None).requires_new_key,
+            "judged again, the same notice can be allowed"
         );
         let none = UpdateNotice::up_to_date("0.1.0".into(), Kind::Installer);
         let value = serde_json::to_value(&none).unwrap();
         assert_eq!(value["available"], false);
         assert_eq!(value["version"], "0.1.0");
+        assert_eq!(value["url"], RELEASES_PAGE);
+        assert_eq!(value["requires_new_key"], false);
+        assert!(value.get("covers_major").is_none());
         assert!(
             value.get("notes").is_none(),
             "notes are left out when absent"
         );
+    }
+
+    #[test]
+    fn a_new_key_is_needed_only_by_a_covered_user_moving_past_the_key() {
+        // (covers_major, build_major, candidate_major, needs_new_key)
+        let cases = [
+            // Sold today: maj 1 covers 0.x and 1.x.
+            (Some(1), 0, 0, false),
+            (Some(1), 0, 1, false),
+            (Some(1), 1, 1, false),
+            (Some(1), 0, 2, true),
+            (Some(1), 1, 2, true),
+            (Some(1), 1, 3, true),
+            // Already beyond the key: nothing left to lose, never blocked.
+            (Some(1), 2, 2, false),
+            (Some(1), 2, 3, false),
+            (Some(1), 3, 3, false),
+            // A key that covers more.
+            (Some(2), 1, 2, false),
+            (Some(2), 2, 3, true),
+            (Some(0), 0, 1, true),
+            (Some(0), 0, 0, false),
+            // No verified key (free, no licence, bad signature): never blocked.
+            (None, 0, 3, false),
+            (None, 1, 2, false),
+            (None, 5, 9, false),
+        ];
+        for (covers, build, candidate, expected) in cases {
+            assert_eq!(
+                needs_new_key(covers, build, Some(candidate)),
+                expected,
+                "key {covers:?}, build {build}, candidate {candidate}"
+            );
+        }
+        // A candidate whose major cannot be read fails closed for a covered user only.
+        assert!(needs_new_key(Some(1), 1, None));
+        assert!(!needs_new_key(Some(1), 2, None));
+        assert!(!needs_new_key(None, 1, None));
+    }
+
+    #[test]
+    fn the_release_page_is_the_tag_of_a_plain_version_and_else_the_latest() {
+        for (version, page) in [
+            ("0.2.0", "releases/tag/v0.2.0"),
+            ("2.0.0", "releases/tag/v2.0.0"),
+            ("1.0.0-rc.1", "releases/tag/v1.0.0-rc.1"),
+            ("1.0.0+build.5", "releases/tag/v1.0.0+build.5"),
+        ] {
+            assert_eq!(
+                release_page(version),
+                format!("https://github.com/yaniswav/squeezegram/{page}")
+            );
+        }
+        for hostile in [
+            "",
+            "latest",
+            "1.0",
+            "../../evil",
+            "1.0.0/../x",
+            "1.0.0?x=1",
+            "1.0.0#frag",
+            "1.0.0 --flag",
+            "1.0.0&calc",
+            "1.0.0\\x",
+            "1.0.0\n",
+            "v1.0.0",
+            "\u{661}.0.0",
+        ] {
+            assert_eq!(release_page(hostile), RELEASES_PAGE, "{hostile:?}");
+        }
     }
 
     #[test]
@@ -531,6 +686,12 @@ mod tests {
         let install = UpdateError::from_install(&Error::InvalidUpdaterFormat);
         assert_eq!(install.code, "UPDATE_INSTALL_FAILED");
         assert_eq!(install.phase(), "install");
+
+        let new_key = UpdateError::needs_new_key();
+        assert_eq!(
+            (new_key.code, new_key.cause, new_key.phase()),
+            ("UPDATE_NEEDS_NEW_KEY", "major_not_covered", "install")
+        );
 
         let portable = UpdateError::portable();
         assert_eq!(

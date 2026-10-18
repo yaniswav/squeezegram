@@ -48,7 +48,7 @@ use crate::transport::service::{self, AuthPayload, DestinationCheck, DuplicateIn
 use crate::transport::{
     AuthInput, AuthState, SentCandidate, TelegramTransport, TransportError, tdlib,
 };
-use crate::update::{self, Trigger, UpdateError, UpdateInfo, UpdateNotice, UpdateService};
+use crate::update::{Trigger, UpdateError, UpdateInfo, UpdateNotice, UpdateService};
 use crate::watch::WatchService;
 
 /// Event of the login state machine.
@@ -1667,7 +1667,8 @@ pub async fn update_check(
 
 /// Installer build only: downloads the update (progress on `app://update-progress`), checks
 /// its signature, closes the app and runs the installer, which restarts it. Returns only on
-/// failure (or when nothing newer exists any more).
+/// failure (or when nothing newer exists any more). Refuses with `UPDATE_NEEDS_NEW_KEY`, before
+/// any download, an update whose major the stored license does not cover.
 #[tauri::command]
 pub async fn update_install(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let call = Call::new("update_install");
@@ -1675,13 +1676,14 @@ pub async fn update_install(app: AppHandle, state: State<'_, AppState>) -> Comma
     call.finish(result.map_err(Into::into))
 }
 
-/// Opens the page of the latest release in the browser. The address is fixed in the core: the
-/// page cannot choose what gets opened.
+/// Opens the page of the release announced in this session (else the latest one) in the
+/// browser. The address is built in the core from the plugin's version: the page cannot choose
+/// what gets opened.
 #[tauri::command]
-pub fn update_open_page() -> CommandResult<()> {
+pub fn update_open_page(state: State<'_, AppState>) -> CommandResult<()> {
     let call = Call::new("update_open_page");
     let result = std::process::Command::new(explorer_exe())
-        .arg(update::RELEASES_PAGE)
+        .arg(state.updates.page_url())
         .spawn()
         .map(|_| ())
         .map_err(|error| {

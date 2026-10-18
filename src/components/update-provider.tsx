@@ -6,6 +6,8 @@ import {
   type ReactNode,
 } from "react"
 import {
+  IpcError,
+  onEntitlementsStatus,
   onUpdate,
   onUpdateProgress,
   updateCheck,
@@ -57,9 +59,21 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
 
     const stopProgress = onUpdateProgress(setProgress)
 
+    // A license saved or removed changes whether the announced version needs a new key: the
+    // core judges the notice again, so the banner never offers an install it would refuse.
+    const stopLicense = onEntitlementsStatus(() => {
+      updateInfo()
+        .then((loaded) => {
+          setInfo(loaded)
+          setNotice(loaded.notice)
+        })
+        .catch((cause) => console.warn("Update information unavailable", cause))
+    })
+
     return () => {
       stopNotice()
       stopProgress()
+      stopLicense()
     }
   }, [reload])
 
@@ -89,6 +103,19 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
       await updateInstall()
     } catch (cause) {
       pushError(cause)
+
+      // The notice was stale (a license saved or removed since the check): ask the core again
+      // so the banner offers what it would accept.
+      if (cause instanceof IpcError && cause.code === "UPDATE_NEEDS_NEW_KEY") {
+        updateInfo()
+          .then((loaded) => {
+            setInfo(loaded)
+            setNotice(loaded.notice)
+          })
+          .catch((reason) =>
+            console.warn("Update information unavailable", reason),
+          )
+      }
     } finally {
       setInstalling(false)
       setProgress(null)

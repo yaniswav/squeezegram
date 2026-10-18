@@ -5,15 +5,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use semver::Version;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use super::{
     Kind, Phase, ProgressSampler, Trigger, UPDATE_EVENT, UPDATE_PROGRESS_EVENT, UpdateError,
-    UpdateInfo, UpdateNotice, UpdateProgress, is_newer, should_check_at_startup,
+    UpdateInfo, UpdateNotice, UpdateProgress, is_newer, needs_new_key, release_page,
+    should_check_at_startup,
 };
 use crate::commands::AppState;
+use crate::entitlements::Entitlements;
 use crate::logging;
 use crate::settings::SettingsStore;
 
@@ -26,8 +29,12 @@ struct Cache {
 
 pub struct UpdateService {
     settings: Arc<SettingsStore>,
+    /// Read live at every decision: the key can change between the check and the install.
+    entitlements: Arc<dyn Entitlements>,
     kind: Kind,
     current_version: String,
+    /// Major of the running build (`entitlements::BUILD_MAJOR`; a parameter for tests).
+    build_major: u32,
     cache: Mutex<Cache>,
     /// One check or install at a time.
     busy: tokio::sync::Mutex<()>,
@@ -35,22 +42,66 @@ pub struct UpdateService {
 }
 
 impl UpdateService {
-    pub fn new(settings: Arc<SettingsStore>, kind: Kind, current_version: String) -> Self {
+    pub fn new(
+        settings: Arc<SettingsStore>,
+        entitlements: Arc<dyn Entitlements>,
+        kind: Kind,
+        current_version: String,
+        build_major: u32,
+    ) -> Self {
         Self {
             settings,
+            entitlements,
             kind,
             current_version,
+            build_major,
             cache: Mutex::new(Cache::default()),
             busy: tokio::sync::Mutex::new(()),
             startup_done: AtomicBool::new(false),
         }
     }
 
+    /// The notice is judged again against the key as it is now: a key saved or removed since
+    /// the check changes what the page may offer.
     pub fn info(&self) -> UpdateInfo {
+        let notice = self.lock_cache().notice.clone();
         UpdateInfo {
             kind: self.kind,
             current_version: self.current_version.clone(),
-            notice: self.lock_cache().notice.clone(),
+            notice: notice.map(|notice| {
+                if notice.available {
+                    let missing = self.missing_coverage(&notice.version);
+                    notice.with_missing_coverage(missing)
+                } else {
+                    notice
+                }
+            }),
+        }
+    }
+
+    /// The major the stored key covers, when installing `version` would need a new key (see
+    /// `needs_new_key`); `None` when the install is allowed. Reads the live licence status.
+    fn missing_coverage(&self, version: &str) -> Option<u32> {
+        let covers_major = self.entitlements.status().covers_major;
+        let candidate_major = Version::parse(version).ok().map(|parsed| parsed.major);
+        covers_major.filter(|_| needs_new_key(covers_major, self.build_major, candidate_major))
+    }
+
+    /// Refuses an update the key does not cover. Called by `install` on the plugin's own
+    /// `Update`, before any download: nothing the page sends takes part.
+    fn check_coverage(&self, version: &str) -> Result<(), UpdateError> {
+        match self.missing_coverage(version) {
+            Some(_) => Err(self.fail(UpdateError::needs_new_key())),
+            None => Ok(()),
+        }
+    }
+
+    /// Page of the release announced in this session, else the latest-release page. The version
+    /// comes from the plugin's `Update`, never from the page.
+    pub fn page_url(&self) -> String {
+        match &self.lock_cache().update {
+            Some(update) => release_page(&update.version),
+            None => super::RELEASES_PAGE.to_owned(),
         }
     }
 
@@ -104,7 +155,8 @@ impl UpdateService {
                         update.version.clone(),
                         self.kind,
                         update.body.clone(),
-                    ),
+                    )
+                    .with_missing_coverage(self.missing_coverage(&update.version)),
                     None => UpdateNotice::up_to_date(self.current_version.clone(), self.kind),
                 };
                 tracing::info!(
@@ -122,6 +174,7 @@ impl UpdateService {
                         version = update.version.as_str(),
                         current_version = self.current_version.as_str(),
                         kind = self.kind.as_str(),
+                        requires_new_key = notice.requires_new_key,
                         "a newer version exists"
                     );
                 }
@@ -188,7 +241,8 @@ impl UpdateService {
 
     /// Downloads the update, verifies its signature, closes the app cleanly and starts the
     /// installer, which restarts the app. On success the process ends inside this call.
-    /// The portable build refuses: it never installs anything.
+    /// The portable build refuses: it never installs anything. An update whose major the stored
+    /// key does not cover is refused too, before the download.
     pub async fn install(&self, app: &AppHandle) -> Result<(), UpdateError> {
         if self.kind == Kind::Portable {
             return Err(self.fail(UpdateError::portable()));
@@ -208,7 +262,11 @@ impl UpdateService {
                 update
             }
         };
+        self.check_coverage(&update.version)?;
         let bytes = self.download(app, &update).await?;
+        // Again after the download: a key saved while it ran must not be moved to a major it
+        // does not cover.
+        self.check_coverage(&update.version)?;
         emit(
             app,
             UPDATE_PROGRESS_EVENT,
@@ -317,4 +375,133 @@ fn before_installer(app: &AppHandle) {
     }
     logging::app_exit("update");
     app.cleanup_before_exit();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entitlements::{EntitlementStatus, Feature};
+    use crate::queue::test_util::TestDir;
+    use crate::update::RELEASES_PAGE;
+
+    /// A licence status whose key can change while the service lives.
+    struct Key(Mutex<Option<u32>>);
+
+    impl Key {
+        fn new(covers_major: Option<u32>) -> Arc<Self> {
+            Arc::new(Self(Mutex::new(covers_major)))
+        }
+
+        fn set(&self, covers_major: Option<u32>) {
+            *self.0.lock().unwrap() = covers_major;
+        }
+    }
+
+    impl Entitlements for Key {
+        fn allows(&self, _feature: Feature) -> bool {
+            false
+        }
+
+        fn status(&self) -> EntitlementStatus {
+            EntitlementStatus {
+                covers_major: *self.0.lock().unwrap(),
+                ..EntitlementStatus::FREE_BUILD
+            }
+        }
+    }
+
+    fn service(dir: &TestDir, key: &Arc<Key>, build_major: u32) -> UpdateService {
+        let settings = SettingsStore::load(dir.path().join("settings.json")).unwrap();
+        UpdateService::new(
+            Arc::new(settings),
+            key.clone(),
+            Kind::Installer,
+            format!("{build_major}.0.0"),
+            build_major,
+        )
+    }
+
+    #[test]
+    fn the_install_gate_refuses_a_major_the_key_does_not_cover() {
+        let dir = TestDir::new("update-gate");
+        let key = Key::new(Some(1));
+        let service = service(&dir, &key, 1);
+
+        let refused = service.check_coverage("2.0.0").unwrap_err();
+        assert_eq!(refused.code, "UPDATE_NEEDS_NEW_KEY");
+        assert_eq!(refused.phase(), "install");
+        assert!(service.check_coverage("1.9.3").is_ok());
+        assert!(service.check_coverage("1.0.0-rc.1").is_ok());
+        assert!(service.check_coverage("2.0.0-rc.1").is_err());
+        assert!(
+            service.check_coverage("not a version").is_err(),
+            "a version without a readable major fails closed for a covered user"
+        );
+    }
+
+    #[test]
+    fn the_install_gate_reads_the_key_as_it_is_at_install_time() {
+        let dir = TestDir::new("update-gate-live");
+        let key = Key::new(None);
+        let service = service(&dir, &key, 1);
+        assert!(service.check_coverage("2.0.0").is_ok(), "free user");
+
+        // A key saved after the check blocks the install...
+        key.set(Some(1));
+        assert!(service.check_coverage("2.0.0").is_err());
+        // ...and one that covers the new major, or none, lets it through.
+        key.set(Some(2));
+        assert!(service.check_coverage("2.0.0").is_ok());
+        key.set(None);
+        assert!(service.check_coverage("2.0.0").is_ok());
+    }
+
+    #[test]
+    fn a_build_already_past_the_key_is_not_blocked() {
+        let dir = TestDir::new("update-gate-past");
+        let key = Key::new(Some(1));
+        let service = service(&dir, &key, 2);
+        assert!(service.check_coverage("2.1.0").is_ok());
+        assert!(service.check_coverage("3.0.0").is_ok());
+    }
+
+    #[test]
+    fn the_notice_is_judged_again_against_the_key_when_the_page_asks() {
+        let dir = TestDir::new("update-info");
+        let key = Key::new(None);
+        let service = service(&dir, &key, 1);
+        assert!(service.info().notice.is_none());
+
+        service.lock_cache().notice = Some(UpdateNotice::available(
+            "2.0.0".into(),
+            Kind::Installer,
+            None,
+        ));
+        let notice = service.info().notice.unwrap();
+        assert!(!notice.requires_new_key);
+        assert_eq!(notice.covers_major, None);
+
+        key.set(Some(1));
+        let notice = service.info().notice.unwrap();
+        assert!(notice.requires_new_key);
+        assert_eq!(notice.covers_major, Some(1));
+        assert_eq!(
+            notice.url,
+            "https://github.com/yaniswav/squeezegram/releases/tag/v2.0.0"
+        );
+
+        // "Up to date" is left alone, whatever the key.
+        service.lock_cache().notice =
+            Some(UpdateNotice::up_to_date("1.0.0".into(), Kind::Installer));
+        let notice = service.info().notice.unwrap();
+        assert!(!notice.requires_new_key);
+        assert_eq!(notice.url, RELEASES_PAGE);
+    }
+
+    #[test]
+    fn without_an_announced_update_the_page_is_the_latest_release() {
+        let dir = TestDir::new("update-page");
+        let service = service(&dir, &Key::new(None), 1);
+        assert_eq!(service.page_url(), RELEASES_PAGE);
+    }
 }

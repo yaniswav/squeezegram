@@ -619,6 +619,13 @@ function LicenseSection({
       hint={t("settings.license.hint")}
     >
       <LicenseStatusText status={status} />
+      {status !== null &&
+        status !== "failed" &&
+        status.covers_major !== null && (
+          <p className="text-xs text-muted-foreground">
+            {t("settings.license.covers", { major: status.covers_major })}
+          </p>
+        )}
       <form
         noValidate
         className="space-y-2"

@@ -1804,7 +1804,10 @@ export function updateInstall(): Promise<void> {
   return call("update_install", d.nothing)
 }
 
-/** Opens the page of the latest release in the browser (the core knows the address). */
+/**
+ * Opens the page of the release announced in this session (else the latest one) in the
+ * browser; the core builds the address.
+ */
 export function updateOpenPage(): Promise<void> {
   return call("update_open_page", d.nothing)
 }

@@ -16,8 +16,27 @@ export interface UpdateNotice {
   kind: UpdateKind
   /** Release notes of the manifest. */
   notes?: string
-  /** Page of the latest release, for the portable build. */
+  /** Page of the announced release (the latest one when nothing newer exists). */
   url: string
+  /** The stored license does not cover the announced version: no install, a new key is needed. */
+  requires_new_key: boolean
+  /** The highest major the license covers; present with `requires_new_key`. */
+  covers_major?: number
+}
+
+/**
+ * What the "needs a new license" text says, or null when the install is open. Built from the
+ * announced version's major and the covered one the core sent; without both, the page does not
+ * claim anything and the core still refuses the install.
+ */
+export function newKeyNeeded(
+  notice: UpdateNotice,
+): { covers: number; next: number } | null {
+  if (!notice.requires_new_key || notice.covers_major === undefined) return null
+
+  const next = Number.parseInt(notice.version.split(".")[0] ?? "", 10)
+
+  return Number.isNaN(next) ? null : { covers: notice.covers_major, next }
 }
 
 /** `update_info`: no network. `notice` is the update found earlier in this session. */
@@ -51,6 +70,8 @@ export const updateNoticeDecoder = d.object<UpdateNotice>({
   kind: updateKindDecoder,
   notes: d.optional(d.string),
   url: d.string,
+  requires_new_key: d.boolean,
+  covers_major: d.optional(d.number),
 })
 
 export const updateInfoDecoder = d.object<UpdateInfo>({

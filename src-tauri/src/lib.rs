@@ -174,8 +174,10 @@ fn open_state(app: &AppHandle, boot: Boot) -> Result<AppState, Box<dyn std::erro
     );
     let updates = Arc::new(UpdateService::new(
         settings.clone(),
+        entitlements.clone(),
         update::current_kind(),
         app.package_info().version.to_string(),
+        entitlements::BUILD_MAJOR,
     ));
     Ok(AppState {
         queue,

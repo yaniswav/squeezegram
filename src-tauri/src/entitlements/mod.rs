@@ -14,7 +14,7 @@ pub mod store;
 
 use serde::Serialize;
 
-pub use store::LicenseEntitlements;
+pub use store::{BUILD_MAJOR, LicenseEntitlements};
 
 /// Where a license is bought: a Telegram bot. Opened by the core, never chosen by the page.
 pub const PURCHASE_URL: &str = "https://t.me/squeezegram_bot";
