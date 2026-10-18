@@ -1,8 +1,8 @@
 //! Automatic updates.
 //!
-//! The installer build checks GitHub for the latest release, downloads the signed installer,
-//! lets `tauri-plugin-updater` verify its minisign signature against the public key in
-//! `tauri.conf.json`, then hands over to the installer, which restarts the app.
+//! The installer build checks GitHub for the newest release of its update channel, downloads the
+//! signed installer, lets `tauri-plugin-updater` verify its minisign signature against the
+//! public key in `tauri.conf.json`, then hands over to the installer, which restarts the app.
 //! The portable build only tells the user that a newer version exists and where to get it: it
 //! never downloads or replaces anything.
 //!
@@ -11,6 +11,12 @@
 //! URL has no `{{current_version}}`, `{{target}}` or `{{arch}}` placeholder, so the app
 //! version, the Windows version and the architecture are not sent either. GitHub sees the IP
 //! address, as for any download. No identifier, no Telegram data.
+//!
+//! The endpoint is the `latest.json` asset of a fixed pre-release, `channel-v<N>`, not of
+//! GitHub's "latest" release: once a v2 is published, "latest" points at it and a 1.x build would
+//! stop seeing 1.x fixes. Each channel manifest is replaced by `publish-channel.yml` only after the
+//! owner publishes a release of that major, so a build reads the newest release of its own major
+//! (see `channel_major`). The URL is a fixed https URL: nothing about the build is sent in it.
 //!
 //! A key covers the app up to a major version (`maj`). The updater never moves a covered user
 //! to a major the key does not cover: the notice says so (`requires_new_key`) and the install
@@ -35,10 +41,17 @@ pub use service::UpdateService;
 
 use crate::settings::Updates;
 
-/// Page of the latest release: where the user is sent when no newer version was announced.
+/// Page of GitHub's latest release: where the user is sent when no newer version was announced.
 pub const RELEASES_PAGE: &str = "https://github.com/yaniswav/squeezegram/releases/latest";
 /// Pages of the tagged releases; the tag is `v` plus the version.
 const RELEASE_TAG_PAGE: &str = "https://github.com/yaniswav/squeezegram/releases/tag/v";
+/// Major of the update channel a build of major `build_major` reads: 0.x builds share the 1.x
+/// channel; the channel asset is replaced only by releases of that major. It must match the
+/// `channel-v<N>` in the updater endpoint of `tauri.conf.json` (a test checks it).
+pub const fn channel_major(build_major: u32) -> u32 {
+    if build_major == 0 { 1 } else { build_major }
+}
+
 /// Empty file the portable zip puts next to the executable.
 pub const PORTABLE_FLAG: &str = "portable.flag";
 /// Minimum time between two automatic checks.
@@ -511,20 +524,30 @@ mod tests {
     }
 
     #[test]
+    fn channel_major_is_one_for_zero_x_and_the_major_otherwise() {
+        assert_eq!(channel_major(0), 1);
+        assert_eq!(channel_major(1), 1);
+        assert_eq!(channel_major(2), 2);
+        assert_eq!(channel_major(10), 10);
+    }
+
+    #[test]
     fn the_shipped_configuration_is_what_the_updater_accepts() {
         use tauri_plugin_updater::Config;
 
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
         let updater: Config = serde_json::from_value(conf["plugins"]["updater"].clone()).unwrap();
+        let endpoints: Vec<&str> = updater.endpoints.iter().map(|url| url.as_str()).collect();
         assert_eq!(
-            updater
-                .endpoints
-                .iter()
-                .map(|url| url.as_str())
-                .collect::<Vec<_>>(),
-            ["https://github.com/yaniswav/squeezegram/releases/latest/download/latest.json"]
+            endpoints,
+            [format!(
+                "https://github.com/yaniswav/squeezegram/releases/download/channel-v{}/latest.json",
+                channel_major(crate::entitlements::BUILD_MAJOR)
+            )]
         );
+        // A placeholder would send the app version, the target or the architecture.
+        assert!(!endpoints[0].contains("{{"));
         assert_eq!(updater.windows.unwrap().install_mode.to_string(), "passive");
         // latest.json is not signed: without this, a crafted manifest could pair a new version
         // number with an older, genuinely signed release and force a downgrade.

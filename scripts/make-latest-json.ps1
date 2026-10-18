@@ -3,8 +3,11 @@
     Writes latest.json, the update manifest read by the Tauri 2 updater plugin.
 
 .DESCRIPTION
-    The app asks https://github.com/<repository>/releases/latest/download/latest.json
-    (plugins.updater.endpoints in src-tauri\tauri.conf.json). The file has the static JSON
+    The app asks https://github.com/<repository>/releases/download/channel-v<N>/latest.json
+    (plugins.updater.endpoints in src-tauri\tauri.conf.json; N is 1 for 0.x and 1.x builds).
+    This script only writes the file. release.yml uploads it to the release of its version and,
+    once the owner publishes that release, .github\workflows\publish-channel.yml copies it to the
+    channel release channel-v<N> (scripts\publish-channel.ps1). The file has the static JSON
     format of the plugin:
 
       {

@@ -153,7 +153,7 @@ impl Default for AdvancedEncoding {
     }
 }
 
-/// Update checks (`update` module). The check asks GitHub for the latest release manifest and
+/// Update checks (`update` module). The check asks GitHub for the manifest of the build's update channel and
 /// sends nothing else than the plugin's default request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]

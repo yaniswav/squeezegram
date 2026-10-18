@@ -63,6 +63,14 @@ jobs:
       - name: Check formatting
         run: pnpm format:check
 
+      # Update-channel rules (scripts/lib/channel.ps1) and the check that the updater endpoint in
+      # tauri.conf.json is the channel of the project's major. No network, no secret.
+      - name: Check the update channel
+        shell: pwsh
+        run: |
+          ./scripts/tests/channel.tests.ps1
+          ./scripts/check-versions.ps1
+
       - name: Build front-end
         run: pnpm build
 
