@@ -132,16 +132,18 @@ function Publish-Channel {
         if ((Get-ChannelTag $currentVersion) -ne $channelTag) { throw "latest.json of $channelTag says $currentVersion, which belongs to $(Get-ChannelTag $currentVersion)" }
         $order = Compare-ReleaseVersion $currentVersion $version
         if ($order -gt 0) { throw "${channelTag} is at ${currentVersion}: refusing to replace $currentVersion by $version" }
-        if ($order -eq 0) { Write-Host "$channelTag is already at $version. Nothing to do."; return }
-        Write-Host "$channelTag is at $currentVersion, will move to $version"
+        $upload = $order -lt 0
+        if ($upload) { Write-Host "$channelTag is at $currentVersion, will move to $version" }
+        else { Write-Host "$channelTag is already at ${version}: no upload, only the check of what the app reads." }
     }
-    else { Write-Host "$channelTag has no latest.json yet" }
+    else { Write-Host "$channelTag has no latest.json yet"; $upload = $true }
 
     # f.
     if ($DryRun) { Write-Host "Dry run: every check passed, $channelTag would be moved to $version. Nothing was uploaded."; return }
-    Invoke-Gh @('release', 'upload', $channelTag, $newFile, '--repo', $Repository, '--clobber') | Out-Null
+    if ($upload) { Invoke-Gh @('release', 'upload', $channelTag, $newFile, '--repo', $Repository, '--clobber') | Out-Null }
 
     # g. The app reads this URL: prove it serves the new version (GitHub's CDN may lag a little).
+    # Also on a re-run at the same version, so a green run always means the app sees it.
     $url = "https://github.com/$Repository/releases/download/$channelTag/latest.json"
     $served = $null
     for ($attempt = 1; $attempt -le 5; $attempt++) {
