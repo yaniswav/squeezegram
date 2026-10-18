@@ -117,7 +117,8 @@ function Publish-Channel {
     # d. The channel release is created once by the owner; this script never creates it.
     try { $channel = Get-ReleaseInfo $channelTag }
     catch {
-        $create = "gh release create $channelTag --prerelease --latest=false --title `"Update channel 0.x/1.x (not a download)`" --notes `"...`""
+        $majors = if ($channelTag -eq 'channel-v1') { '0.x/1.x' } else { ($channelTag -replace '^channel-v', '') + '.x' }
+        $create = "gh release create $channelTag --prerelease --latest=false --title `"Update channel $majors (not a download)`" --notes `"...`""
         throw "The channel release $channelTag cannot be read ($($_.Exception.Message)). If it does not exist, create it once: $create"
     }
     if ($channel.isDraft) { throw "$channelTag is a draft: the updater would not see it" }

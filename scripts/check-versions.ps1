@@ -19,7 +19,7 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot 'lib\channel.ps1')
+. (Join-Path $PSScriptRoot 'lib/channel.ps1')
 
 $root = Split-Path -Parent $PSScriptRoot
 
