@@ -101,6 +101,8 @@ finally { Pop-Location }
 if ($InstallerEngine -eq 'Inno') {
     $bootstrapper = Join-Path (Split-Path -Parent $staged) 'MicrosoftEdgeWebview2Setup.exe'
     if (-not (Test-Path -LiteralPath $bootstrapper -PathType Leaf)) {
+        # In CI the workflow downloads it in a step without secrets; never here, next to the key.
+        if ($env:GITHUB_ACTIONS -eq 'true') { throw "WebView2 bootstrapper missing at ${bootstrapper}: release.yml downloads it before the build step" }
         Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrapper
     }
     # build-inno-installer verifies Microsoft's Authenticode signature before embedding it.
