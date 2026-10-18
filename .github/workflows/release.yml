@@ -106,9 +106,29 @@ jobs:
         shell: pwsh
         run: ./scripts/install-cargo-about.ps1
 
+      # The Inno Setup compiler is downloaded here, before the step that sees the secrets, and
+      # checked against its pinned SHA-256 and Authenticode signature. build-inno-installer.ps1
+      # calls install-inno.ps1 again later and then only verifies the staged files again.
+      - name: Install Inno Setup (pinned)
+        shell: pwsh
+        run: ./scripts/install-inno.ps1
+
+      # The WebView2 bootstrapper the installer embeds goes where build-release.ps1 looks for it
+      # (next to the staged tdjson.dll): it downloads nothing when the file is already there.
+      # build-inno-installer.ps1 still refuses it unless it carries a valid Microsoft signature.
+      - name: Download the WebView2 bootstrapper
+        shell: pwsh
+        run: |
+          $dir = Join-Path 'src-tauri' 'target/release-stage'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile (Join-Path $dir 'MicrosoftEdgeWebview2Setup.exe') -MaximumRedirection 5
+
       # The only step that sees the secrets. build-release.ps1 reads them from the
       # environment (build.rs and the Tauri bundler do); nothing echoes them or writes them
       # to a file, and no shell tracing is on.
+      # It downloads no tool and runs no binary fetched in this step: Inno Setup and the
+      # bootstrapper arrive in the two steps above and are only verified here. (Cargo still
+      # fetches the crates of Cargo.lock, checksum-verified, if the cache lacks them.)
       # It also generates THIRD-PARTY-NOTICES.txt (installer and zip) and fails if a crate or
       # package has no licence text.
       - name: Build installer, portable zip and checksums
