@@ -71,7 +71,7 @@ What leaves your computer:
 
 - **To Telegram**, through TDLib (Telegram's own client library): what you choose to send, meaning the file (compressed or as is, with location and camera data removed if that option is on), its caption and its destination, plus the normal traffic of a Telegram client. Nothing is sent that you did not queue.
 - **To GitHub**, to download ffmpeg on first setup.
-- **To GitHub**, to look for a newer version: at startup at most once every 24 hours (Settings, Updates, "Check automatically" turns this off) and when you press "Check now". It is a plain HTTPS request for `latest.json`; GitHub sees your IP address, as for any download. No identifier, Windows version or usage data is sent.
+- **To GitHub**, to look for a newer version: at startup at most once every 24 hours (Settings, Updates, "Check automatically" turns this off) and when you press "Check now". It is a plain HTTPS request for `latest.json` (the update channel of your major version); GitHub sees your IP address, as for any download. No identifier, Windows version or usage data is sent.
 - **To your proxy**, if you set one, which then carries all connections to Telegram.
 
 During installation, Microsoft's WebView2 bootstrapper may download the WebView2 Runtime from Microsoft if it is missing.

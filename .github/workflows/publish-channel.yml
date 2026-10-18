@@ -1,0 +1,52 @@
+# Update channel: after the owner publishes a release, copies its latest.json to the fixed
+# pre-release channel-v<N> that the app reads (releases/download/channel-v<N>/latest.json), so
+# 1.x builds keep seeing 1.x releases once a v2 is "latest". scripts/publish-channel.ps1 does
+# the work and refuses anything it cannot prove correct (draft, pre-release, wrong version or
+# URL, older version than the channel's).
+#
+# It has contents: write and nothing else: no "release" environment, so no signing key and no
+# Telegram secret; it builds nothing and runs no downloaded binary. The only code it runs is
+# the checked-out repository's own script and the gh CLI of the runner image, with the
+# repository's GITHUB_TOKEN. The tag is passed through the environment, never interpolated
+# into the script.
+#
+# It starts on a release "published" event, so the release must be published from the GitHub
+# page or with a local gh: an event caused by GITHUB_TOKEN (for example a release published by
+# another workflow) does not start workflows. The workflow file must be on the default branch
+# (main pushed) for the event to find it. If a run fails, fix the cause and re-run it from the
+# Actions tab, or run the script by hand with -DryRun first.
+name: publish-channel
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-channel
+  cancel-in-progress: false
+
+jobs:
+  channel:
+    name: Copy latest.json to the channel
+    # Final v* releases only: pre-releases (the channels themselves, tdjson) and drafts never
+    # reach a channel.
+    if: ${{ !github.event.release.draft && !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Publish the channel manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: ./scripts/publish-channel.ps1 -Tag $env:TAG -Repository $env:REPOSITORY

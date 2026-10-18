@@ -1,7 +1,8 @@
 # Release build: runs only when a tag vX.Y.Z is pushed to this repository.
 # It builds the installer and the portable zip, signs the installer for the updater and
 # creates a DRAFT GitHub release. It never publishes: the owner reviews the draft and
-# publishes it by hand.
+# publishes it by hand. Publishing the draft triggers publish-channel.yml, which copies
+# latest.json to the update channel release channel-v<N> that the app reads.
 #
 # Secrets used (repository secrets, never written to a file or printed):
 #   SQUEEZEGRAM_TG_API_ID, SQUEEZEGRAM_TG_API_HASH   compiled into the executable by build.rs
