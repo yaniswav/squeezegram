@@ -1224,8 +1224,12 @@ async fn input_formats_reject_manifests_and_preserve_literal_images() {
         let error = probe::probe(&ffprobe, &manifest, true, &cancel)
             .await
             .unwrap_err();
+        // Refused, and never opened by the manifest demuxers: depending on the build, ffprobe
+        // either names the whitelist or falls back to the extension's demuxer and fails there.
         assert!(
-            matches!(error, MediaError::Failed { code: "FILE_UNREADABLE", ref detail } if detail.contains("whitelist")),
+            matches!(error, MediaError::Failed { code: "FILE_UNREADABLE", ref detail }
+                if detail.contains("not on whitelist")
+                    || (!detail.contains("[dash") && !detail.contains("[concat"))),
             "{error}"
         );
     }
