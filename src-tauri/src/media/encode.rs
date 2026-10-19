@@ -211,7 +211,7 @@ fn common_start() -> Args {
         "-hide_banner",
         "-nostdin",
         "-loglevel",
-        "warning",
+        "error",
         "-y",
         "-progress",
         "pipe:1",
@@ -1967,6 +1967,12 @@ mod tests {
     }
 
     #[test]
+    fn normal_runs_log_only_errors_so_warnings_do_not_block_retries() {
+        let args = to_strings(common_start());
+        assert!(args.windows(2).any(|pair| pair == ["-loglevel", "error"]));
+    }
+
+    #[test]
     fn encode_command_follows_the_recipe() {
         let fx = Fixture::new();
         let mut plan = sample_plan();
@@ -1974,7 +1980,7 @@ mod tests {
             encode_args(job, Encoder::Nvenc, 1_000_000, Pass::Single, part)
         });
         assert!(text.starts_with(
-            "-hide_banner -nostdin -loglevel warning -y -progress pipe:1 -nostats -i C:\\in put\\a.mkv"
+            "-hide_banner -nostdin -loglevel error -y -progress pipe:1 -nostats -i C:\\in put\\a.mkv"
         ));
         assert!(text.contains("-map 0:0 -map 0:2 -sn -dn -map_chapters -1 -map_metadata -1"));
         assert!(text.contains("-vf scale=w=2:h=2"));
