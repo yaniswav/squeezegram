@@ -3,8 +3,8 @@
 //! Detection only PROPOSES candidates: nothing is chosen from here, and the `PATH` is never
 //! used to pick an ffmpeg (its folders are listed as candidates, labelled as such). The user's
 //! click records one in `ffmpeg.custom_dir`. The search is bounded: a fixed list of known
-//! places, a shallow descent (depth and entry caps), no symbolic links followed, no disk scan,
-//! and no file is read except by running `-version` / `-encoders` on a candidate.
+//! places, a shallow descent (depth and entry caps), no symbolic links followed, no disk scan.
+//! Only same-user WinGet/Scoop tools are executed here; other candidates await selection.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -52,7 +52,7 @@ pub enum License {
     Unknown,
 }
 
-/// A validated ffmpeg/ffprobe pair, as sent to the front.
+/// An ffmpeg/ffprobe pair proposed to the front; only verified pairs have probe results.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Candidate {
     /// What the page gives back to choose this one (`sidecars_use`): the core keeps the folder
@@ -64,6 +64,7 @@ pub struct Candidate {
     pub ffmpeg_path: String,
     pub ffprobe_path: String,
     pub origin: Origin,
+    pub verified: bool,
     pub version: String,
     pub license: License,
     /// Those of h264_nvenc, libx264, libopenh264 and h264_mf the build offers.
@@ -326,15 +327,22 @@ pub async fn probe_pair(ffmpeg: &Path, ffprobe: &Path) -> Option<Probed> {
     })
 }
 
-/// Validates a folder (itself or its `bin`) given by the user: the pair must run.
+/// Validates a trusted folder (itself or its `bin`): the pair must run.
+#[cfg(test)]
 pub async fn probe_dir(dir: &Path) -> Option<Probed> {
     let (ffmpeg, ffprobe) = super::find_in(dir)?;
     probe_pair(&ffmpeg, &ffprobe).await
 }
 
-/// Searches `places`, validates every folder found (in parallel, bounded) and returns the
-/// working candidates: known places first, `PATH` folders last.
+/// Only same-user package locations may execute tools during discovery.
+fn may_probe(origin: Origin, ffmpeg: &Path, ffprobe: &Path, profile: Option<&Path>) -> bool {
+    matches!(origin, Origin::Winget | Origin::Scoop)
+        && super::trust::in_profile(ffmpeg, ffprobe, profile)
+}
+
+/// Lists other candidates without executing them; probes same-user package locations only.
 pub async fn discover_in(places: Places) -> Vec<Candidate> {
+    let profile = places.user_profile.clone();
     let listed = tokio::task::spawn_blocking(move || dedupe(list_places(&places)))
         .await
         .unwrap_or_default();
@@ -343,24 +351,41 @@ pub async fn discover_in(places: Places) -> Vec<Candidate> {
         .take(MAX_CANDIDATES)
         .enumerate()
         .map(|(index, found)| {
+            let profile = profile.clone();
             tokio::spawn(async move {
-                let probed = probe_pair(&found.ffmpeg, &found.ffprobe).await?;
-                let work_dir = test_dir("cand", index);
-                let working = working_encoders(&found.ffmpeg, &found.ffprobe, &work_dir).await;
-                Some(Candidate {
+                let resolved = std::fs::canonicalize(&found.ffmpeg)
+                    .ok()
+                    .zip(std::fs::canonicalize(&found.ffprobe).ok());
+                let trusted = resolved.filter(|(ffmpeg, ffprobe)| {
+                    may_probe(found.origin, ffmpeg, ffprobe, profile.as_deref())
+                });
+                let mut candidate = Candidate {
                     id: 0,
                     dir: found.dir.to_string_lossy().into_owned(),
                     ffmpeg_path: found.ffmpeg.to_string_lossy().into_owned(),
                     ffprobe_path: found.ffprobe.to_string_lossy().into_owned(),
                     origin: found.origin,
-                    version: probed.version,
-                    license: probed.license,
-                    encoders: probed.encoders,
-                    working_encoders: working.iter().map(|e| e.name().to_owned()).collect(),
+                    verified: false,
+                    version: String::new(),
+                    license: License::Unknown,
+                    encoders: Vec::new(),
+                    working_encoders: Vec::new(),
                     score: 0,
                     recommended: false,
                     reasons: Vec::new(),
-                })
+                };
+                if let Some((ffmpeg, ffprobe)) = trusted {
+                    let probed = probe_pair(&ffmpeg, &ffprobe).await?;
+                    let work_dir = test_dir("cand", index);
+                    let working = working_encoders(&ffmpeg, &ffprobe, &work_dir).await;
+                    candidate.verified = true;
+                    candidate.version = probed.version;
+                    candidate.license = probed.license;
+                    candidate.encoders = probed.encoders;
+                    candidate.working_encoders =
+                        working.iter().map(|e| e.name().to_owned()).collect();
+                }
+                Some(candidate)
             })
         })
         .collect();
@@ -492,6 +517,39 @@ mod tests {
 
     fn dirs(found: &[Found]) -> Vec<PathBuf> {
         found.iter().map(|f| f.dir.clone()).collect()
+    }
+
+    #[test]
+    fn only_winget_and_scoop_resolved_inside_the_profile_may_be_probed() {
+        let dir = TestDir::new("discover-trust");
+        let profile = dir.path().join("user");
+        let outside = dir.path().join("shared");
+        touch_pair(&profile);
+        touch_pair(&outside);
+        let profile = std::fs::canonicalize(profile).unwrap();
+        let outside = std::fs::canonicalize(outside).unwrap();
+        for origin in [
+            Origin::Winget,
+            Origin::Scoop,
+            Origin::Chocolatey,
+            Origin::ProgramFiles,
+            Origin::SystemDrive,
+            Origin::Path,
+        ] {
+            let ffmpeg = profile.join(format!("ffmpeg{EXE}"));
+            let ffprobe = profile.join(format!("ffprobe{EXE}"));
+            assert_eq!(
+                may_probe(origin, &ffmpeg, &ffprobe, Some(&profile)),
+                matches!(origin, Origin::Winget | Origin::Scoop)
+            );
+            assert!(!may_probe(
+                origin,
+                &ffmpeg,
+                &outside.join(format!("ffprobe{EXE}")),
+                Some(&profile)
+            ));
+            assert!(!may_probe(origin, &ffmpeg, &ffprobe, None));
+        }
     }
 
     #[test]
@@ -698,7 +756,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_working_executables_yield_no_candidate() {
+    async fn external_executables_are_listed_without_probe_results() {
         let dir = TestDir::new("discover-fake-exe");
         let drive = dir.path().join("drive");
         touch_pair(&drive.join("ffmpeg"));
@@ -707,7 +765,14 @@ mod tests {
             ..Places::default()
         })
         .await;
-        assert!(candidates.is_empty());
+        assert_eq!(candidates.len(), 1);
+        let candidate = &candidates[0];
+        assert!(!candidate.verified);
+        assert!(candidate.version.is_empty());
+        assert!(candidate.encoders.is_empty());
+        assert!(candidate.working_encoders.is_empty());
+        assert_eq!(candidate.score, 0);
+        assert!(candidate.reasons.is_empty());
     }
 
     /// Against the real ffmpeg downloaded in the session scratchpad; run with `--ignored`.

@@ -80,6 +80,7 @@
     "SIDECAR_EXTRACT": "Não foi possível extrair o arquivo do ffmpeg.",
     "SIDECAR_BUSY": "Uma instalação do ffmpeg já está em andamento.",
     "SIDECAR_INVALID": "Esta pasta não contém um ffmpeg e um ffprobe funcionais, por isso não foi usada.",
+    "SIDECAR_UNTRUSTED_FOLDER": "Não foi possível verificar as permissões desta pasta ou elas permitem que outros usuários alterem ffmpeg ou ffprobe. Escolha uma pasta protegida.",
     "SIDECAR_CHOICE_STALE": "Essa escolha do ffmpeg está desatualizada. Pesquise novamente e escolha uma da nova lista.",
     "TEMP_DIR_INVALID": "Esta pasta não pode ser usada para arquivos temporários. Escolha uma pasta existente, com permissão de gravação, em uma unidade local (não um compartilhamento de rede).",
     "UPDATE_FAILED": "A atualização falhou.",
@@ -171,6 +172,7 @@
         "candidate": "Recomendado: usar o ffmpeg marcado abaixo."
       },
       "unusable": "Nenhum codificador H.264 funciona com este ffmpeg: ele não pode comprimir vídeos aqui.",
+      "unverified": "Ainda não verificado: o squeezegram verifica as permissões desta pasta quando você a escolhe.",
       "weakWarning": "Só codificadores básicos de CPU funcionam com este ffmpeg.",
       "workingEncoders": "Funcionando aqui: {{list}}",
       "reason": {

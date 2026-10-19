@@ -555,7 +555,10 @@ mod tests {
             .unwrap();
         let resolved = service.resolve().unwrap();
         assert_eq!(resolved.source, Source::Custom);
-        assert_eq!(resolved.ffmpeg, custom.join(format!("ffmpeg{EXE}")));
+        assert_eq!(
+            resolved.ffmpeg,
+            std::fs::canonicalize(custom.join(format!("ffmpeg{EXE}"))).unwrap()
+        );
 
         // A wrong user directory is an error, not a silent fallback to another build.
         let missing = dir.path().join("nope");

@@ -80,6 +80,7 @@
     "SIDECAR_EXTRACT": "The ffmpeg archive couldn't be extracted.",
     "SIDECAR_BUSY": "An ffmpeg installation is already running.",
     "SIDECAR_INVALID": "This folder doesn't hold a working ffmpeg and ffprobe, so it was not used.",
+    "SIDECAR_UNTRUSTED_FOLDER": "This folder's permissions could not be verified or allow other users to change ffmpeg or ffprobe. Choose a protected folder.",
     "SIDECAR_CHOICE_STALE": "That ffmpeg choice is out of date. Search again and pick one from the new list.",
     "TEMP_DIR_INVALID": "This folder can't be used for temporary files. Choose an existing, writable folder on a local drive (not a network share).",
     "UPDATE_FAILED": "The update failed.",
@@ -169,6 +170,7 @@
         "candidate": "Recommended: use the ffmpeg marked below."
       },
       "unusable": "No H.264 encoder works with this ffmpeg: it can't compress videos here.",
+      "unverified": "Not checked yet: squeezegram checks this folder's permissions when you choose it.",
       "weakWarning": "Only basic CPU encoders work with this ffmpeg.",
       "workingEncoders": "Working here: {{list}}",
       "reason": {

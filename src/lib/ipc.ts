@@ -466,7 +466,7 @@ export interface LimitStatus {
   premium: boolean
 }
 
-/** `discover::Candidate`: a working ffmpeg/ffprobe pair found on this machine (proposal only). */
+/** `discover::Candidate`: a proposed ffmpeg/ffprobe pair; probe results require verification. */
 export interface FfmpegCandidate {
   /** What `sidecarsUse` takes: the core keeps each proposed folder, the page sends no path. */
   id: number
@@ -481,6 +481,7 @@ export interface FfmpegCandidate {
     | "program_files"
     | "system_drive"
     | "path"
+  verified: boolean
   version: string
   license: "gpl" | "lgpl" | "unknown"
   /** Those of h264_nvenc, libx264, libopenh264 and h264_mf the build offers. */
@@ -1232,6 +1233,7 @@ const ffmpegDiscoveryDecoder = d.object<FfmpegDiscovery>({
         system_drive: true,
         path: true,
       }),
+      verified: d.boolean,
       version: d.string,
       license: d.literals<FfmpegCandidate["license"]>({
         gpl: true,

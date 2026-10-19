@@ -80,6 +80,7 @@
     "SIDECAR_EXTRACT": "L'archive de ffmpeg n'a pas pu être extraite.",
     "SIDECAR_BUSY": "Une installation de ffmpeg est déjà en cours.",
     "SIDECAR_INVALID": "Ce dossier ne contient pas de ffmpeg et ffprobe fonctionnels : il n'a pas été utilisé.",
+    "SIDECAR_UNTRUSTED_FOLDER": "Les permissions de ce dossier n’ont pas pu être vérifiées ou permettent à d’autres utilisateurs de modifier ffmpeg ou ffprobe. Choisissez un dossier protégé.",
     "SIDECAR_CHOICE_STALE": "Ce choix de ffmpeg n'est plus à jour. Relancez la recherche et choisissez un élément dans la nouvelle liste.",
     "TEMP_DIR_INVALID": "Ce dossier ne peut pas servir aux fichiers temporaires. Choisissez un dossier existant, accessible en écriture, sur un lecteur local (pas un partage réseau).",
     "UPDATE_FAILED": "La mise à jour a échoué.",
@@ -171,6 +172,7 @@
         "candidate": "Recommandé : utilisez le ffmpeg marqué ci-dessous."
       },
       "unusable": "Aucun encodeur H.264 ne fonctionne avec ce ffmpeg : il ne peut pas compresser les vidéos ici.",
+      "unverified": "Pas encore vérifié : squeezegram vérifie les permissions de ce dossier lorsque vous le choisissez.",
       "weakWarning": "Seuls des encodeurs CPU basiques fonctionnent avec ce ffmpeg.",
       "workingEncoders": "Fonctionnent ici : {{list}}",
       "reason": {

@@ -66,10 +66,7 @@ export function FfmpegFinder({
 
     try {
       const found = await sidecarsDiscover()
-      setDiscovery({
-        ...found,
-        candidates: [...found.candidates].sort((a, b) => b.score - a.score),
-      })
+      setDiscovery(found)
       onRecommendation?.(found.recommendation)
     } catch (caught) {
       setError(errorOf(caught))
@@ -159,9 +156,11 @@ export function FfmpegFinder({
                 <div className="min-w-0 flex-1 space-y-1">
                   <div className="flex flex-wrap items-center gap-1.5 text-sm">
                     <span className="font-medium">
-                      {t("sidecars.finder.version", {
-                        version: candidate.version,
-                      })}
+                      {candidate.verified
+                        ? t("sidecars.finder.version", {
+                            version: candidate.version,
+                          })
+                        : "ffmpeg"}
                     </span>
                     <Badge
                       variant={
@@ -190,20 +189,25 @@ export function FfmpegFinder({
                       {reasonsText(t, candidate.reasons)}
                     </p>
                   )}
-                  <p className="text-xs text-muted-foreground">
-                    {candidate.working_encoders.length > 0
-                      ? t("sidecars.finder.workingEncoders", {
-                          list: candidate.working_encoders.join(", "),
-                        })
-                      : candidate.encoders.length > 0
-                        ? t("sidecars.finder.encoders", {
-                            list: candidate.encoders.join(", "),
+                  {candidate.verified ? (
+                    <p className="text-xs text-muted-foreground">
+                      {candidate.working_encoders.length > 0
+                        ? t("sidecars.finder.workingEncoders", {
+                            list: candidate.working_encoders.join(", "),
                           })
-                        : t("sidecars.finder.noEncoders")}
-                  </p>
-                  {candidate.working_encoders.length === 0 && (
-                    <Warning>{t("sidecars.finder.unusable")}</Warning>
+                        : candidate.encoders.length > 0
+                          ? t("sidecars.finder.encoders", {
+                              list: candidate.encoders.join(", "),
+                            })
+                          : t("sidecars.finder.noEncoders")}
+                    </p>
+                  ) : (
+                    <Warning>{t("sidecars.finder.unverified")}</Warning>
                   )}
+                  {candidate.verified &&
+                    candidate.working_encoders.length === 0 && (
+                      <Warning>{t("sidecars.finder.unusable")}</Warning>
+                    )}
                   {candidate.reasons.some(
                     (reason) => reason.code === "weak_fallback_only",
                   ) && <Warning>{t("sidecars.finder.weakWarning")}</Warning>}

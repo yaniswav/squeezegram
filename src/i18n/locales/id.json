@@ -80,6 +80,7 @@
     "SIDECAR_EXTRACT": "Arsip ffmpeg tidak dapat diekstrak.",
     "SIDECAR_BUSY": "Pemasangan ffmpeg sedang berjalan.",
     "SIDECAR_INVALID": "Folder ini tidak berisi ffmpeg dan ffprobe yang berfungsi, sehingga tidak digunakan.",
+    "SIDECAR_UNTRUSTED_FOLDER": "Izin folder ini tidak dapat diverifikasi atau mengizinkan pengguna lain mengubah ffmpeg atau ffprobe. Pilih folder yang terlindungi.",
     "SIDECAR_CHOICE_STALE": "Pilihan ffmpeg itu sudah usang. Cari lagi dan pilih salah satu dari daftar baru.",
     "TEMP_DIR_INVALID": "Folder ini tidak dapat digunakan untuk berkas sementara. Pilih folder yang sudah ada dan dapat ditulis di drive lokal (bukan folder bersama jaringan).",
     "UPDATE_FAILED": "Pembaruan gagal.",
@@ -167,6 +168,7 @@
         "candidate": "Direkomendasikan: gunakan ffmpeg yang ditandai di bawah."
       },
       "unusable": "Tidak ada encoder H.264 yang berfungsi dengan ffmpeg ini: tidak dapat mengompresi video di sini.",
+      "unverified": "Belum diperiksa: squeezegram memeriksa izin folder ini saat Anda memilihnya.",
       "weakWarning": "Hanya encoder CPU dasar yang berfungsi dengan ffmpeg ini.",
       "workingEncoders": "Berfungsi di sini: {{list}}",
       "reason": {

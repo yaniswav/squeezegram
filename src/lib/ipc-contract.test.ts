@@ -2,6 +2,8 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { test } from "node:test"
+import * as d from "./decode.ts"
+import type { Json } from "./json.ts"
 
 const page = readFileSync(new URL("./ipc.ts", import.meta.url), "utf8")
 
@@ -71,4 +73,43 @@ test("queue_add carries the explicit single-upload choice under Tauri's argument
   assert.match(command, /\n\s+uploadOnce,/)
   assert.match(rust, /upload_once: Option<bool>/)
   assert.match(rust, /upload_once\.unwrap_or\(false\)/)
+})
+
+test("ffmpeg verification is mandatory in the Rust/page contract and decoded as a boolean", () => {
+  const discovery = readFileSync(
+    new URL("../../src-tauri/src/sidecars/discover.rs", import.meta.url),
+    "utf8",
+  )
+
+  assert.match(
+    between(discovery, "pub struct Candidate {", "pub struct Discovery {"),
+    /pub verified: bool/,
+  )
+  assert.match(
+    between(
+      page,
+      "export interface FfmpegCandidate {",
+      "export interface RecommendReason {",
+    ),
+    /verified: boolean/,
+  )
+
+  const decoder = between(
+    page,
+    "d.object<FfmpegCandidate>({",
+    "recommendation: d.object<FfmpegRecommendation>({",
+  )
+
+  assert.match(decoder, /verified: d.boolean,/)
+  const field = d.object({ verified: d.boolean })
+
+  for (const verified of [true, false]) {
+    assert.equal(field({ verified }, "$candidate").verified, verified)
+  }
+
+  const invalid: Json[] = [{}, { verified: "false" }, { verified: null }]
+
+  for (const value of invalid) {
+    assert.throws(() => field(value, "$candidate"), d.DecodeError)
+  }
 })

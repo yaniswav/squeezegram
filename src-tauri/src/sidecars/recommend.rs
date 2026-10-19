@@ -186,10 +186,11 @@ fn license_rank(license: License) -> u8 {
     }
 }
 
-/// Best first: score, then newer version, then LGPL. Stable for the rest.
+/// Verified first, then score, newer version and LGPL. Stable for the rest.
 fn compare(a: &Candidate, b: &Candidate) -> Ordering {
-    b.score
-        .cmp(&a.score)
+    b.verified
+        .cmp(&a.verified)
+        .then_with(|| b.score.cmp(&a.score))
         .then_with(|| version_key(&b.version).cmp(&version_key(&a.version)))
         .then_with(|| license_rank(a.license).cmp(&license_rank(b.license)))
 }
@@ -227,19 +228,24 @@ fn download_note(download: &DownloadProfile) -> Reason {
 /// download. `recommended` is set on the chosen candidate only.
 pub fn recommend(candidates: &mut [Candidate], download: &DownloadProfile) -> Recommendation {
     for candidate in candidates.iter_mut() {
+        candidate.recommended = false;
+        if !candidate.verified {
+            candidate.score = 0;
+            candidate.reasons.clear();
+            continue;
+        }
         let working: Vec<Encoder> = candidate
             .working_encoders
             .iter()
             .filter_map(|name| Encoder::parse(name))
             .collect();
         (candidate.score, candidate.reasons) = score(&working, candidate.license);
-        candidate.recommended = false;
     }
     candidates.sort_by(compare);
 
     let chosen = candidates
         .iter_mut()
-        .filter(|candidate| candidate.score > 0)
+        .filter(|candidate| candidate.verified && candidate.score > 0)
         .find_map(|candidate| gain(candidate, download).map(|reason| (candidate, reason)));
     match chosen {
         Some((candidate, reason)) => {
@@ -251,7 +257,7 @@ pub fn recommend(candidates: &mut [Candidate], download: &DownloadProfile) -> Re
             }
         }
         None => {
-            let first = if candidates.is_empty() {
+            let first = if !candidates.iter().any(|candidate| candidate.verified) {
                 ReasonCode::DownloadNoCandidate
             } else {
                 ReasonCode::DownloadNoGain
@@ -277,6 +283,7 @@ mod tests {
             ffmpeg_path: format!("{dir}\\ffmpeg.exe"),
             ffprobe_path: format!("{dir}\\ffprobe.exe"),
             origin: Origin::Winget,
+            verified: true,
             version: version.into(),
             license,
             encoders: Vec::new(),
@@ -293,6 +300,43 @@ mod tests {
 
     const GPU_ONLY: &[Encoder] = &[Encoder::Nvenc];
     const X264_ONLY: &[Encoder] = &[Encoder::X264];
+
+    #[test]
+    fn unverified_candidates_never_score_or_influence_the_recommendation() {
+        let mut unchecked = candidate(
+            "unchecked",
+            "99",
+            License::Gpl,
+            &[Encoder::Nvenc, Encoder::X264],
+        );
+        unchecked.verified = false;
+        unchecked.recommended = true;
+        unchecked.score = 999;
+        let mut list = vec![unchecked.clone()];
+        let result = recommend(&mut list, &DownloadProfile::assumed());
+        assert_eq!(result.kind, Kind::Download);
+        assert_eq!(result.reasons[0].code, ReasonCode::DownloadNoCandidate);
+        assert!(!list[0].recommended);
+        assert_eq!(list[0].score, 0);
+        assert!(list[0].reasons.is_empty());
+        let mut list = vec![
+            unchecked.clone(),
+            candidate("verified", "1", License::Unknown, &[]),
+        ];
+        recommend(&mut list, &DownloadProfile::assumed());
+        assert_eq!(
+            list[0].dir, "verified",
+            "even a zero-score verified candidate comes first"
+        );
+        let mut list = vec![
+            unchecked,
+            candidate("verified", "1", License::Gpl, X264_ONLY),
+        ];
+        let result = recommend(&mut list, &DownloadProfile::assumed());
+        assert_eq!(result.candidate_dir.as_deref(), Some("verified"));
+        assert!(list[0].recommended);
+        assert!(!list[1].recommended);
+    }
 
     #[test]
     fn hardware_outweighs_libx264_which_outweighs_weak_fallbacks() {

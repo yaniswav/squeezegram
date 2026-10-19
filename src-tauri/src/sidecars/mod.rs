@@ -3,6 +3,7 @@
 pub mod discover;
 mod download;
 pub mod recommend;
+mod trust;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -48,6 +49,10 @@ pub enum SidecarError {
     Invalid,
     #[error("the folder was not proposed by the last search")]
     NotProposed,
+    #[error(
+        "the ffmpeg folder can be modified by other users or its permissions cannot be checked"
+    )]
+    UntrustedFolder,
     #[error("settings: {0}")]
     Settings(#[from] SettingsError),
 }
@@ -63,6 +68,7 @@ impl SidecarError {
             SidecarError::Busy => "SIDECAR_BUSY",
             SidecarError::Invalid => "SIDECAR_INVALID",
             SidecarError::NotProposed => "SIDECAR_CHOICE_STALE",
+            SidecarError::UntrustedFolder => "SIDECAR_UNTRUSTED_FOLDER",
             SidecarError::Settings(error) => error.code(),
         }
     }
@@ -179,6 +185,7 @@ impl SidecarService {
         let custom = self.settings.get().ffmpeg.custom_dir;
         if let Some(dir) = custom.filter(|dir| !dir.trim().is_empty()) {
             let (ffmpeg, ffprobe) = find_in(Path::new(&dir)).ok_or(SidecarError::Missing)?;
+            let (ffmpeg, ffprobe) = trust::check_pair(&ffmpeg, &ffprobe)?;
             return Ok(Resolved {
                 ffmpeg,
                 ffprobe,
@@ -250,7 +257,15 @@ impl SidecarService {
             );
             return Err(SidecarError::Missing);
         }
-        let Some(probed) = discover::probe_dir(Path::new(dir_text)).await else {
+        let (ffmpeg, ffprobe) = find_in(Path::new(dir_text)).ok_or(SidecarError::Missing)?;
+        let (ffmpeg, ffprobe) = trust::check_pair(&ffmpeg, &ffprobe).inspect_err(|error| {
+            tracing::warn!(
+                event = "sidecar_use",
+                error_code = error.code(),
+                "custom ffmpeg folder refused before execution"
+            );
+        })?;
+        let Some(probed) = discover::probe_pair(&ffmpeg, &ffprobe).await else {
             tracing::warn!(
                 event = "sidecar_use",
                 dir = dir_text,
@@ -320,6 +335,7 @@ mod tests {
             ffmpeg_path: String::new(),
             ffprobe_path: String::new(),
             origin: discover::Origin::Path,
+            verified: false,
             version: "test".into(),
             license: discover::License::Unknown,
             encoders: Vec::new(),
