@@ -550,11 +550,14 @@ fn diagnostic_report_path(job: &Job<'_>) -> PathBuf {
     base.join(format!("ffmpeg-{item}.log"))
 }
 
-/// FFREPORT uses `:` as a field separator. Forward slashes avoid backslash escaping on Windows;
-/// the drive colon and literal `%` still need ffmpeg's backslash escape.
+/// FFREPORT token parsing needs escaped colons and single quotes; forward slashes avoid
+/// backslash escaping on Windows. Its filename template then needs doubled literal `%`.
 fn ffreport_value(path: &Path) -> OsString {
     let path = path.to_string_lossy().replace('\\', "/");
-    let path = path.replace('%', "\\%").replace(':', "\\:");
+    let path = path
+        .replace('%', "%%")
+        .replace(':', "\\:")
+        .replace('\'', "\\'");
     OsString::from(format!("file={path}:level=40"))
 }
 
@@ -1775,11 +1778,46 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires SQUEEZEGRAM_TEST_FFMPEG_DIR with local ffmpeg"]
+    fn ffreport_creates_the_literal_report_path() {
+        let bin = std::env::var_os("SQUEEZEGRAM_TEST_FFMPEG_DIR").expect("local ffmpeg folder");
+        let dir = crate::queue::test_util::TestDir::new("ffreport-literal");
+        let folder = dir.path().join("O'Brien").join("100%");
+        std::fs::create_dir_all(&folder).unwrap();
+        let report = folder.join("ffmpeg-1.log");
+        let output = std::process::Command::new(Path::new(&bin).join("ffmpeg.exe"))
+            .env("FFREPORT", ffreport_value(&report))
+            .args([
+                "-hide_banner",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "nullsrc",
+                "-frames:v",
+                "1",
+                "-f",
+                "null",
+                "-",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(std::fs::metadata(&report).unwrap().len() > 0);
+    }
+
+    #[test]
     fn ffreport_path_is_escaped_and_only_the_last_report_line_decides() {
-        let value = ffreport_value(Path::new(r"C:\logs 100%\ffmpeg-1.log"));
+        let value = ffreport_value(Path::new(r"C:\Users\O'Brien\100%\ffmpeg-1.log"));
         assert_eq!(
             value.to_string_lossy(),
-            r"file=C\:/logs 100\%/ffmpeg-1.log:level=40"
+            r"file=C\:/Users/O\'Brien/100%%/ffmpeg-1.log:level=40"
         );
 
         let dir = crate::queue::test_util::TestDir::new("ffreport-tail");
