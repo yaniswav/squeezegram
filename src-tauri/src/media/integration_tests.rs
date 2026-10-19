@@ -1149,3 +1149,84 @@ fn stream_kinds(ffmpeg: &Path, path: &Path) -> Vec<(String, String)> {
         })
         .collect()
 }
+
+#[tokio::test]
+#[ignore = "requires SQUEEZEGRAM_TEST_FFMPEG_DIR with local ffmpeg and ffprobe"]
+async fn input_formats_reject_manifests_and_preserve_literal_images() {
+    let bin = ffmpeg_dir().expect("local ffmpeg and ffprobe folder");
+    let dir = TestDir::new("input-formats");
+    let clip = dir.path().join("clip.mp4");
+    let photo = dir.path().join("photo%d.png");
+    generate(
+        &bin,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=32x32:rate=1:duration=1",
+            "-c:v",
+            "mpeg4",
+            clip.to_str().unwrap(),
+        ],
+    );
+    generate(
+        &bin,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=size=16x16",
+            "-frames:v",
+            "1",
+            "-update",
+            "1",
+            photo.to_str().unwrap(),
+        ],
+    );
+    let neighbor = dir.path().join("photo1.png");
+    generate(
+        &bin,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=size=32x32",
+            "-frames:v",
+            "1",
+            neighbor.to_str().unwrap(),
+        ],
+    );
+    let ffprobe = bin.join("ffprobe.exe");
+    let cancel = CancellationToken::new();
+    assert!(
+        probe::probe(&ffprobe, &clip, false, &cancel)
+            .await
+            .unwrap()
+            .video
+            .is_some()
+    );
+    let image = probe::probe(&ffprobe, &photo, false, &cancel)
+        .await
+        .unwrap()
+        .video
+        .unwrap();
+    assert_eq!((image.width, image.height), (16, 16));
+    let base = format!("file:///{}", clip.to_string_lossy().replace('\\', "/"));
+    let dash = format!(
+        r#"<?xml version="1.0"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT1S" minBufferTime="PT1S"><Period><AdaptationSet mimeType="video/mp4"><Representation id="1" bandwidth="1000"><BaseURL>{base}</BaseURL></Representation></AdaptationSet></Period></MPD>"#
+    );
+    for (name, content) in [
+        ("x.mp4", dash.as_str()),
+        ("list.mp4", "ffconcat version 1.0\nfile 'clip.mp4'\n"),
+    ] {
+        let manifest = dir.path().join(name);
+        std::fs::write(&manifest, content).unwrap();
+        let error = probe::probe(&ffprobe, &manifest, true, &cancel)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, MediaError::Failed { code: "FILE_UNREADABLE", ref detail } if detail.contains("whitelist")),
+            "{error}"
+        );
+    }
+}

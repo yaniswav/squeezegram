@@ -206,17 +206,20 @@ pub fn video_options(
     options
 }
 
-fn common_start() -> Args {
-    Args::new().all(&[
-        "-hide_banner",
-        "-nostdin",
-        "-loglevel",
-        "error",
-        "-y",
-        "-progress",
-        "pipe:1",
-        "-nostats",
-    ])
+fn common_start(input: &Path) -> Args {
+    super::file_input(
+        Args::new().all(&[
+            "-hide_banner",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-y",
+            "-progress",
+            "pipe:1",
+            "-nostats",
+        ]),
+        input,
+    )
 }
 
 fn map_streams(args: Args, plan: &Plan) -> Args {
@@ -245,7 +248,7 @@ fn passlog(job: &Job<'_>) -> PathBuf {
 /// Full command line of an encode.
 fn encode_args(job: &Job<'_>, encoder: Encoder, video_bps: u64, pass: Pass, part: &Path) -> Args {
     let plan = job.plan;
-    let mut args = common_start().arg("-i").arg(job.input);
+    let mut args = common_start(job.input);
     args = map_streams(args, plan);
     if let Some(vf) = &plan.vf {
         args = args.arg("-vf").arg(vf);
@@ -295,7 +298,7 @@ fn encode_args(job: &Job<'_>, encoder: Encoder, video_bps: u64, pass: Pass, part
 
 fn remux_args(job: &Job<'_>, part: &Path) -> Args {
     let plan = job.plan;
-    let mut args = map_streams(common_start().arg("-i").arg(job.input), plan);
+    let mut args = map_streams(common_start(job.input), plan);
     args = match (plan.kind, plan.audio_kbps) {
         (Kind::RemuxAudio, Some(kbps)) => args
             .all(&["-c:v", "copy", "-c:a", "aac", "-b:a"])
@@ -313,10 +316,10 @@ fn photo_args(job: &Job<'_>, size: PhotoSize, quality: u32, part: &Path) -> Args
         "scale={}:{}:flags=lanczos,format=yuvj420p",
         size.width, size.height
     );
-    let mut args = Args::new()
-        .all(&["-hide_banner", "-nostdin", "-loglevel", "error", "-y"])
-        .arg("-i")
-        .arg(job.input);
+    let mut args = super::file_input(
+        Args::new().all(&["-hide_banner", "-nostdin", "-loglevel", "error", "-y"]),
+        job.input,
+    );
     match (plan.alpha, plan.source_dims) {
         // Transparent pixels would keep their hidden RGB values: lay the image over white.
         (true, Some((w, h))) => {
@@ -1153,9 +1156,7 @@ pub async fn strip(job: &Job<'_>) -> Result<Produced> {
 /// private and is written back from the probe (`Plan::stream_languages`, codes checked there);
 /// titles are not, being free text.
 fn strip_video_args(job: &Job<'_>, part: &Path) -> Args {
-    let mut args = common_start()
-        .arg("-i")
-        .arg(job.input)
+    let mut args = common_start(job.input)
         .all(&["-map", "0", "-map", "-0:d", "-ignore_unknown", "-c", "copy"])
         .all(&["-map_metadata", "-1", "-map_metadata:s", "-1"]);
     for (index, language) in job.plan.stream_languages.iter().enumerate() {
@@ -2005,8 +2006,54 @@ mod tests {
     }
 
     #[test]
+    fn every_file_input_is_restricted_without_restricting_generated_lavfi() {
+        let fx = Fixture::new();
+        let plan = sample_plan();
+        fx.args(&plan, |job, part| {
+            for pass in [Pass::Single, Pass::First, Pass::Second] {
+                super::super::assert_file_input(
+                    encode_args(job, Encoder::X264, 1_000_000, pass, part),
+                    job.input,
+                );
+            }
+            super::super::assert_file_input(remux_args(job, part), job.input);
+            super::super::assert_file_input(strip_video_args(job, part), job.input);
+            remux_args(job, part)
+        });
+        let mut plan = sample_plan();
+        plan.kind = Kind::Photo;
+        let size = PhotoSize {
+            width: 100,
+            height: 50,
+        };
+        for alpha in [false, true] {
+            plan.alpha = alpha;
+            plan.source_dims = Some((640, 480));
+            fx.args(&plan, |job, part| {
+                let job = Job {
+                    input: Path::new("photo%d.png"),
+                    ..*job
+                };
+                let args = photo_args(&job, size, 3, part);
+                super::super::assert_file_input(args.clone(), job.input);
+                let list = to_strings(args.clone());
+                assert_eq!(
+                    list.iter().filter(|arg| *arg == "-i").count(),
+                    if alpha { 2 } else { 1 },
+                );
+                if alpha {
+                    assert!(list.windows(4).any(|args| {
+                        args == ["-f", "lavfi", "-i", "color=c=white:size=640x480"]
+                    }));
+                }
+                args
+            });
+        }
+    }
+
+    #[test]
     fn normal_runs_log_only_errors_so_warnings_do_not_block_retries() {
-        let args = to_strings(common_start());
+        let args = to_strings(common_start(Path::new("clip.mp4")));
         assert!(args.windows(2).any(|pair| pair == ["-loglevel", "error"]));
     }
 
@@ -2018,7 +2065,7 @@ mod tests {
             encode_args(job, Encoder::Nvenc, 1_000_000, Pass::Single, part)
         });
         assert!(text.starts_with(
-            "-hide_banner -nostdin -loglevel error -y -progress pipe:1 -nostats -i C:\\in put\\a.mkv"
+            &format!("-hide_banner -nostdin -loglevel error -y -progress pipe:1 -nostats -format_whitelist {} -i C:\\in put\\a.mkv", super::super::INPUT_FORMAT_WHITELIST)
         ));
         assert!(text.contains("-map 0:0 -map 0:2 -sn -dn -map_chapters -1 -map_metadata -1"));
         assert!(text.contains("-vf scale=w=2:h=2"));

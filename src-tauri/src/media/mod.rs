@@ -15,6 +15,39 @@ pub mod thumb;
 #[cfg(test)]
 mod integration_tests;
 
+// Manifest and playlist demuxers can open other local files or UNC paths before user approval.
+pub(super) const INPUT_FORMAT_WHITELIST: &str = "mov,matroska,webm,avi,asf,flv,mpeg,mpegts,ogg,h264,hevc,m4v,gif,image2,jpeg_pipe,png_pipe,apng,webp_pipe,bmp_pipe,tiff_pipe";
+
+fn file_input(mut args: procs::Args, input: &std::path::Path) -> procs::Args {
+    // image2 must treat percent patterns literally; this private option is only for images.
+    if plan::is_image(input) {
+        args = args.all(&["-pattern_type", "none"]);
+    }
+    args.all(&["-format_whitelist", INPUT_FORMAT_WHITELIST, "-i"])
+        .arg(input)
+}
+
+#[cfg(test)]
+fn assert_file_input(args: procs::Args, input: &std::path::Path) {
+    let args = args.into_vec();
+    let at = args.iter().position(|arg| arg == "-i").unwrap();
+    assert_eq!(args[at - 2], "-format_whitelist");
+    assert_eq!(args[at - 1], INPUT_FORMAT_WHITELIST);
+    assert_eq!(args[at + 1], input.as_os_str());
+    assert_eq!(
+        args.iter()
+            .filter(|arg| *arg == "-format_whitelist")
+            .count(),
+        1
+    );
+    if plan::is_image(input) {
+        assert_eq!(args[at - 4], "-pattern_type");
+        assert_eq!(args[at - 3], "none");
+    } else {
+        assert!(!args.iter().any(|arg| arg == "-pattern_type"));
+    }
+}
+
 /// Why a media step stopped. `Failed::code` is a stable error code; `detail` is for the log
 /// (it may hold paths and ffmpeg's last lines, so it never reaches the front).
 #[derive(Debug, thiserror::Error)]

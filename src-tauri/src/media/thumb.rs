@@ -92,6 +92,26 @@ fn filter() -> String {
     )
 }
 
+fn thumbnail_args(video: &Path, at: f64, out: &Path) -> Args {
+    super::file_input(
+        Args::new()
+            .all(&[
+                "-hide_banner",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+            ])
+            .arg(format!("{at:.3}")),
+        video,
+    )
+    .all(&["-frames:v", "1", "-an", "-sn", "-vf"])
+    .arg(filter())
+    .all(&["-q:v", QUALITY])
+    .arg(out)
+}
+
 /// One frame of `video` as a JPEG in `out_dir`. A frame past the end (a duration that
 /// overstates the video) makes ffmpeg write nothing: the first frame is taken instead.
 pub async fn generate(
@@ -106,22 +126,7 @@ pub async fn generate(
     for at in [frame_at(duration_s), 0.0] {
         // A leftover of an earlier attempt must not pass for this one.
         let _ = std::fs::remove_file(&out);
-        let args = Args::new()
-            .all(&[
-                "-hide_banner",
-                "-nostdin",
-                "-loglevel",
-                "error",
-                "-y",
-                "-ss",
-            ])
-            .arg(format!("{at:.3}"))
-            .arg("-i")
-            .arg(video)
-            .all(&["-frames:v", "1", "-an", "-sn", "-vf"])
-            .arg(filter())
-            .all(&["-q:v", QUALITY])
-            .arg(&out);
+        let args = thumbnail_args(video, at, &out);
         let spec = Spec::new(ffmpeg, args).timeout(TIMEOUT).cancel(cancel);
         let output = procs::run(spec, |_| {})
             .await
@@ -223,6 +228,17 @@ impl Thumbnails for Unavailable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thumbnail_input_is_restricted_after_the_seek() {
+        let input = Path::new("clip.mp4");
+        let args = thumbnail_args(input, 1.5, Path::new("thumb.jpg"));
+        super::super::assert_file_input(args.clone(), input);
+        let args = args.into_vec();
+        let seek = args.iter().position(|arg| arg == "-ss").unwrap();
+        assert_eq!(args[seek + 1], "1.500");
+        assert_eq!(args[seek + 2], "-format_whitelist");
+    }
 
     #[test]
     fn the_frame_is_a_tenth_into_the_video() {

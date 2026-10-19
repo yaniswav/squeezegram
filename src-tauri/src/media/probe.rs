@@ -295,6 +295,31 @@ pub async fn probe_in_background(
     probe_as(ffprobe, input, scan_duration, cancel, true).await
 }
 
+fn probe_args(input: &Path, scan_packets: bool) -> Args {
+    let options: &[&str] = if scan_packets {
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts_time",
+            "-of",
+            "csv=p=0",
+        ]
+    } else {
+        &[
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+        ]
+    };
+    super::file_input(Args::new().all(options), input)
+}
+
 async fn probe_as(
     ffprobe: &Path,
     input: &Path,
@@ -302,22 +327,10 @@ async fn probe_as(
     cancel: &CancellationToken,
     low_priority: bool,
 ) -> Result<MediaInfo, MediaError> {
-    let mut spec = Spec::new(
-        ffprobe,
-        Args::new()
-            .all(&[
-                "-v",
-                "error",
-                "-print_format",
-                "json",
-                "-show_format",
-                "-show_streams",
-            ])
-            .arg(input),
-    )
-    .timeout(PROBE_TIMEOUT)
-    .cancel(cancel)
-    .collect_stdout();
+    let mut spec = Spec::new(ffprobe, probe_args(input, false))
+        .timeout(PROBE_TIMEOUT)
+        .cancel(cancel)
+        .collect_stdout();
     if low_priority {
         spec = spec.low_priority();
     }
@@ -352,23 +365,9 @@ async fn scan_last_pts(
     cancel: &CancellationToken,
     low_priority: bool,
 ) -> Result<Option<f64>, MediaError> {
-    let mut spec = Spec::new(
-        ffprobe,
-        Args::new()
-            .all(&[
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "packet=pts_time",
-                "-of",
-                "csv=p=0",
-            ])
-            .arg(input),
-    )
-    .timeout(PROBE_TIMEOUT)
-    .cancel(cancel);
+    let mut spec = Spec::new(ffprobe, probe_args(input, true))
+        .timeout(PROBE_TIMEOUT)
+        .cancel(cancel);
     if low_priority {
         spec = spec.low_priority();
     }
@@ -424,6 +423,22 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+
+    #[test]
+    fn both_probes_restrict_formats_and_only_images_disable_patterns() {
+        for name in [
+            "clip.mp4",
+            "photo%d.JPG",
+            "photo.png",
+            "photo.webp",
+            "photo.tiff",
+        ] {
+            for scan_packets in [false, true] {
+                let input = Path::new(name);
+                super::super::assert_file_input(probe_args(input, scan_packets), input);
+            }
+        }
+    }
 
     const SAMPLE: &str = r#"{
       "streams": [
