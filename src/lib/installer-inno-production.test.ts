@@ -100,7 +100,7 @@ test("production updates relaunch only the installed executable with one fixed o
 test("production updates require registered ownership, unchanged directory and a marker file", () => {
   assert.match(
     source,
-    /RegQueryStringValue\(HKCU64, OwnKey, 'InstallLocation', ExistingDirectory\)/,
+    /RegQueryStringValue\(HKCU64, OwnKey, 'InstallLocation', ExistingDirectory\);\s+ExistingDirectory := RemoveBackslashUnlessRoot\(ExistingDirectory\);/,
   )
   assert.match(source, /not PathSame\(Target, ExistingDirectory\)/)
   assert.match(source, /IsUpdate and \(\(ExistingDirectory = ''\)/)

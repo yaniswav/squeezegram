@@ -225,6 +225,7 @@ var
   WelcomeLogo, FinishedLogo: TBitmapImage;
 begin
   RegQueryStringValue(HKCU64, OwnKey, 'InstallLocation', ExistingDirectory);
+  ExistingDirectory := RemoveBackslashUnlessRoot(ExistingDirectory);
   WizardForm.Caption := 'squeezegram';
   WizardForm.WizardBitmapImage.Visible := False;
   WizardForm.WelcomeLabel1.Left := ScaleX(32);
