@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use semver::Version;
 use serde_json::json;
@@ -19,6 +19,16 @@ use crate::commands::AppState;
 use crate::entitlements::Entitlements;
 use crate::logging;
 use crate::settings::SettingsStore;
+
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+// The plugin bounds the whole request, not idle time: leave slow links (about 300 kbit/s for
+// a 60 MiB installer) room to finish.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const MAX_DOWNLOAD_BYTES: u64 = 128 * 1024 * 1024;
+
+fn download_too_large(downloaded: u64, total: Option<u64>) -> bool {
+    downloaded > MAX_DOWNLOAD_BYTES || total.is_some_and(|total| total > MAX_DOWNLOAD_BYTES)
+}
 
 /// What the last check found, kept for the install and for a page opened later.
 #[derive(Default)]
@@ -224,6 +234,7 @@ impl UpdateService {
             }
         }
         let updater = builder
+            .timeout(CHECK_TIMEOUT)
             .build()
             .map_err(|error| UpdateError::from_check(&error))?;
         updater
@@ -251,7 +262,7 @@ impl UpdateService {
             return Err(self.fail(UpdateError::busy()));
         };
         let cached = self.lock_cache().update.clone();
-        let update = match cached {
+        let mut update = match cached {
             Some(update) => update,
             None => {
                 self.check_locked(app, Trigger::Manual).await?;
@@ -263,6 +274,7 @@ impl UpdateService {
             }
         };
         self.check_coverage(&update.version)?;
+        update.timeout = Some(DOWNLOAD_TIMEOUT);
         let bytes = self.download(app, &update).await?;
         // Again after the download: a key saved while it ran must not be moved to a major it
         // does not cover.
@@ -295,9 +307,23 @@ impl UpdateService {
     async fn download(&self, app: &AppHandle, update: &Update) -> Result<Vec<u8>, UpdateError> {
         let started = Instant::now();
         let mut sampler = ProgressSampler::default();
-        let result = update
+        let limit = tokio::sync::Notify::new();
+        let mut downloaded = 0_u64;
+        let mut too_large = false;
+        let result = tokio::select! {
+            biased;
+            _ = limit.notified() => {
+                return Err(self.fail(UpdateError::new(UpdateError::DOWNLOAD_FAILED, "too_large")));
+            }
+            result = update
             .download(
                 |chunk, total| {
+                    downloaded = downloaded.saturating_add(chunk as u64);
+                    if download_too_large(downloaded, total) {
+                        too_large = true;
+                        limit.notify_one();
+                        return;
+                    }
                     let Some(sample) = sampler.chunk(chunk, total) else {
                         return;
                     };
@@ -313,8 +339,12 @@ impl UpdateService {
                     }
                 },
                 || {},
-            )
-            .await;
+            ) => result,
+        };
+        // The plugin may finish in the same poll that signals the limit.
+        if too_large {
+            return Err(self.fail(UpdateError::new(UpdateError::DOWNLOAD_FAILED, "too_large")));
+        }
         match result {
             Ok(bytes) => {
                 tracing::info!(
@@ -383,6 +413,29 @@ mod tests {
     use crate::entitlements::{EntitlementStatus, Feature};
     use crate::queue::test_util::TestDir;
     use crate::update::RELEASES_PAGE;
+
+    #[test]
+    fn announced_download_over_the_cap_is_refused() {
+        assert!(download_too_large(0, Some(MAX_DOWNLOAD_BYTES + 1)));
+    }
+
+    #[test]
+    fn cumulative_download_over_the_cap_is_refused() {
+        let mut downloaded = MAX_DOWNLOAD_BYTES - 1;
+        downloaded += 1;
+        assert!(!download_too_large(downloaded, None));
+        downloaded += 1;
+        assert!(download_too_large(downloaded, None));
+    }
+
+    #[test]
+    fn download_exactly_at_the_cap_is_allowed() {
+        assert!(!download_too_large(
+            MAX_DOWNLOAD_BYTES,
+            Some(MAX_DOWNLOAD_BYTES)
+        ));
+        assert!(!download_too_large(MAX_DOWNLOAD_BYTES, None));
+    }
 
     /// A licence status whose key can change while the service lives.
     struct Key(Mutex<Option<u32>>);
