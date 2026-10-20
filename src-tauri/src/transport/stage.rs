@@ -41,6 +41,11 @@ const CAP_SHORT: f64 = 1080.0;
 /// this, but a chat is never trusted across the minutes an encode takes.
 const PREFLIGHT_TTL: Duration = Duration::from_secs(30);
 
+fn watchdog_deadline(now: Instant, watchdog: Duration) -> Instant {
+    // An unrepresentable timeout alerts immediately; it must never panic or cancel a send.
+    now.checked_add(watchdog).unwrap_or(now)
+}
+
 /// The picture written for one upload attempt.
 struct TempThumbnail {
     path: PathBuf,
@@ -564,13 +569,13 @@ impl SendStage for TransportStage {
         let upload = self.transport.upload(request, tx, ctx.cancel.clone());
         tokio::pin!(upload);
         let mut meter = Meter { start: None };
-        let mut deadline = Instant::now() + watchdog;
+        let mut deadline = watchdog_deadline(Instant::now(), watchdog);
         let mut warned = false;
         let result = loop {
             tokio::select! {
                 result = &mut upload => break result,
                 Some(progress) = rx.recv() => {
-                    deadline = Instant::now() + watchdog;
+                    deadline = watchdog_deadline(Instant::now(), watchdog);
                     warned = false;
                     ctx.progress.report(meter.convert(progress));
                 }
@@ -1174,6 +1179,19 @@ mod tests {
             std::path::Path::new(&h.item(id).source_path).exists(),
             "the source is never deleted"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn watchdog_deadline_handles_extreme_durations() {
+        let now = Instant::now();
+        let normal = Duration::from_secs(120);
+        assert_eq!(watchdog_deadline(now, normal).duration_since(now), normal);
+        assert_eq!(watchdog_deadline(now, Duration::ZERO), now);
+        for extreme in [Duration::from_secs(u64::MAX), Duration::MAX] {
+            let deadline = watchdog_deadline(now, extreme);
+            assert_eq!(deadline, now);
+            tokio::time::sleep_until(deadline).await;
+        }
     }
 
     #[tokio::test(start_paused = true)]

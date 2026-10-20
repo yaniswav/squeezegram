@@ -13,6 +13,9 @@ use crate::transport::proxy::{Proxy, ProxyKind};
 
 pub const FILE_NAME: &str = "settings.json";
 
+/// Not in the settings page; a day bounds these timers (a larger watchdog panicked the send).
+const MAX_DURATION_S: u64 = 24 * 60 * 60;
+
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
     #[error("i/o error: {0}")]
@@ -392,6 +395,18 @@ impl Settings {
                 "send.pause_min_s > pause_max_s".into(),
             ));
         }
+        for (field, value, max) in [
+            ("send.watchdog_s", self.send.watchdog_s, MAX_DURATION_S),
+            (
+                "watch.stable_seconds",
+                self.watch.stable_seconds,
+                MAX_DURATION_S,
+            ),
+        ] {
+            if value > max {
+                return Err(SettingsError::Invalid(field.into()));
+            }
+        }
         if !(0.0..50.0).contains(&self.limit.margin_percent) {
             return Err(SettingsError::Invalid("limit.margin_percent".into()));
         }
@@ -679,6 +694,63 @@ mod tests {
     use super::*;
     use crate::queue::test_util::TestDir;
     use serde_json::json;
+
+    fn numeric_bounds() -> [(&'static str, &'static str, u64); 2] {
+        [
+            ("send", "watchdog_s", MAX_DURATION_S),
+            ("watch", "stable_seconds", MAX_DURATION_S),
+        ]
+    }
+
+    fn numeric_patch(group: &str, field: &str, value: u64) -> Value {
+        json!({ (group): { (field): value } })
+    }
+
+    #[test]
+    fn numeric_bounds_are_accepted_and_invalid_patches_change_nothing() {
+        let dir = TestDir::new("settings-numeric-bounds");
+        let path = dir.path().join(FILE_NAME);
+        let store = SettingsStore::load(path.clone()).unwrap();
+        for (group, field, max) in numeric_bounds() {
+            let saved = store.set(&numeric_patch(group, field, max)).unwrap();
+            assert_eq!(SettingsStore::load(path.clone()).unwrap().get(), saved);
+            let bytes = std::fs::read(&path).unwrap();
+            for bad in [max + 1, u64::MAX] {
+                let error = store.set(&numeric_patch(group, field, bad)).unwrap_err();
+                assert_eq!(error.code(), "SETTINGS_INVALID", "{group}.{field}={bad}");
+                assert_eq!(store.get(), saved);
+                assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                assert!(!path.with_extension("json.tmp").exists());
+            }
+        }
+        // Existing zero-duration behavior and a disabled disk reserve remain valid.
+        store
+            .set(&json!({
+                "send": { "pause_min_s": 0, "pause_max_s": 0, "watchdog_s": 0 },
+                "watch": { "stable_seconds": 0 }, "temp": { "min_free_gb": 0 }
+            }))
+            .unwrap();
+    }
+
+    #[test]
+    fn saved_out_of_range_numbers_are_rejected_without_rewriting_the_file() {
+        let dir = TestDir::new("settings-invalid-numbers");
+        let path = dir.path().join(FILE_NAME);
+        for (group, field, max) in numeric_bounds() {
+            for bad in [max + 1, u64::MAX] {
+                let mut value = serde_json::to_value(Settings::default()).unwrap();
+                merge(&mut value, &numeric_patch(group, field, bad));
+                let bytes = serde_json::to_vec_pretty(&value).unwrap();
+                std::fs::write(&path, &bytes).unwrap();
+                assert_eq!(
+                    SettingsStore::load(path.clone()).err().unwrap().code(),
+                    "SETTINGS_INVALID",
+                    "{group}.{field}={bad}"
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            }
+        }
+    }
 
     #[test]
     fn defaults_match_the_spec() {
