@@ -10,6 +10,7 @@
 
 pub mod keys;
 pub mod license;
+pub mod revoked;
 pub mod store;
 
 use serde::Serialize;
@@ -157,7 +158,7 @@ pub struct EntitlementStatus {
     /// verified license or no account to compare with.
     pub account_matches: Option<bool>,
     /// The highest app major version the stored key covers (its `maj`); `null` unless its
-    /// signature verified, whatever the account or this build's major.
+    /// signature verified and it is not revoked, whatever the account or this build's major.
     pub covers_major: Option<u32>,
     /// The `LIC_*` code that keeps a stored license from applying.
     pub reason: Option<&'static str>,

@@ -89,6 +89,14 @@ const STATUSES = {
     covers_major: 1,
     reason: "LIC_OLDER_MAJOR",
   },
+  revoked: {
+    plan: "free",
+    source: "rejected",
+    features: [],
+    account_matches: null,
+    covers_major: null,
+    reason: "LIC_REVOKED",
+  },
   corrupt: {
     plan: "free",
     source: "rejected",
@@ -187,6 +195,10 @@ test("the License section shows each verdict, never anything personal", () => {
     kind: "invalid",
     code: "LIC_MALFORMED",
   })
+  assert.deepEqual(licenseView(STATUSES.revoked), {
+    kind: "invalid",
+    code: "LIC_REVOKED",
+  })
   assert.deepEqual(licenseView(STATUSES.olderMajor), {
     kind: "invalid",
     code: "LIC_OLDER_MAJOR",
@@ -198,9 +210,17 @@ test("remove is offered for a stored license, applied or not", () => {
   // SAFETY: FREE_BUILD has the fields of a status.
   assert.equal(hasStoredLicense(FREE_BUILD as EntitlementStatus), false)
 
-  const { premium, pending, otherAccount, olderMajor, corrupt } = STATUSES
+  const { premium, pending, otherAccount, olderMajor, revoked, corrupt } =
+    STATUSES
 
-  for (const status of [premium, pending, otherAccount, olderMajor, corrupt])
+  for (const status of [
+    premium,
+    pending,
+    otherAccount,
+    olderMajor,
+    revoked,
+    corrupt,
+  ])
     assert.equal(hasStoredLicense(status), true, status.source)
 })
 
@@ -218,9 +238,16 @@ test("a feature is granted only by the features of an applied license", () => {
   assert.equal(grants(limited, "advanced_encoding"), true)
   assert.equal(grants(limited, "background"), false)
 
-  const { none, pending, otherAccount, olderMajor, corrupt } = STATUSES
+  const { none, pending, otherAccount, olderMajor, revoked, corrupt } = STATUSES
 
-  for (const status of [none, pending, otherAccount, olderMajor, corrupt])
+  for (const status of [
+    none,
+    pending,
+    otherAccount,
+    olderMajor,
+    revoked,
+    corrupt,
+  ])
     assert.equal(grants(status, "advanced_encoding"), false, status.source)
   assert.equal(grants(null, "advanced_encoding"), false)
 })
@@ -286,6 +313,7 @@ test("every license code and feature has an English text", () => {
     "LIC_MALFORMED",
     "LIC_UNKNOWN_KID",
     "LIC_BAD_SIGNATURE",
+    "LIC_REVOKED",
     "LIC_WRONG_ACCOUNT",
     "LIC_NO_ACCOUNT",
     "LIC_OLDER_MAJOR",
@@ -307,5 +335,20 @@ test("every license code and feature has an English text", () => {
     "background",
   ]) {
     assert.ok(isJsonString(names[feature]), feature)
+  }
+})
+
+test("the refunded license message exists in every locale", () => {
+  for (const locale of ["en", "fr", "ru", "es", "ar", "pt-BR", "id"]) {
+    const text: unknown = JSON.parse(
+      readFileSync(
+        new URL(`../i18n/locales/${locale}.json`, import.meta.url),
+        "utf8",
+      ),
+    )
+
+    assert.ok(isJson(text) && isJsonObject(text) && isJsonObject(text.errors))
+    assert.ok(isJsonString(text.errors.LIC_REVOKED), locale)
+    assert.ok(text.errors.LIC_REVOKED.includes("/paysupport"), locale)
   }
 })

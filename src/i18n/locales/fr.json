@@ -137,6 +137,7 @@
     "LIC_MALFORMED": "Ce n'est pas une licence squeezegram. Copiez la licence complète depuis le message du bot, puis collez-la à nouveau.",
     "LIC_UNKNOWN_KID": "Cette licence a été signée avec une clé que cette version de squeezegram ne connaît pas. Mettez l'application à jour, puis réessayez.",
     "LIC_BAD_SIGNATURE": "Cette licence n'a pas passé la vérification de sa signature. Copiez-la à nouveau depuis le message du bot, sans rien modifier.",
+    "LIC_REVOKED": "Cette licence a été remboursée et n’est plus valide. Si vous pensez qu’il s’agit d’une erreur, contactez-nous avec /paysupport dans le bot squeezegram.",
     "LIC_WRONG_ACCOUNT": "Cette licence appartient à un autre compte Telegram. Connectez-vous avec le compte pour lequel elle a été achetée.",
     "LIC_NO_ACCOUNT": "Connectez-vous à Telegram pour vérifier cette licence.",
     "LIC_OLDER_MAJOR": "Cette licence ne couvre que les versions précédentes de squeezegram. Cette version nécessite une nouvelle licence.",

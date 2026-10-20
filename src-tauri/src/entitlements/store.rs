@@ -6,13 +6,13 @@
 //! No account signed in is a wait, not an error: the license applies once its account signs
 //! in. A missing, unreadable or corrupt file is never an error for the app: the plan is free.
 //!
-//! A key covers the app majors up to its `maj`. The order of the checks is: signature, then
+//! A key covers the app majors up to its `maj`. The order of the checks is: signature, revocation,
 //! coverage of this build's major, then account: a key of an older major is `LIC_OLDER_MAJOR`
 //! whether or not an account is signed in, and whichever account it was issued to.
 //!
 //! Journal: `license_status` (once per new verdict), `license_set` and `license_cleared`, with
 //! the plan, the `LIC_*` code, and the `kid` and `maj` (`covers_major`) of a verified license.
-//! The token and its `sub` never reach the journal, a `Debug` or an error text.
+//! The token, its `jti` and its `sub` never reach the journal, a `Debug` or an error text.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -23,6 +23,7 @@ use std::sync::{Mutex, MutexGuard};
 use tokio::sync::watch;
 
 use super::license::{self, KeyRing, License, LicenseError};
+use super::revoked::REVOKED_JTIS;
 use super::{EntitlementSource, EntitlementStatus, Entitlements, Feature, Plan, keys};
 use crate::limit;
 use crate::transport::AuthState;
@@ -104,7 +105,13 @@ enum Verdict {
 }
 
 impl Verdict {
-    fn of(stored: &Stored, keys: &KeyRing, user_id: Option<i64>, build_major: u32) -> Self {
+    fn of(
+        stored: &Stored,
+        keys: &KeyRing,
+        user_id: Option<i64>,
+        build_major: u32,
+        revoked_jtis: &[&str],
+    ) -> Self {
         let token = match stored {
             Stored::Absent => return Verdict::NoLicense,
             Stored::Unreadable(_) => return Verdict::Invalid(LicenseError::Malformed),
@@ -113,6 +120,9 @@ impl Verdict {
         match license::verify(token, keys) {
             Err(error) => Verdict::Invalid(error),
             Ok(license) => {
+                if revoked_jtis.contains(&license.jti.as_str()) {
+                    return Verdict::Invalid(LicenseError::Revoked);
+                }
                 if license::check_coverage(&license, build_major).is_err() {
                     return Verdict::OlderMajor(license);
                 }
@@ -132,7 +142,7 @@ impl Verdict {
         }
     }
 
-    /// The license whose signature verified, whatever else keeps it from applying.
+    /// The non-revoked license whose signature verified, whatever else keeps it from applying.
     fn verified(&self) -> Option<&License> {
         match self {
             Verdict::Applies(license)
@@ -202,6 +212,7 @@ struct Inner {
 pub struct LicenseEntitlements {
     path: PathBuf,
     keys: KeyRing,
+    revoked_jtis: &'static [&'static str],
     /// `None`: no transport, never an account (a stored license then waits for one).
     auth: Option<watch::Receiver<AuthState>>,
     /// Major version of the build: `BUILD_MAJOR`, except in tests.
@@ -250,6 +261,7 @@ impl LicenseEntitlements {
         Self {
             path,
             keys,
+            revoked_jtis: REVOKED_JTIS,
             auth,
             build_major: BUILD_MAJOR,
             inner: Mutex::new(Inner {
@@ -269,6 +281,12 @@ impl LicenseEntitlements {
     #[cfg(test)]
     fn with_build_major(mut self, build_major: u32) -> Self {
         self.build_major = build_major;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_revoked_jtis(mut self, revoked_jtis: &'static [&'static str]) -> Self {
+        self.revoked_jtis = revoked_jtis;
         self
     }
 
@@ -294,7 +312,13 @@ impl LicenseEntitlements {
             .as_ref()
             .is_some_and(|c| c.generation == inner.generation && c.user_id == user_id);
         if !fresh {
-            let verdict = Verdict::of(&inner.stored, &self.keys, user_id, self.build_major);
+            let verdict = Verdict::of(
+                &inner.stored,
+                &self.keys,
+                user_id,
+                self.build_major,
+                self.revoked_jtis,
+            );
             let status = verdict.status();
             let fields = serde_json::json!({ "features": status.features }).to_string();
             let io_error = match inner.stored {
@@ -325,14 +349,17 @@ impl LicenseEntitlements {
     }
 
     /// Verifies then stores `token` (surrounding whitespace dropped). Refused, and the file
-    /// left as it was, when it does not verify, covers only older majors than this build or
-    /// belongs to another signed-in account; kept when no account is signed in yet (checked at
-    /// sign-in).
+    /// left as it was, when it does not verify, is revoked, covers only older majors than this
+    /// build or belongs to another signed-in account; kept when no account is signed in yet
+    /// (checked at sign-in).
     pub fn save(&self, token: &str) -> Result<EntitlementStatus, StoreError> {
         let token = token.trim();
         let verified = license::verify(token, &self.keys);
         let kid = verified.as_ref().ok().map(|license| license.kid.clone());
         let checked = verified.and_then(|license| {
+            if self.revoked_jtis.contains(&license.jti.as_str()) {
+                return Err(LicenseError::Revoked);
+            }
             license::check_coverage(&license, self.build_major)?;
             match license::check_account(&license, self.user_id()) {
                 Err(LicenseError::NoAccount) => Ok(()),
@@ -536,6 +563,113 @@ mod tests {
             LicenseEntitlements::path_beside(&dir.path().join(crate::settings::FILE_NAME)),
             path
         );
+    }
+
+    #[test]
+    fn save_refuses_a_revoked_jti_and_preserves_a_repurchase() {
+        let dir = TestDir::new("license-save-revoked");
+        let vectors = test_vectors::load();
+        let account = MockTransport::authorized();
+        let refunded = vectors.lifetime_token(MOCK_ME_ID, &[], "refunded-key");
+        let replacement = vectors.lifetime_token(MOCK_ME_ID, &[], "replacement-key");
+        let path = dir.path().join(FILE_NAME);
+        let store = store(&dir, &vectors, &account).with_revoked_jtis(&["refunded-key"]);
+        let error = store.save(&refunded).unwrap_err();
+        assert_eq!(error, StoreError::License(LicenseError::Revoked));
+        assert_eq!(error.code(), "LIC_REVOKED");
+        assert!(!path.exists());
+        assert!(!path.with_extension("txt.tmp").exists());
+        assert_eq!(store.status(), free_none());
+
+        let old = license::verify(&refunded, &vectors.key_ring()).unwrap();
+        let new = license::verify(&replacement, &vectors.key_ring()).unwrap();
+        assert_eq!(old.sub, new.sub);
+        assert_ne!(old.jti, new.jti);
+        assert_eq!(store.save(&replacement), Ok(lifetime()));
+        assert_eq!(
+            store.save(&refunded),
+            Err(StoreError::License(LicenseError::Revoked))
+        );
+        assert_eq!(store.status(), lifetime());
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            format!("{replacement}\n")
+        );
+        let reloaded =
+            super::tests::store(&dir, &vectors, &account).with_revoked_jtis(&["refunded-key"]);
+        assert_eq!(reloaded.status(), lifetime());
+    }
+
+    #[test]
+    fn a_stored_revoked_key_is_free_before_coverage_or_account_checks() {
+        let dir = TestDir::new("license-load-revoked");
+        let vectors = test_vectors::load();
+        let account = MockTransport::authorized();
+        let refunded = vectors.lifetime_token(MOCK_ME_ID, &[], "refunded-key");
+        let path = dir.path().join(FILE_NAME);
+        fs::write(&path, &refunded).unwrap();
+        let AuthState::Ready(mut me) = account.auth_state().borrow().clone() else {
+            panic!("mock account must be ready");
+        };
+        me.user_id += 1;
+        let (_, wrong_account) = watch::channel(AuthState::Ready(me));
+        for build_major in [1, 2] {
+            for auth in [
+                None,
+                Some(account.auth_state()),
+                Some(wrong_account.clone()),
+            ] {
+                let store = LicenseEntitlements::load(path.clone(), vectors.key_ring(), auth)
+                    .with_build_major(build_major)
+                    .with_revoked_jtis(&["refunded-key"]);
+                assert_eq!(
+                    store.status(),
+                    status(EntitlementSource::Rejected, None, None, Some("LIC_REVOKED"))
+                );
+                assert_eq!(store.problem(), Some(LicenseError::Revoked));
+                assert!(Feature::ALL.iter().all(|f| !store.allows(*f)));
+                assert_eq!(
+                    store.save(&refunded),
+                    Err(StoreError::License(LicenseError::Revoked))
+                );
+                assert_eq!(fs::read_to_string(&path).unwrap(), refunded);
+            }
+        }
+    }
+
+    #[test]
+    fn a_revoked_refusal_journals_no_key_or_jti() {
+        let dir = TestDir::new("license-revoked-journal");
+        let journal = TestJournal::new(&dir.path().join("logs"), "info");
+        let vectors = test_vectors::load();
+        let account = MockTransport::authorized();
+        let refunded = vectors.lifetime_token(MOCK_ME_ID, &[], "refunded-key");
+        let store = store(&dir, &vectors, &account).with_revoked_jtis(&["refunded-key"]);
+        store.save(&refunded).unwrap_err();
+        fs::write(dir.path().join(FILE_NAME), &refunded).unwrap();
+        let reloaded =
+            super::tests::store(&dir, &vectors, &account).with_revoked_jtis(&["refunded-key"]);
+        assert_eq!(reloaded.problem(), Some(LicenseError::Revoked));
+        let lines = journal.lines();
+        for event in ["license_set", "license_status"] {
+            let line = lines.iter().find(|line| line["event"] == event).unwrap();
+            assert_eq!(line["error_code"], json!("LIC_REVOKED"));
+        }
+        let evaluated = lines
+            .iter()
+            .find(|line| line["event"] == "license_status")
+            .unwrap();
+        assert!(evaluated["fields"]["covers_major"].is_null());
+        let license = license::verify(&refunded, &vectors.key_ring()).unwrap();
+        let logged = journal.text();
+        for secret in [
+            refunded.as_str(),
+            refunded.split('.').nth(1).unwrap(),
+            &license.sub,
+            &license.jti,
+        ] {
+            assert!(!logged.contains(secret));
+        }
     }
 
     #[test]

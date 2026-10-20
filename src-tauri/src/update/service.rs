@@ -440,6 +440,36 @@ mod tests {
     }
 
     #[test]
+    fn a_revoked_key_does_not_block_updates_to_the_free_app() {
+        use crate::entitlements::LicenseEntitlements;
+        use crate::entitlements::license::test_vectors;
+        use crate::transport::TelegramTransport;
+        use crate::transport::mock::{MOCK_ME_ID, MockTransport};
+
+        let dir = TestDir::new("update-revoked-key");
+        let vectors = test_vectors::load();
+        let account = MockTransport::authorized();
+        let refunded = vectors.lifetime_token(MOCK_ME_ID, &[], "refunded-key");
+        let path = dir.path().join(crate::entitlements::store::FILE_NAME);
+        std::fs::write(&path, &refunded).unwrap();
+        let key = LicenseEntitlements::load(path, vectors.key_ring(), Some(account.auth_state()))
+            .with_revoked_jtis(&["refunded-key"]);
+        assert_eq!(key.status().reason, Some("LIC_REVOKED"));
+        assert_eq!(key.status().covers_major, None);
+        let settings = SettingsStore::load(dir.path().join("settings.json")).unwrap();
+        let service = UpdateService::new(
+            Arc::new(settings),
+            Arc::new(key),
+            Kind::Installer,
+            "1.0.0".into(),
+            1,
+        );
+        assert_eq!(service.missing_coverage("2.0.0"), None);
+        assert!(service.check_coverage("2.0.0").is_ok());
+        assert!(service.check_coverage("999.0.0").is_ok());
+    }
+
+    #[test]
     fn the_install_gate_reads_the_key_as_it_is_at_install_time() {
         let dir = TestDir::new("update-gate-live");
         let key = Key::new(None);

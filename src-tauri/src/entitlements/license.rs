@@ -48,6 +48,8 @@ pub enum LicenseError {
     UnknownKid,
     #[error("license key signature does not verify")]
     BadSignature,
+    #[error("license key was refunded and is no longer valid")]
+    Revoked,
     #[error("license key belongs to another Telegram account")]
     WrongAccount,
     #[error("no Telegram account is signed in to check the license key against")]
@@ -62,6 +64,7 @@ impl LicenseError {
             LicenseError::Malformed => "LIC_MALFORMED",
             LicenseError::UnknownKid => "LIC_UNKNOWN_KID",
             LicenseError::BadSignature => "LIC_BAD_SIGNATURE",
+            LicenseError::Revoked => "LIC_REVOKED",
             LicenseError::WrongAccount => "LIC_WRONG_ACCOUNT",
             LicenseError::NoAccount => "LIC_NO_ACCOUNT",
             LicenseError::OlderMajor => "LIC_OLDER_MAJOR",
