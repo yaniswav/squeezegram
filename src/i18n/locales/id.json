@@ -83,6 +83,7 @@
     "SIDECAR_UNTRUSTED_FOLDER": "Izin folder ini tidak dapat diverifikasi atau mengizinkan pengguna lain mengubah ffmpeg atau ffprobe. Pilih folder yang terlindungi.",
     "SIDECAR_CHOICE_STALE": "Pilihan ffmpeg itu sudah usang. Cari lagi dan pilih salah satu dari daftar baru.",
     "TEMP_DIR_INVALID": "Folder ini tidak dapat digunakan untuk berkas sementara. Pilih folder yang sudah ada dan dapat ditulis di drive lokal (bukan folder bersama jaringan).",
+    "TEMP_DIR_UNSAFE": "squeezegram tidak dapat menggunakan folder ini dengan aman. Folder harus berada di PC ini, milik Anda, dan bukan tautan; jika berisi folder squeezegram-temp, folder tersebut harus dibuat oleh squeezegram.",
     "UPDATE_FAILED": "Pembaruan gagal.",
     "UPDATE_CHECK_FAILED": "Pemeriksaan pembaruan gagal. Periksa koneksi, lalu coba lagi.",
     "UPDATE_NOT_PUBLISHED": "Belum ada informasi pembaruan. Coba lagi nanti.",

@@ -1611,8 +1611,11 @@ async fn pick_folder(app: &AppHandle) -> Option<std::path::PathBuf> {
     receiver.await.ok().flatten()?.into_path().ok()
 }
 
-/// `TEMP_DIR_INVALID { reason }` for a folder that cannot be the temporary folder.
+/// Folder errors keep their reason; unsafe Windows permissions have a dedicated sentence.
 fn temp_dir_error(problem: TempDirProblem) -> CommandError {
+    if problem == TempDirProblem::Unsafe {
+        return SettingsError::UnsafeTempFolder.into();
+    }
     CommandError {
         code: "TEMP_DIR_INVALID",
         params: json!({ "reason": problem.as_str() }),
@@ -2137,6 +2140,27 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn unsafe_temp_selection_keeps_memory_and_saved_settings_unchanged() {
+        let dir = TestDir::new("commands-temp-unsafe");
+        let path = dir.path().join("settings.json");
+        let store = SettingsStore::load(path.clone()).unwrap();
+        let safe = dir.path().join("safe");
+        let shared = dir.path().join("shared");
+        std::fs::create_dir(&safe).unwrap();
+        std::fs::create_dir(&shared).unwrap();
+        let before = set_temp_dir(&store, &safe).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::create_dir(shared.join("squeezegram-temp")).unwrap();
+        let error = set_temp_dir(&store, &shared).unwrap_err();
+        assert_eq!(error.code, "TEMP_DIR_UNSAFE");
+        assert_eq!(error.params, json!({}));
+        assert_eq!(store.get(), before);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(std::fs::read_dir(shared).unwrap().count(), 1);
+    }
+
     #[test]
     fn the_temp_folder_is_checked_before_it_is_recorded() {
         let dir = TestDir::new("commands-temp-dir");
@@ -2178,8 +2202,9 @@ mod tests {
             usable.to_str(),
             "a refused folder changes nothing"
         );
-        // Nothing is left behind by the writability check.
-        assert_eq!(std::fs::read_dir(&usable).unwrap().count(), 0);
+        // The private workspace remains, but the writability probe does not.
+        let workspace = crate::settings::resolve_custom_temp_dir(&usable).unwrap();
+        assert_eq!(std::fs::read_dir(workspace).unwrap().count(), 0);
     }
 
     #[cfg(windows)]

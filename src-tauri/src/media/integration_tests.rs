@@ -88,6 +88,7 @@ impl Env {
     ) -> Option<Self> {
         let ffmpeg = ffmpeg_dir()?;
         let dir = TestDir::new("media-it");
+        std::fs::create_dir(dir.path().join("tmp")).unwrap();
         let settings = Arc::new(SettingsStore::load(dir.path().join("settings.json")).unwrap());
         settings
             .set(&serde_json::json!({
@@ -388,7 +389,9 @@ async fn cancelling_mid_encode_kills_ffmpeg_and_removes_the_part() {
     let result = env.stage.encode(&item, &env.ctx(&item, &cancel)).await;
     assert_eq!(result, Err(StageError::Cancelled));
     assert!(started.elapsed() < Duration::from_secs(10));
-    let dir = env.path("tmp").join(item.id.to_string());
+    let dir = crate::settings::resolve_custom_temp_dir(&env.path("tmp"))
+        .unwrap()
+        .join(item.id.to_string());
     let leftovers: Vec<_> = std::fs::read_dir(&dir)
         .map(|d| d.flatten().map(|e| e.file_name()).collect())
         .unwrap_or_default();

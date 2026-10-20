@@ -76,7 +76,9 @@ pub fn sweep_default_root(temp: &crate::settings::Temp, store: &Store) -> Sweep 
         );
         return Sweep::default();
     }
-    sweep_orphans(&crate::media::stage::temp_root(temp), store)
+    crate::media::stage::temp_root(temp)
+        .map(|root| sweep_orphans(&root, store))
+        .unwrap_or_default()
 }
 
 /// Sweeps `root` against the items of `store` and journals one line with the counts. Items
@@ -215,7 +217,7 @@ fn remove_flat_folder(dir: &Path) -> bool {
 }
 
 /// A symlink, or on Windows any reparse point (junction, mount point, cloud placeholder).
-fn is_link(meta: &Metadata) -> bool {
+pub(crate) fn is_link(meta: &Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;

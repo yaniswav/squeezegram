@@ -83,6 +83,7 @@
     "SIDECAR_UNTRUSTED_FOLDER": "This folder's permissions could not be verified or allow other users to change ffmpeg or ffprobe. Choose a protected folder.",
     "SIDECAR_CHOICE_STALE": "That ffmpeg choice is out of date. Search again and pick one from the new list.",
     "TEMP_DIR_INVALID": "This folder can't be used for temporary files. Choose an existing, writable folder on a local drive (not a network share).",
+    "TEMP_DIR_UNSAFE": "squeezegram cannot use this folder safely. It must be on this PC, belong to you, and not be a link; if it contains a squeezegram-temp folder, that folder must have been created by squeezegram.",
     "UPDATE_FAILED": "The update failed.",
     "UPDATE_CHECK_FAILED": "Couldn't check for updates. Check your connection and try again.",
     "UPDATE_NOT_PUBLISHED": "No update information is available yet. Try again later.",

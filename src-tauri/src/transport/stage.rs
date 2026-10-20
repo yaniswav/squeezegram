@@ -99,7 +99,14 @@ impl TransportStage {
         else {
             return None;
         };
-        let dir = temp_root(&self.settings.get().temp).join(item.id.to_string());
+        let root = match temp_root(&self.settings.get().temp) {
+            Ok(root) => root,
+            Err(error) => {
+                tracing::warn!(event = "thumbnail_failed", error = %error, "no thumbnail: the video is sent without one");
+                return None;
+            }
+        };
+        let dir = root.join(item.id.to_string());
         let duration = (*duration_s > 0).then_some(f64::from(*duration_s));
         let dir_existed = dir.exists();
         match self
@@ -725,6 +732,8 @@ mod tests {
         let sink = Arc::new(Recorder::default());
         let media = Arc::new(AsIs::default());
         let thumbs = Arc::new(FakeThumbs::default());
+        // Saved custom roots must exist before use, as when picked in the native dialog.
+        std::fs::create_dir(dir.path().join("tmp")).unwrap();
         // Item folders under the test's own directory, not the user's temp folder.
         settings
             .set(&json!({ "temp": { "dir": dir.path().join("tmp").to_string_lossy() } }))
@@ -1058,7 +1067,28 @@ mod tests {
 
     /// The folder of an item under the test's temp root.
     fn item_dir(h: &Harness, id: i64) -> PathBuf {
-        h.dir.path().join("tmp").join(id.to_string())
+        temp_root(&h.settings.get().temp)
+            .unwrap()
+            .join(id.to_string())
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(start_paused = true)]
+    async fn unsafe_temp_root_skips_thumbnail_without_writing_there() {
+        let h = harness("stage-thumb-unsafe", MockTransport::authorized()).await;
+        let root = h.dir.path().join("tmp");
+        let private = root.join("squeezegram-temp");
+        std::fs::create_dir(&private).unwrap();
+        let sentinel = private.join("keep.bin");
+        std::fs::write(&sentinel, b"unchanged").unwrap();
+        let id = h.add("a.mp4", MOCK_SAVED);
+        h.queue.start();
+        h.wait_state(id, State::Sent).await;
+        assert!(h.thumbs.asked.lock().unwrap().is_empty());
+        assert_eq!(h.mock.thumbnails(), [None]);
+        assert_eq!(std::fs::read_dir(root).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(private).unwrap().count(), 1);
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"unchanged");
     }
 
     #[tokio::test(start_paused = true)]

@@ -33,6 +33,8 @@ pub mod sidecars;
 pub mod transport;
 pub mod update;
 pub mod watch;
+#[cfg(windows)]
+mod windows_acl;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

@@ -71,74 +71,41 @@ fn unsafe_rights(rights: u32, directory: bool) -> bool {
 
 #[cfg(windows)]
 fn check_permissions(path: &Path, directory: bool) -> Result<(), SidecarError> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::Foundation::{HLOCAL, LocalFree};
+    use windows::Win32::Foundation::E_FAIL;
     use windows::Win32::Security::Authorization::{
-        BuildTrusteeWithSidW, GetEffectiveRightsFromAclW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
-        TRUSTEE_W,
+        BuildTrusteeWithSidW, GetEffectiveRightsFromAclW, TRUSTEE_W,
     };
     use windows::Win32::Security::{
-        CreateWellKnownSid, DACL_SECURITY_INFORMATION, EqualSid, OWNER_SECURITY_INFORMATION,
-        PSECURITY_DESCRIPTOR, PSID, SECURITY_MAX_SID_SIZE, WinAuthenticatedUserSid,
+        CreateWellKnownSid, EqualSid, PSID, SECURITY_MAX_SID_SIZE, WinAuthenticatedUserSid,
         WinBuiltinUsersSid, WinInteractiveSid, WinWorldSid,
     };
-    use windows::core::PCWSTR;
 
-    let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut descriptor = PSECURITY_DESCRIPTOR::default();
-    let mut dacl = std::ptr::null_mut();
-    let mut owner = PSID::default();
-    // The descriptor owns the ACL and owner SID until LocalFree below. Every error, including
-    // an unreadable or null DACL, refuses execution.
-    unsafe {
-        let result = (|| {
-            GetNamedSecurityInfoW(
-                PCWSTR(name.as_ptr()),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
-                Some(&mut owner),
-                None,
-                Some(&mut dacl),
-                None,
-                &mut descriptor,
-            )
-            .ok()
-            .map_err(|_| SidecarError::UntrustedFolder)?;
-            if dacl.is_null() || owner.is_invalid() {
-                return Err(SidecarError::UntrustedFolder);
+    crate::windows_acl::with_security(path, |owner, dacl| unsafe {
+        for kind in [
+            WinWorldSid,
+            WinAuthenticatedUserSid,
+            WinBuiltinUsersSid,
+            WinInteractiveSid,
+        ] {
+            let mut buffer = [0u32; SECURITY_MAX_SID_SIZE as usize / 4];
+            let sid = PSID(buffer.as_mut_ptr().cast());
+            let mut size = SECURITY_MAX_SID_SIZE;
+            CreateWellKnownSid(kind, None, Some(sid), &mut size)?;
+            // An owner can change the DACL even without an explicit WRITE_DAC grant.
+            if EqualSid(owner, sid).is_ok() {
+                return Err(E_FAIL.into());
             }
-            for kind in [
-                WinWorldSid,
-                WinAuthenticatedUserSid,
-                WinBuiltinUsersSid,
-                WinInteractiveSid,
-            ] {
-                let mut buffer = [0u32; SECURITY_MAX_SID_SIZE as usize / 4];
-                let sid = PSID(buffer.as_mut_ptr().cast());
-                let mut size = SECURITY_MAX_SID_SIZE;
-                CreateWellKnownSid(kind, None, Some(sid), &mut size)
-                    .map_err(|_| SidecarError::UntrustedFolder)?;
-                // An owner can change the DACL even without an explicit WRITE_DAC grant.
-                if EqualSid(owner, sid).is_ok() {
-                    return Err(SidecarError::UntrustedFolder);
-                }
-                let mut trustee = TRUSTEE_W::default();
-                BuildTrusteeWithSidW(&mut trustee, Some(sid));
-                let mut rights = 0;
-                GetEffectiveRightsFromAclW(dacl, &trustee, &mut rights)
-                    .ok()
-                    .map_err(|_| SidecarError::UntrustedFolder)?;
-                if unsafe_rights(rights, directory) {
-                    return Err(SidecarError::UntrustedFolder);
-                }
+            let mut trustee = TRUSTEE_W::default();
+            BuildTrusteeWithSidW(&mut trustee, Some(sid));
+            let mut rights = 0;
+            GetEffectiveRightsFromAclW(dacl, &trustee, &mut rights).ok()?;
+            if unsafe_rights(rights, directory) {
+                return Err(E_FAIL.into());
             }
-            Ok(())
-        })();
-        if !descriptor.0.is_null() {
-            let _ = LocalFree(Some(HLOCAL(descriptor.0)));
         }
-        result
-    }
+        Ok(())
+    })
+    .map_err(|_| SidecarError::UntrustedFolder)
 }
 
 #[cfg(not(windows))]

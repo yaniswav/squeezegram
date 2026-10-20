@@ -83,6 +83,7 @@
     "SIDECAR_UNTRUSTED_FOLDER": "No se pudieron verificar los permisos de esta carpeta o permiten a otros usuarios modificar ffmpeg o ffprobe. Elige una carpeta protegida.",
     "SIDECAR_CHOICE_STALE": "Esa selección de ffmpeg está desactualizada. Busque de nuevo y elija una de la nueva lista.",
     "TEMP_DIR_INVALID": "Esta carpeta no se puede usar para archivos temporales. Elija una carpeta existente y con permiso de escritura en una unidad local (no un recurso compartido de red).",
+    "TEMP_DIR_UNSAFE": "squeezegram no puede usar esta carpeta de forma segura. Debe estar en este PC, pertenecerte y no ser un enlace; si contiene una carpeta squeezegram-temp, esta debe haber sido creada por squeezegram.",
     "UPDATE_FAILED": "La actualización falló.",
     "UPDATE_CHECK_FAILED": "No se pudo buscar actualizaciones. Compruebe su conexión e inténtelo de nuevo.",
     "UPDATE_NOT_PUBLISHED": "Todavía no hay información de actualización disponible. Inténtelo más tarde.",

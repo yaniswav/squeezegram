@@ -213,3 +213,10 @@ test("a refused proxy names its field, every field the core can name has a sente
   assert.equal(messageKey("PROXY_INVALID", {}, has), "PROXY_INVALID")
   assert.deepEqual(placeholders(errors.TG_PROXY_FAILED), ["message"])
 })
+
+test("an unsafe temp folder uses the specific settings alert sentence", () => {
+  assert.equal(messageKey("TEMP_DIR_UNSAFE", {}, has), "TEMP_DIR_UNSAFE")
+  assert.equal(isInfoCode("TEMP_DIR_UNSAFE"), false)
+  assert.deepEqual(placeholders(errors.TEMP_DIR_UNSAFE), [])
+  assert.match(errors.TEMP_DIR_UNSAFE, /squeezegram-temp folder/)
+})

@@ -19,6 +19,8 @@ pub enum SettingsError {
     Io(#[from] std::io::Error),
     #[error("invalid settings: {0}")]
     Invalid(String),
+    #[error("unsafe temporary folder")]
+    UnsafeTempFolder,
 }
 
 impl SettingsError {
@@ -26,6 +28,7 @@ impl SettingsError {
         match self {
             SettingsError::Io(_) => "IO_ERROR",
             SettingsError::Invalid(_) => "SETTINGS_INVALID",
+            SettingsError::UnsafeTempFolder => "TEMP_DIR_UNSAFE",
         }
     }
 }
@@ -451,6 +454,8 @@ pub enum TempDirProblem {
     Missing,
     /// A file cannot be created in it.
     NotWritable,
+    /// The chosen folder or its private workspace cannot be verified.
+    Unsafe,
 }
 
 impl TempDirProblem {
@@ -460,20 +465,42 @@ impl TempDirProblem {
             TempDirProblem::NotLocal => "not_local",
             TempDirProblem::Missing => "missing",
             TempDirProblem::NotWritable => "not_writable",
+            TempDirProblem::Unsafe => "unsafe",
         }
     }
 }
 
-/// A folder is fit to be `temp.dir` when it is an absolute path on a local drive, exists, and
-/// a file can be created in it. The check is made by the core on the folder the user picked
-/// in the native dialog; the page never sends a path for this setting.
+/// Validate the native dialog's choice and probe only its private workspace on Windows.
+/// The page never sends a path for this setting.
 pub fn check_temp_dir(dir: &Path) -> Result<(), TempDirProblem> {
+    resolve_custom_temp_dir(dir).map(|_| ())
+}
+
+/// Selection and saved-root resolution share this check. Never fall back or repair ACLs.
+pub(crate) fn resolve_custom_temp_dir(dir: &Path) -> Result<PathBuf, TempDirProblem> {
     check_local(dir)?;
     match std::fs::metadata(dir) {
         Ok(meta) if meta.is_dir() => {}
         _ => return Err(TempDirProblem::Missing),
     }
-    let probe = dir.join(format!(".squeezegram-write-check-{}", std::process::id()));
+    #[cfg(windows)]
+    let root = crate::windows_acl::private_temp_root(dir).map_err(|_| {
+        tracing::warn!(
+            event = "temp_dir_rejected",
+            error_code = "TEMP_DIR_UNSAFE",
+            "unsafe temporary folder refused"
+        );
+        TempDirProblem::Unsafe
+    })?;
+    #[cfg(not(windows))]
+    let root = dir.to_path_buf();
+    // Saved roots may be resolved concurrently; each probe must have its own name.
+    static PROBE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let probe = root.join(format!(
+        ".squeezegram-write-check-{}-{}",
+        std::process::id(),
+        PROBE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -482,7 +509,7 @@ pub fn check_temp_dir(dir: &Path) -> Result<(), TempDirProblem> {
         Ok(file) => {
             drop(file);
             let _ = std::fs::remove_file(&probe);
-            Ok(())
+            Ok(root)
         }
         Err(_) => Err(TempDirProblem::NotWritable),
     }

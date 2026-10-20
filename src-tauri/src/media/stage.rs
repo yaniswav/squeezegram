@@ -171,15 +171,23 @@ struct Cached {
     detection: Detection,
 }
 
-/// Custom temp dir, else `%LOCALAPPDATA%\squeezegram\tmp`. Each item encodes in `<root>\<id>`.
+/// On Windows, a custom choice uses its private `squeezegram-temp` subfolder.
+/// Otherwise the default is `%LOCALAPPDATA%\squeezegram\tmp`; items encode in `<root>\<id>`.
 /// Shared with the startup sweep of `queue::sweep`, which must look in the same place.
-pub fn temp_root(temp: &crate::settings::Temp) -> PathBuf {
+/// An unverifiable saved root uses the existing temp I/O failure path, never another root.
+pub fn temp_root(temp: &crate::settings::Temp) -> std::io::Result<PathBuf> {
     if let Some(dir) = temp.dir.as_ref().filter(|d| !d.trim().is_empty()) {
-        return PathBuf::from(dir);
+        let dir = PathBuf::from(dir);
+        return crate::settings::resolve_custom_temp_dir(&dir).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                crate::settings::SettingsError::UnsafeTempFolder,
+            )
+        });
     }
-    std::env::var_os("LOCALAPPDATA")
+    Ok(std::env::var_os("LOCALAPPDATA")
         .map(|local| PathBuf::from(local).join("squeezegram").join("tmp"))
-        .unwrap_or_else(|| std::env::temp_dir().join("squeezegram"))
+        .unwrap_or_else(|| std::env::temp_dir().join("squeezegram")))
 }
 
 pub struct FfmpegStage {
@@ -558,15 +566,15 @@ impl FfmpegStage {
         self.gpu.failure()
     }
 
-    fn temp_base(&self) -> PathBuf {
-        temp_root(&self.settings.get().temp)
+    fn temp_base(&self) -> Result<PathBuf> {
+        Ok(temp_root(&self.settings.get().temp)?)
     }
 
     /// Where `item`'s own encode is written. Not the only folder its output can be in: an item
     /// that reuses another item's encoded file (`Store::reusable_output`) names a path under
     /// that item's folder, so a cleanup must look at every row naming a path, not at ids.
-    fn item_dir(&self, item: &Item) -> PathBuf {
-        self.temp_base().join(item.id.to_string())
+    fn item_dir(&self, item: &Item) -> Result<PathBuf> {
+        Ok(self.temp_base()?.join(item.id.to_string()))
     }
 
     /// H.264 detection result for this ffmpeg, computed once per path (about 1 s).
@@ -595,7 +603,7 @@ impl FfmpegStage {
             _ => {
                 let started = std::time::Instant::now();
                 let detection =
-                    detect::detect(&tools, &self.temp_base().join("detect"), cancel).await?;
+                    detect::detect(&tools, &self.temp_base()?.join("detect"), cancel).await?;
                 let report = detection_json(&resolved.ffmpeg, &detection).to_string();
                 tracing::info!(
                     event = "encoder_detection",
@@ -611,7 +619,7 @@ impl FfmpegStage {
         if codec == VideoCodec::Hevc && detection.hevc.is_none() {
             let started = std::time::Instant::now();
             let tested =
-                detect::detect_hevc(&tools, &self.temp_base().join("detect"), cancel).await?;
+                detect::detect_hevc(&tools, &self.temp_base()?.join("detect"), cancel).await?;
             let report = tested_json(&tested, VideoCodec::Hevc).to_string();
             detection.hevc = Some(tested);
             tracing::info!(
@@ -955,12 +963,16 @@ impl FfmpegStage {
             Kind::Remux | Kind::RemuxAudio | Kind::Strip => Treatment::Remux,
             Kind::Skip => Treatment::Skip,
         };
-        let temp_path = (treatment != Treatment::Skip).then(|| {
-            self.item_dir(item)
-                .join(format!("{}.part", plan.output_name))
-                .to_string_lossy()
-                .into_owned()
-        });
+        let temp_path = if treatment != Treatment::Skip {
+            Some(
+                self.item_dir(item)?
+                    .join(format!("{}.part", plan.output_name))
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        } else {
+            None
+        };
         Ok(ProbeOutcome {
             content_id,
             identity_weak: false,
@@ -982,13 +994,13 @@ impl FfmpegStage {
 
     async fn run_plan(&self, item: &Item, ctx: &StageContext) -> Result<MediaOutput> {
         let started = std::time::Instant::now();
+        let out_dir = self.item_dir(item)?;
         let plan = Self::plan_of(item)?;
         let resolved = self.sidecars.resolve().map_err(missing)?;
         let tools = Tools {
             ffmpeg: &resolved.ffmpeg,
             ffprobe: &resolved.ffprobe,
         };
-        let out_dir = self.item_dir(item);
         let settings = self.settings.get();
         let input = PathBuf::from(&item.source_path);
         let job = Job {
@@ -1156,6 +1168,54 @@ mod tests {
     use crate::queue::events::ProgressReporter;
     use crate::queue::events::recorder::Recorder;
     use crate::queue::test_util::TestDir;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn saved_unsafe_temp_folder_blocks_media_through_io_error() {
+        use crate::queue::orchestrator::MediaStage;
+        use crate::queue::test_util::{add_item, memory_store};
+        let dir = TestDir::new("stage-unsafe-root");
+        let folder = dir.path().join("work");
+        std::fs::create_dir(&folder).unwrap();
+        let settings_path = dir.path().join("settings.json");
+        let settings = SettingsStore::load(settings_path.clone()).unwrap();
+        settings
+            .set(&json!({ "temp": { "dir": folder.to_string_lossy() } }))
+            .unwrap();
+        let private = temp_root(&settings.get().temp).unwrap();
+        let sentinel = private.join("keep.bin");
+        std::fs::write(&sentinel, b"unchanged").unwrap();
+        crate::windows_acl::tests::grant(&private, "*S-1-5-32-545:R");
+        // Loading must not discard the user's choice or silently select a different root.
+        let settings = Arc::new(SettingsStore::load(settings_path).unwrap());
+        let stage = FfmpegStage::new(
+            Arc::new(SidecarService::new(
+                dir.path().join("tools"),
+                settings.clone(),
+            )),
+            settings.clone(),
+            Arc::new(LimitResolver::new(settings.clone(), None)),
+            Arc::new(crate::entitlements::FreeOnly),
+        );
+        let mut store = memory_store();
+        let id = add_item(&mut store, &dir.file("input.mp4", b"generated"));
+        let item = store.get_item(id).unwrap();
+        let ctx = StageContext {
+            cancel: CancellationToken::new(),
+            progress: ProgressReporter::new(id, Phase::Encoding, Arc::new(Recorder::default())),
+        };
+        let error = stage.encode(&item, &ctx).await.unwrap_err();
+        assert_eq!(error, StageError::failed("IO_ERROR"));
+        assert_eq!(settings.get().temp.dir.as_deref(), folder.to_str());
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(&private).unwrap().count(), 1);
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+        std::fs::remove_file(sentinel).unwrap();
+        std::fs::remove_dir(private).unwrap();
+        std::fs::remove_dir(&folder).unwrap();
+        let missing = stage.encode(&item, &ctx).await.unwrap_err();
+        assert_eq!(missing, error, "same media failure path, no fallback");
+    }
 
     /// How the fake ffmpeg behaves.
     #[derive(Clone, Copy)]
