@@ -250,6 +250,15 @@ fn download_once(
         if read == 0 {
             break;
         }
+        // Bound disk usage even when the response has no trustworthy Content-Length.
+        if read as u64 > build.size - offset - received {
+            drop(file);
+            fs::remove_file(part)?;
+            return Err(SidecarError::Download(format!(
+                "response exceeds pinned size of {} bytes",
+                build.size
+            )));
+        }
         file.write_all(&buffer[..read])?;
         received += read as u64;
         let done = offset + received;
@@ -415,6 +424,131 @@ mod tests {
             url,
             requests,
             ranges,
+        }
+    }
+
+    /// Omits Content-Length so only the streaming budget can reject an oversized body.
+    fn serve_response(
+        body: Vec<u8>,
+        partial: bool,
+        keep_open: bool,
+    ) -> (String, std::thread::JoinHandle<Option<u64>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/ffmpeg.zip", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut start = None;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                    start = value.trim().trim_end_matches('-').parse::<u64>().ok();
+                }
+            }
+            let status = if partial {
+                "206 Partial Content"
+            } else {
+                "200 OK"
+            };
+            let range = if partial {
+                let from = start.unwrap();
+                let total = from + body.len() as u64;
+                format!("Content-Range: bytes {from}-{}/{total}\r\n", total - 1)
+            } else {
+                String::new()
+            };
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\n{range}Connection: close\r\n\r\n"
+            )
+            .unwrap();
+            // Rejection must close the response without waiting for EOF from the server.
+            let _ = stream.write_all(&body);
+            if keep_open {
+                assert_eq!(stream.read(&mut [0u8; 1]).unwrap(), 0);
+            }
+            start
+        });
+        (url, server)
+    }
+
+    #[test]
+    fn an_oversized_stream_is_rejected_and_the_part_is_removed() {
+        for offset in [0, 50_000] {
+            let bytes = noise(CHUNK, 3);
+            let mut body = bytes[offset..].to_vec();
+            body.push(0);
+            let (url, server) = serve_response(body, offset > 0, true);
+            let dir = TestDir::new("sidecar-oversized");
+            let part = dir.path().join("archive.part");
+            fs::write(&part, &bytes[..offset]).unwrap();
+            // The handle still exposes the written length after the partial is removed.
+            let observed = File::open(&part).unwrap();
+            let sink = Recorder::default();
+            let mut reporter = Reporter {
+                sink: &sink,
+                name: "ffmpeg",
+                last: None,
+                logged: None,
+            };
+            let error = download_once(&build_for(&bytes, url), &part, &mut reporter).unwrap_err();
+            assert_eq!(error.code(), "SIDECAR_DOWNLOAD");
+            assert!(error.to_string().contains("exceeds pinned size"));
+            assert!(observed.metadata().unwrap().len() <= bytes.len() as u64);
+            assert!(
+                !part.exists(),
+                "oversized response must not leave a resumable prefix"
+            );
+            assert!(
+                sink.sidecar
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|p| p.percent <= DOWNLOAD_SHARE)
+            );
+            assert_eq!(
+                server.join().unwrap(),
+                (offset > 0).then_some(offset as u64)
+            );
+        }
+    }
+
+    #[test]
+    fn a_full_response_to_a_range_request_uses_the_full_budget() {
+        for oversized in [false, true] {
+            let bytes = noise(CHUNK, 4);
+            let mut body = bytes.clone();
+            if oversized {
+                body.push(0);
+            }
+            let (url, server) = serve_response(body, false, oversized);
+            let dir = TestDir::new("sidecar-range-ignored");
+            let part = dir.path().join("archive.part");
+            fs::write(&part, noise(50_000, 5)).unwrap();
+            let observed = File::open(&part).unwrap();
+            let sink = Recorder::default();
+            let mut reporter = Reporter {
+                sink: &sink,
+                name: "ffmpeg",
+                last: None,
+                logged: None,
+            };
+            let result = download_once(&build_for(&bytes, url), &part, &mut reporter);
+            assert!(observed.metadata().unwrap().len() <= bytes.len() as u64);
+            if oversized {
+                assert_eq!(result.unwrap_err().code(), "SIDECAR_DOWNLOAD");
+                assert!(!part.exists());
+            } else {
+                result.unwrap();
+                assert_eq!(fs::read(&part).unwrap(), bytes);
+            }
+            assert_eq!(server.join().unwrap(), Some(50_000));
         }
     }
 
