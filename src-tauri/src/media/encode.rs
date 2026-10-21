@@ -1303,7 +1303,7 @@ mod tests {
     fn progress_blocks_are_parsed_with_na_tolerated_and_100_forced_at_the_end() {
         let mut parser = ProgressParser::new(Some(20.0));
         let block = |time: &str, speed: &str, state: &str| {
-            let lines = [
+            [
                 "frame=436".to_owned(),
                 "bitrate=3044.3kbits/s".to_owned(),
                 "total_size=5505072".to_owned(),
@@ -1311,8 +1311,7 @@ mod tests {
                 format!("out_time_ms={time}"),
                 format!("speed={speed}"),
                 format!("progress={state}"),
-            ];
-            lines
+            ]
         };
         let mut last = None;
         for line in block("N/A", "N/A", "continue") {
@@ -2107,12 +2106,12 @@ mod tests {
         let mut plan = sample_plan();
         plan.kind = Kind::Remux;
         plan.audio_kbps = None;
-        let (_, copy) = fx.args(&plan, |job, part| remux_args(job, part));
+        let (_, copy) = fx.args(&plan, remux_args);
         assert!(copy.contains("-c copy -movflags +faststart -f mp4"));
 
         plan.kind = Kind::RemuxAudio;
         plan.audio_kbps = Some(128);
-        let (_, audio) = fx.args(&plan, |job, part| remux_args(job, part));
+        let (_, audio) = fx.args(&plan, remux_args);
         assert!(audio.contains("-c:v copy -c:a aac -b:a 128k -ac 2"));
 
         plan.kind = Kind::Photo;

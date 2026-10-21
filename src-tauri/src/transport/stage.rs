@@ -997,10 +997,11 @@ mod tests {
             h.queue.start();
             h.wait_state(id, State::Failed).await;
             assert_eq!(h.item(id).last_error.as_deref(), Some(code));
-            let alerts = h.sink.alerts.lock().unwrap();
-            let alert = alerts.iter().rev().find(|a| a.item_id == Some(id)).unwrap();
-            assert_eq!((alert.code.as_str(), &alert.params), (code, &params));
-            drop(alerts);
+            {
+                let alerts = h.sink.alerts.lock().unwrap();
+                let alert = alerts.iter().rev().find(|a| a.item_id == Some(id)).unwrap();
+                assert_eq!((alert.code.as_str(), &alert.params), (code, &params));
+            }
             // Let the cached refusal expire so the next case asks again.
             tokio::time::sleep(PREFLIGHT_TTL + Duration::from_secs(1)).await;
         }

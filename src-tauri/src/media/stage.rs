@@ -2240,11 +2240,13 @@ mod tests {
         use crate::transport::TelegramTransport;
         use crate::transport::mock::MockTransport;
 
-        let mut settings = Settings::default();
-        settings.advanced_encoding = AdvancedEncoding {
-            max_resolution: plan::ResolutionCap::P2160,
-            audio_kbps: 192,
-            ..AdvancedEncoding::AUTOMATIC
+        let mut settings = Settings {
+            advanced_encoding: AdvancedEncoding {
+                max_resolution: plan::ResolutionCap::P2160,
+                audio_kbps: 192,
+                ..AdvancedEncoding::AUTOMATIC
+            },
+            ..Settings::default()
         };
         // Changed by hand in the file: never read.
         settings.encoding.audio_kbps = 320;

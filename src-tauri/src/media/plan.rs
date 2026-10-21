@@ -998,7 +998,9 @@ mod tests {
         );
         // 16042x3852: sum 19 894 -> f = 0.4926 (and 4096/16042 = 0.2553 binds).
         let pano = photo_size(16042, 3852);
-        assert!(pano.width <= 4096 && pano.width % 2 == 0 && pano.height % 2 == 0);
+        assert!(
+            pano.width <= 4096 && pano.width.is_multiple_of(2) && pano.height.is_multiple_of(2)
+        );
         assert!(pano.width >= 4094);
         let big = photo_size(8000, 6000);
         assert_eq!((big.width, big.height), (4096, 3072));
