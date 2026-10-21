@@ -54,6 +54,7 @@
     "DESTINATION_NOT_FOUND": "This destination no longer exists.",
     "WATCH_FOLDER_NOT_FOUND": "This watched folder no longer exists.",
     "FILE_UNREADABLE": "A file can't be read or is not a regular file.",
+    "INPUT_FORMAT_UNSUPPORTED": "This input format is not supported. Choose a supported video or photo file; playlists, manifests and image sequences are not accepted.",
     "FFMPEG_MISSING": "ffmpeg is not installed, or the custom ffmpeg folder doesn't contain ffmpeg.exe and ffprobe.exe.",
     "FFMPEG_ENCODER_UNAVAILABLE": "No video encoder passed its test on this computer.",
     "FFMPEG_FAILED": "ffmpeg failed while processing this file.",

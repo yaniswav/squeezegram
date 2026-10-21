@@ -500,6 +500,8 @@ fn classify_failure(stderr: &str, code: Option<i32>, started: bool) -> &'static 
         "FFMPEG_ENCODER_UNAVAILABLE"
     } else if stderr.contains("No space left on device") {
         "DISK_SPACE"
+    } else if super::unsupported_format(stderr) {
+        "INPUT_FORMAT_UNSUPPORTED"
     } else if stderr.contains("moov atom not found")
         || stderr.contains("Invalid data found when processing input")
         || code == Some(-13)
@@ -971,7 +973,7 @@ fn prepare(job: &Job<'_>, needed: u64) -> Result<()> {
 /// The output must last about as long as the source: a truncated source makes ffmpeg exit 0
 /// with a shorter file.
 async fn verify_duration(job: &Job<'_>, part: &Path) -> Result<()> {
-    let info = probe::probe(job.tools.ffprobe, part, false, job.cancel).await?;
+    let info = probe::probe_output(job.tools.ffprobe, part, job.cancel).await?;
     let produced = info
         .duration_s
         .ok_or_else(|| MediaError::failed("FFMPEG_FAILED", "output has no duration"))?;
@@ -995,6 +997,7 @@ fn finish(job: &Job<'_>) -> Result<Produced> {
 
 /// Target-size encode with `encoder`, one corrective pass at most.
 pub async fn encode_video(job: &Job<'_>, encoder: Encoder) -> Result<Produced> {
+    super::check_input_extension(job.input)?;
     let result = encode_video_inner(job, encoder).await;
     if result.is_err() {
         cleanup(job);
@@ -1107,6 +1110,7 @@ fn cleanup_pass_logs(job: &Job<'_>) {
 
 /// `-c copy` into MP4 (or video copy with AAC audio).
 pub async fn remux(job: &Job<'_>) -> Result<Produced> {
+    super::check_input_extension(job.input)?;
     let result = remux_inner(job).await;
     if result.is_err() {
         cleanup(job);
@@ -1141,6 +1145,7 @@ async fn remux_inner(job: &Job<'_>) -> Result<Produced> {
 /// A copy of the image without its location and camera data (`metadata`), pixels untouched,
 /// under the source's name in the item's folder. The source is only read.
 pub async fn strip(job: &Job<'_>) -> Result<Produced> {
+    super::check_input_extension(job.input)?;
     let result = strip_inner(job).await;
     if result.is_err() {
         cleanup(job);
@@ -1221,6 +1226,7 @@ async fn strip_inner(job: &Job<'_>) -> Result<Produced> {
 
 /// Photo to JPEG: quality loop, then smaller dimensions, until under 9.5 MiB.
 pub async fn photo(job: &Job<'_>) -> Result<Produced> {
+    super::check_input_extension(job.input)?;
     let result = photo_inner(job).await;
     if result.is_err() {
         cleanup(job);
@@ -2004,6 +2010,33 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn unsupported_extensions_never_reach_conversion_or_strip() {
+        let fx = Fixture::new();
+        let plan = sample_plan();
+        let tools = Tools {
+            ffmpeg: Path::new("no-such-ffmpeg.exe"),
+            ffprobe: Path::new("no-such-ffprobe.exe"),
+        };
+        let job = Job {
+            tools: &tools,
+            input: Path::new("playlist.m3u8"),
+            plan: &plan,
+            out_dir: Path::new("no-such-output"),
+            min_free_bytes: 0,
+            cancel: &fx.cancel,
+            progress: &fx.progress,
+        };
+        for error in [
+            encode_video(&job, Encoder::X264).await.unwrap_err(),
+            remux(&job).await.unwrap_err(),
+            strip(&job).await.unwrap_err(),
+            photo(&job).await.unwrap_err(),
+        ] {
+            assert_eq!(error.code(), Some("INPUT_FORMAT_UNSUPPORTED"));
+        }
+    }
+
     #[test]
     fn every_file_input_is_restricted_without_restricting_generated_lavfi() {
         let fx = Fixture::new();
@@ -2064,7 +2097,7 @@ mod tests {
             encode_args(job, Encoder::Nvenc, 1_000_000, Pass::Single, part)
         });
         assert!(text.starts_with(
-            &format!("-hide_banner -nostdin -loglevel error -y -progress pipe:1 -nostats -format_whitelist {} -i C:\\in put\\a.mkv", super::super::INPUT_FORMAT_WHITELIST)
+            &format!("-hide_banner -nostdin -loglevel error -y -progress pipe:1 -nostats -protocol_whitelist file -format_whitelist {} -i C:\\in put\\a.mkv", super::super::INPUT_FORMAT_WHITELIST)
         ));
         assert!(text.contains("-map 0:0 -map 0:2 -sn -dn -map_chapters -1 -map_metadata -1"));
         assert!(text.contains("-vf scale=w=2:h=2"));

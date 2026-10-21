@@ -281,6 +281,7 @@ pub async fn probe(
     scan_duration: bool,
     cancel: &CancellationToken,
 ) -> Result<MediaInfo, MediaError> {
+    super::check_input_extension(input)?;
     probe_as(ffprobe, input, scan_duration, cancel, false).await
 }
 
@@ -292,7 +293,17 @@ pub async fn probe_in_background(
     scan_duration: bool,
     cancel: &CancellationToken,
 ) -> Result<MediaInfo, MediaError> {
+    super::check_input_extension(input)?;
     probe_as(ffprobe, input, scan_duration, cancel, true).await
+}
+
+/// Internal partial outputs end in .part; they still use the same restricted demuxers.
+pub(super) async fn probe_output(
+    ffprobe: &Path,
+    input: &Path,
+    cancel: &CancellationToken,
+) -> Result<MediaInfo, MediaError> {
+    probe_as(ffprobe, input, false, cancel, false).await
 }
 
 fn probe_args(input: &Path, scan_packets: bool) -> Args {
@@ -342,7 +353,11 @@ async fn probe_as(
     }
     if !output.success() {
         return Err(MediaError::failed(
-            "FILE_UNREADABLE",
+            if super::unsupported_format(&output.stderr_tail.join("\n")) {
+                "INPUT_FORMAT_UNSUPPORTED"
+            } else {
+                "FILE_UNREADABLE"
+            },
             format!(
                 "ffprobe {:?}: {}",
                 output.code,
@@ -352,6 +367,17 @@ async fn probe_as(
     }
     let mut info = parse(&output.stdout)
         .map_err(|e| MediaError::failed("FILE_UNREADABLE", format!("ffprobe json: {e}")))?;
+    if super::plan::is_image(input)
+        && info
+            .video
+            .as_ref()
+            .is_none_or(|v| v.width == 0 || v.height == 0)
+    {
+        return Err(MediaError::failed(
+            "INPUT_FORMAT_UNSUPPORTED",
+            "input is not a decodable supported photo",
+        ));
+    }
     if info.duration_s.is_none() && scan_duration && info.video.is_some() {
         info.duration_s = scan_last_pts(ffprobe, input, cancel, low_priority).await?;
     }
@@ -425,7 +451,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn both_probes_restrict_formats_and_only_images_disable_patterns() {
+    fn both_probes_restrict_formats_and_protocols() {
         for name in [
             "clip.mp4",
             "photo%d.JPG",

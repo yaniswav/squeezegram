@@ -54,6 +54,7 @@
     "DESTINATION_NOT_FOUND": "لم تعد هذه الوجهة موجودة.",
     "WATCH_FOLDER_NOT_FOUND": "لم يعد هذا المجلد المراقَب موجودًا.",
     "FILE_UNREADABLE": "تعذّرت قراءة الملف، أو أنه ليس ملفًا عاديًا.",
+    "INPUT_FORMAT_UNSUPPORTED": "تنسيق الإدخال هذا غير مدعوم. اختر ملف فيديو أو صورة بتنسيق مدعوم؛ لا تُقبل قوائم التشغيل أو ملفات البيان أو تسلسلات الصور.",
     "FFMPEG_MISSING": "ffmpeg غير مثبّت، أو أن مجلد ffmpeg المخصص لا يحتوي على ffmpeg.exe وffprobe.exe.",
     "FFMPEG_ENCODER_UNAVAILABLE": "لم يجتز أي مرمِّز فيديو الاختبار على هذا الكمبيوتر.",
     "FFMPEG_FAILED": "فشل ffmpeg أثناء معالجة هذا الملف.",

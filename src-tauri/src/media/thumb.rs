@@ -121,6 +121,7 @@ pub async fn generate(
     out_dir: &Path,
     cancel: &CancellationToken,
 ) -> Result<Thumbnail, MediaError> {
+    super::check_input_extension(video)?;
     std::fs::create_dir_all(out_dir)?;
     let out = out_dir.join(FILE_NAME);
     for at in [frame_at(duration_s), 0.0] {
@@ -136,7 +137,11 @@ pub async fn generate(
         }
         if !output.success() {
             return Err(MediaError::failed(
-                "FFMPEG_FAILED",
+                if super::unsupported_format(&output.stderr_tail.join("\n")) {
+                    "INPUT_FORMAT_UNSUPPORTED"
+                } else {
+                    "FFMPEG_FAILED"
+                },
                 format!(
                     "thumbnail: ffmpeg {:?}: {}",
                     output.code,
@@ -229,6 +234,23 @@ impl Thumbnails for Unavailable {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn unsupported_extensions_are_refused_before_thumbnail_generation() {
+        let dir = crate::queue::test_util::TestDir::new("thumbnail-input-format");
+        let out = dir.path().join("uncreated");
+        let error = generate(
+            Path::new("no-such-ffmpeg.exe"),
+            Path::new("list.m3u8"),
+            None,
+            &out,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), Some("INPUT_FORMAT_UNSUPPORTED"));
+        assert!(!out.exists());
+    }
+
     #[test]
     fn thumbnail_input_is_restricted_after_the_seek() {
         let input = Path::new("clip.mp4");
@@ -237,7 +259,7 @@ mod tests {
         let args = args.into_vec();
         let seek = args.iter().position(|arg| arg == "-ss").unwrap();
         assert_eq!(args[seek + 1], "1.500");
-        assert_eq!(args[seek + 2], "-format_whitelist");
+        assert_eq!(args[seek + 2], "-protocol_whitelist");
     }
 
     #[test]

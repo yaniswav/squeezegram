@@ -54,6 +54,7 @@
     "DESTINATION_NOT_FOUND": "Tujuan ini sudah tidak ada.",
     "WATCH_FOLDER_NOT_FOUND": "Folder yang dipantau ini sudah tidak ada.",
     "FILE_UNREADABLE": "Berkas tidak dapat dibaca atau bukan berkas biasa.",
+    "INPUT_FORMAT_UNSUPPORTED": "Format masukan ini tidak didukung. Pilih file video atau foto yang didukung; daftar putar, manifes, dan urutan gambar tidak diterima.",
     "FFMPEG_MISSING": "ffmpeg belum terpasang, atau folder ffmpeg kustom tidak berisi ffmpeg.exe dan ffprobe.exe.",
     "FFMPEG_ENCODER_UNAVAILABLE": "Tidak ada encoder video yang lolos uji di komputer ini.",
     "FFMPEG_FAILED": "ffmpeg gagal memproses berkas ini.",

@@ -349,10 +349,11 @@ fn fallback_cause(stop: &EncoderStop, gpu_off: bool) -> &'static str {
 }
 
 /// Codes of a failed CPU retry that say more than "the retry failed too": kept as they are.
-const KEPT_FALLBACK_CODES: [&str; 5] = [
+const KEPT_FALLBACK_CODES: [&str; 6] = [
     "DISK_SPACE",
     "OUTPUT_TOO_LARGE",
     "FILE_UNREADABLE",
+    "INPUT_FORMAT_UNSUPPORTED",
     "IO_ERROR",
     "FFMPEG_MISSING",
 ];
@@ -719,6 +720,7 @@ impl FfmpegStage {
         item: &Item,
         source: &Path,
     ) -> Result<MediaInfo> {
+        super::check_input_extension(source)?;
         let key = (source.to_path_buf(), item.source_size, item.source_mtime);
         let cached = {
             let guard = self
@@ -778,6 +780,9 @@ impl FfmpegStage {
         cancel: &CancellationToken,
     ) -> Result<Option<Analysis>> {
         let source = PathBuf::from(&item.source_path);
+        if item.send_mode != SendMode::Document {
+            super::check_input_extension(&source)?;
+        }
         let stamp = intake::file_stamp(&source);
         if stamp != Some((item.source_size, item.source_mtime)) {
             return Ok(None);
@@ -824,6 +829,9 @@ impl FfmpegStage {
         // carries it to the upload).
         let limit = self.limits.resolve_logged();
         let source = PathBuf::from(&item.source_path);
+        if item.send_mode != SendMode::Document {
+            super::check_input_extension(&source)?;
+        }
         std::fs::File::open(&source)
             .map_err(|e| MediaError::failed("FILE_UNREADABLE", e.to_string()))?;
         let document = item.send_mode == SendMode::Document;
@@ -2481,6 +2489,39 @@ mod tests {
             )
             .unwrap();
         store.get_item(id).unwrap()
+    }
+
+    #[tokio::test]
+    async fn unsupported_extensions_cannot_reuse_cached_analysis() {
+        use crate::queue::test_util::{add_item, memory_store};
+        let dir = TestDir::new("stage-input-format");
+        let settings = Arc::new(SettingsStore::load(dir.path().join("settings.json")).unwrap());
+        let stage = FfmpegStage::new(
+            Arc::new(SidecarService::new(
+                dir.path().join("absent-tools"),
+                settings.clone(),
+            )),
+            settings.clone(),
+            Arc::new(LimitResolver::new(settings, None)),
+            Arc::new(crate::entitlements::FreeOnly),
+        );
+        let mut store = memory_store();
+        let id = add_item(
+            &mut store,
+            &dir.file("list.ffconcat", b"ffconcat version 1.0\n"),
+        );
+        let mut item = store.get_item(id).unwrap();
+        item.media_json = Some(INFO.to_owned());
+        let ctx = StageContext {
+            cancel: CancellationToken::new(),
+            progress: ProgressReporter::new(id, Phase::Probing, Arc::new(Recorder::default())),
+        };
+        for error in [
+            stage.analyze(&item, &ctx.cancel).await.unwrap_err(),
+            stage.probe(&item, &ctx).await.unwrap_err(),
+        ] {
+            assert_eq!(error, StageError::failed("INPUT_FORMAT_UNSUPPORTED"));
+        }
     }
 
     const INFO: &str =

@@ -54,6 +54,7 @@
     "DESTINATION_NOT_FOUND": "Este destino ya no existe.",
     "WATCH_FOLDER_NOT_FOUND": "Esta carpeta vigilada ya no existe.",
     "FILE_UNREADABLE": "No se puede leer un archivo, o no es un archivo normal.",
+    "INPUT_FORMAT_UNSUPPORTED": "Este formato de entrada no es compatible. Elige un vídeo o una foto compatible; no se admiten listas de reproducción, manifiestos ni secuencias de imágenes.",
     "FFMPEG_MISSING": "ffmpeg no está instalado, o la carpeta de ffmpeg personalizada no contiene ffmpeg.exe ni ffprobe.exe.",
     "FFMPEG_ENCODER_UNAVAILABLE": "Ningún codificador de vídeo superó la prueba en este equipo.",
     "FFMPEG_FAILED": "ffmpeg falló al procesar este archivo.",

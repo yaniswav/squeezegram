@@ -1220,7 +1220,19 @@ async fn input_formats_reject_manifests_and_preserve_literal_images() {
     );
     for (name, content) in [
         ("x.mp4", dash.as_str()),
+        ("x.jpg", dash.as_str()),
         ("list.mp4", "ffconcat version 1.0\nfile 'clip.mp4'\n"),
+        ("list.jpg", "ffconcat version 1.0\nfile 'clip.mp4'\n"),
+        (
+            "hls.mp4",
+            "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nclip.mp4\n#EXT-X-ENDLIST\n",
+        ),
+        ("text.mp4", "This is a generated text file."),
+        ("text.jpg", "This is a generated text file."),
+        (
+            "hls.jpg",
+            "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nclip.mp4\n#EXT-X-ENDLIST\n",
+        ),
     ] {
         let manifest = dir.path().join(name);
         std::fs::write(&manifest, content).unwrap();
@@ -1230,10 +1242,161 @@ async fn input_formats_reject_manifests_and_preserve_literal_images() {
         // Refused, and never opened by the manifest demuxers: depending on the build, ffprobe
         // either names the whitelist or falls back to the extension's demuxer and fails there.
         assert!(
-            matches!(error, MediaError::Failed { code: "FILE_UNREADABLE", ref detail }
-                if detail.contains("not on whitelist")
-                    || (!detail.contains("[dash") && !detail.contains("[concat"))),
+            matches!(error, MediaError::Failed { code: "INPUT_FORMAT_UNSUPPORTED", ref detail }
+                if detail.contains("not on whitelist"))
+                || matches!(error, MediaError::Failed { code: "FILE_UNREADABLE" | "INPUT_FORMAT_UNSUPPORTED", ref detail }
+                    if !detail.contains("[dash") && !detail.contains("[concat")),
             "{error}"
         );
+        let args = super::file_input(
+            super::procs::Args::new().all(&["-v", "error", "-nostdin"]),
+            &manifest,
+        )
+        .all(&["-frames:v", "1", "-f", "null", "-"]);
+        let result = super::procs::run(
+            super::procs::Spec::new(&bin.join("ffmpeg.exe"), args).cancel(&cancel),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(!result.success(), "ffmpeg accepted {name}");
+        assert!(
+            super::unsupported_format(&result.stderr_tail.join("\n")),
+            "{:?}",
+            result.stderr_tail
+        );
+    }
+    // A numbered neighbor must never be opened, even when the chosen PNG is named .mp4.
+    for name in ["photo%d.mp4", "photo001.mp4"] {
+        let literal = dir.path().join(name);
+        std::fs::copy(&photo, &literal).unwrap();
+        std::fs::copy(&neighbor, dir.path().join("photo002.mp4")).unwrap();
+        let info = probe::probe(&ffprobe, &literal, true, &cancel)
+            .await
+            .unwrap();
+        assert_ne!(info.format_name.as_deref(), Some("image2"));
+        let video = info.video.unwrap();
+        assert_eq!((video.width, video.height), (16, 16));
+        assert!(info.duration_s.is_none_or(|duration| duration <= 1.0));
+        let args = super::file_input(
+            super::procs::Args::new().all(&[
+                "-v",
+                "error",
+                "-count_packets",
+                "-show_entries",
+                "stream=nb_read_packets",
+                "-of",
+                "csv=p=0",
+            ]),
+            &literal,
+        );
+        let result = super::procs::run(
+            super::procs::Spec::new(&ffprobe, args)
+                .collect_stdout()
+                .cancel(&cancel),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(result.success(), "{:?}", result.stderr_tail);
+        assert_eq!(
+            result.stdout.trim(),
+            "1",
+            "a single file, no neighboring frames"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires SQUEEZEGRAM_TEST_FFMPEG_DIR with local ffmpeg and ffprobe"]
+async fn input_allowlist_accepts_generated_supported_formats() {
+    let bin = ffmpeg_dir().expect("local ffmpeg and ffprobe folder");
+    let dir = TestDir::new("input-allowlist");
+    let cancel = CancellationToken::new();
+    for (ext, codec, muxer) in [
+        ("mp4", "mpeg4", "mp4"),
+        ("m4v", "mpeg4", "m4v"),
+        ("mov", "mpeg4", "mov"),
+        ("mkv", "mpeg4", "matroska"),
+        ("webm", "libvpx", "webm"),
+        ("avi", "mpeg4", "avi"),
+        ("wmv", "wmv2", "asf"),
+        ("flv", "flv", "flv"),
+        ("mpg", "mpeg2video", "mpeg"),
+        ("mpeg", "mpeg2video", "mpeg"),
+        ("ts", "mpeg2video", "mpegts"),
+        ("mts", "mpeg2video", "mpegts"),
+        ("m2ts", "mpeg2video", "mpegts"),
+        ("3gp", "mpeg4", "3gp"),
+        ("ogv", "libtheora", "ogg"),
+    ] {
+        let input = dir.path().join(format!("sample.{ext}"));
+        generate(
+            &bin,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=32x32:rate=25:duration=0.2",
+                "-c:v",
+                codec,
+                "-f",
+                muxer,
+                input.to_str().unwrap(),
+            ],
+        );
+        assert!(
+            probe::probe(&bin.join("ffprobe.exe"), &input, true, &cancel)
+                .await
+                .unwrap_or_else(|e| panic!("{ext}: {e}"))
+                .video
+                .is_some()
+        );
+        let args = super::file_input(
+            super::procs::Args::new().all(&["-v", "error", "-nostdin"]),
+            &input,
+        )
+        .all(&["-frames:v", "1", "-f", "null", "-"]);
+        let result = super::procs::run(
+            super::procs::Spec::new(&bin.join("ffmpeg.exe"), args).cancel(&cancel),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(result.success(), "{ext}: {:?}", result.stderr_tail);
+    }
+    for ext in ["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"] {
+        let input = dir.path().join(format!("sample.{ext}"));
+        generate(
+            &bin,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "color=size=16x16",
+                "-frames:v",
+                "1",
+                input.to_str().unwrap(),
+            ],
+        );
+        assert!(
+            probe::probe(&bin.join("ffprobe.exe"), &input, false, &cancel)
+                .await
+                .unwrap_or_else(|e| panic!("{ext}: {e}"))
+                .video
+                .is_some()
+        );
+        let args = super::file_input(
+            super::procs::Args::new().all(&["-v", "error", "-nostdin"]),
+            &input,
+        )
+        .all(&["-frames:v", "1", "-f", "null", "-"]);
+        let result = super::procs::run(
+            super::procs::Spec::new(&bin.join("ffmpeg.exe"), args).cancel(&cancel),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(result.success(), "{ext}: {:?}", result.stderr_tail);
     }
 }

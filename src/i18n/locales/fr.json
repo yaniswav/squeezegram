@@ -54,6 +54,7 @@
     "DESTINATION_NOT_FOUND": "Cette destination n'existe plus.",
     "WATCH_FOLDER_NOT_FOUND": "Ce dossier surveillé n'existe plus.",
     "FILE_UNREADABLE": "Un fichier ne peut pas être lu, ou ce n'est pas un fichier ordinaire.",
+    "INPUT_FORMAT_UNSUPPORTED": "Ce format d'entrée n'est pas pris en charge. Choisissez une vidéo ou une photo compatible ; les listes de lecture, manifestes et séquences d’images sont refusés.",
     "FFMPEG_MISSING": "ffmpeg n'est pas installé, ou le dossier ffmpeg personnalisé ne contient pas ffmpeg.exe et ffprobe.exe.",
     "FFMPEG_ENCODER_UNAVAILABLE": "Aucun encodeur vidéo n'a réussi son test sur cet ordinateur.",
     "FFMPEG_FAILED": "ffmpeg a échoué pendant le traitement de ce fichier.",
