@@ -7,6 +7,10 @@ rust-version = "1.90"
 license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 
+[features]
+# Trusts the test bot's key `t1` (keys/t1.pub). Never in a release: release.yml refuses it.
+test-keyring = []
+
 [lib]
 # The `_lib` suffix keeps the library name distinct from the binary name (needed on Windows).
 name = "squeezegram_lib"

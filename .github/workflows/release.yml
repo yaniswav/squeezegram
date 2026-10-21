@@ -123,6 +123,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile (Join-Path $dir 'MicrosoftEdgeWebview2Setup.exe') -MaximumRedirection 5
 
+      # A release never trusts the test bot's key t1: the feature must not be a default feature
+      # nor appear in the release script.
+      - name: Refuse the test-keyring feature
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 --manifest-path src-tauri/Cargo.toml | ConvertFrom-Json
+          $pkg = $meta.packages | Where-Object name -eq 'squeezegram'
+          if ($pkg.features.default -contains 'test-keyring') { throw 'test-keyring is a default feature' }
+          if (Select-String -Path scripts/build-release.ps1 -SimpleMatch 'test-keyring' -Quiet) { throw 'scripts/build-release.ps1 mentions test-keyring' }
+
       # The only step that sees the secrets. build-release.ps1 reads them from the
       # environment (build.rs does); nothing echoes them or writes them to a file, and no
       # shell tracing is on. Without TAURI_SIGNING_PRIVATE_KEY it builds an unsigned installer;

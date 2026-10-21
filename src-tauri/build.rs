@@ -35,7 +35,22 @@ fn inject_telegram_identity() {
     }
 }
 
+/// `test-keyring` embeds `keys/t1.pub`; without it say what to put there (include_str! alone
+/// only names the missing path).
+fn require_test_key() {
+    println!("cargo:rerun-if-changed=keys/t1.pub");
+    let manifest = std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default();
+    let path = Path::new(&manifest).join("keys").join("t1.pub");
+    if std::env::var_os("CARGO_FEATURE_TEST_KEYRING").is_some() && !path.is_file() {
+        panic!(
+            "feature test-keyring needs {}: the test bot's PUBLIC key as 64 lowercase hex digits (see keys/README.md)",
+            path.display()
+        );
+    }
+}
+
 fn main() {
     inject_telegram_identity();
+    require_test_key();
     tauri_build::build()
 }

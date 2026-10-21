@@ -44,7 +44,21 @@ pub fn ring_of(entries: &[(&str, [u8; 32])]) -> KeyRing {
 
 /// The keys of this build.
 pub fn production() -> KeyRing {
-    ring_of(&PRODUCTION_KEYS)
+    let ring = ring_of(&PRODUCTION_KEYS);
+    #[cfg(feature = "test-keyring")]
+    let ring = with_test_key(ring, &TEST_KEY);
+    ring
+}
+
+/// `t1`, the test bot's key; only a developer build made for testing has it. Bad hex in the
+/// file fails the build.
+#[cfg(feature = "test-keyring")]
+const TEST_KEY: [u8; 32] = hex32(include_str!("../../keys/t1.pub").trim_ascii());
+
+#[cfg(feature = "test-keyring")]
+fn with_test_key(ring: KeyRing, public: &[u8; 32]) -> KeyRing {
+    ring.with_key("t1", public)
+        .expect("keys/t1.pub is not an Ed25519 public key")
 }
 
 #[cfg(test)]
@@ -55,7 +69,7 @@ mod tests {
 
     #[test]
     fn the_production_ring_holds_k1_and_every_key_is_a_curve_point() {
-        let ring = production();
+        let ring = ring_of(&PRODUCTION_KEYS);
         assert_eq!(format!("{ring:?}"), r#"["k1"]"#);
         assert_eq!(
             PRODUCTION_KEYS[0].1,
@@ -88,6 +102,43 @@ mod tests {
             license::verify(&vectors.case("valid").token, &ring),
             Err(LicenseError::UnknownKid)
         );
+    }
+
+    fn t1_token(vectors: &test_vectors::Vectors) -> String {
+        vectors.sign(&serde_json::json!({
+            "v": 1,
+            "kid": "t1",
+            "sub": "0".repeat(64),
+            "plan": "lifetime",
+            "maj": 1,
+            "feat": [],
+            "iat": 1_700_000_000,
+            "jti": "t1-test",
+        }))
+    }
+
+    #[cfg(not(feature = "test-keyring"))]
+    #[test]
+    fn a_t1_key_is_unknown_without_the_test_keyring_feature() {
+        let vectors = test_vectors::load();
+        assert_eq!(format!("{:?}", production()), r#"["k1"]"#);
+        assert_eq!(
+            license::verify(&t1_token(&vectors), &production()),
+            Err(LicenseError::UnknownKid)
+        );
+    }
+
+    /// The feature-on path through the seam `with_test_key` (the real file is not read here).
+    #[cfg(feature = "test-keyring")]
+    #[test]
+    fn the_test_keyring_feature_adds_t1_next_to_k1() {
+        let vectors = test_vectors::load();
+        let ring = with_test_key(
+            ring_of(&PRODUCTION_KEYS),
+            &test_hex32(&vectors.test_key.public_hex),
+        );
+        assert_eq!(format!("{ring:?}"), r#"["k1", "t1"]"#);
+        assert!(license::verify(&t1_token(&vectors), &ring).is_ok());
     }
 
     /// No token signed by `k1` can be produced here (no private key): the path a production
