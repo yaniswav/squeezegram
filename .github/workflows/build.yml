@@ -68,7 +68,8 @@ jobs:
       - name: Check the update channel
         shell: pwsh
         run: |
-          ./scripts/tests/channel.tests.ps1
+          $tests = Invoke-Pester -Path ./scripts/tests/channel.tests.ps1 -PassThru
+          if ($tests.FailedCount -ne 0) { throw "Update-channel tests failed: $($tests.FailedCount)" }
           ./scripts/check-versions.ps1
 
       - name: Build front-end

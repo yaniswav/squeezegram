@@ -56,6 +56,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib/updater-signature.ps1')
+
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $Version) { $Version = (& (Join-Path $PSScriptRoot 'check-versions.ps1') | Select-Object -Last 1) }
 if ($Version -notmatch '^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$') { throw "Version '$Version' is not a semantic version" }
@@ -74,8 +76,9 @@ if (-not (Test-Path -LiteralPath $SignatureFile -PathType Leaf)) {
     throw "Signature file not found: $SignatureFile (was the build made with TAURI_SIGNING_PRIVATE_KEY set?)"
 }
 $signature = (Get-Content -LiteralPath $SignatureFile -Raw).Trim()
-# A Tauri .sig is one base64 line (the base64 of a minisign signature). Anything else is not one.
-if ($signature -notmatch '^[A-Za-z0-9+/=]+$') { throw "$SignatureFile does not look like a Tauri signature (expected one base64 line)" }
+# Fail before writing a manifest if signing omitted --app-version or used another file/version.
+Assert-UpdaterSignature -Signature $signature -Version $Version -AssetName $AssetName
+if ($Tag -cne "v$Version") { throw "Tag '$Tag' does not match version $Version" }
 
 $manifest = [ordered]@{
     version   = $Version

@@ -15,10 +15,13 @@
       - the release must be published, not a pre-release, with latest.json, the installer and its
         .sig as assets;
       - latest.json must name this version, point at this release's installer and carry a
-        signature (the updater itself verifies that signature against the app's public key);
+        structurally valid signature whose trusted comment names this version and installer;
+      - the .sig asset must exactly match the signature in latest.json;
       - the channel release must exist and be a pre-release, not a draft;
       - the manifest already on the channel must belong to the same channel and must not be newer
         (an older release published late never rolls the channel back).
+    These checks do not verify cryptographic authenticity; the updater verifies that with the
+    app's public key. A forged signature with a matching comment can still pass this script.
     Re-running it for the version already on the channel does nothing. After the upload it reads
     the public URL the app uses, retrying while GitHub's CDN catches up, and fails unless that
     URL now serves this version.
@@ -50,6 +53,7 @@ $ErrorActionPreference = 'Stop'
 
 # Forward slash: this runs on a Linux runner, where a backslash is not a path separator.
 . (Join-Path $PSScriptRoot 'lib/channel.ps1')
+. (Join-Path $PSScriptRoot 'lib/updater-signature.ps1')
 
 # Runs gh and returns its standard output. A non-zero exit code is an error that carries gh's
 # own message (stderr), so a failed call can never be taken for an empty answer.
@@ -110,9 +114,14 @@ function Publish-Channel {
     $platform = $new.platforms.'windows-x86_64'
     $expectedUrl = "https://github.com/$Repository/releases/download/$Tag/$setup"
     if ($platform.url -ne $expectedUrl) { throw "latest.json of $Tag points at '$($platform.url)', expected $expectedUrl" }
-    if ([string]::IsNullOrWhiteSpace($platform.signature) -or $platform.signature -notmatch '^[A-Za-z0-9+/=]+$') {
-        throw "latest.json of $Tag has no base64 signature"
-    }
+    # The tag fixes both values; the manifest and its .sig asset must agree before any
+    # channel operation. This is a format/binding check, not signature verification.
+    Invoke-Gh @('release', 'download', $Tag, '--repo', $Repository, '--pattern', "$setup.sig", '--dir', $newDir) | Out-Null
+    $sigFile = Join-Path $newDir "$setup.sig"
+    if (-not (Test-Path -LiteralPath $sigFile -PathType Leaf)) { throw "gh did not download $setup.sig of $Tag" }
+    $signature = (Get-Content -LiteralPath $sigFile -Raw).Trim()
+    Assert-UpdaterSignature -Signature $signature -Version $version -AssetName $setup
+    if ($platform.signature -isnot [string] -or $platform.signature -cne $signature) { throw "latest.json of $Tag does not match $setup.sig" }
 
     # d. The channel release is created once by the owner; this script never creates it.
     try { $channel = Get-ReleaseInfo $channelTag }

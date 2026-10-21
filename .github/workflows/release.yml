@@ -258,18 +258,16 @@ jobs:
           & (Join-Path $env:RUNNER_TEMP 'tauri-cli/cargo-tauri.exe') signer sign --app-version $env:VERSION $installer
           if ($LASTEXITCODE -ne 0) { throw "tauri signer sign failed with exit code $LASTEXITCODE" }
 
-      # The .sig is the base64 of a minisign file; its trusted comment is signed and carries
-      # "timestamp:<n>", "file:<name>" and "version:<version>", tab separated (tauri-cli 2.12.1,
-      # helpers/updater_signature.rs). The updater can bind the update to that version.
-      - name: Check the signature
+      # Shared with channel publication: require the expected file/version in the trusted
+      # comment and a structurally valid minisign envelope. This does not verify Ed25519.
+      - name: Check the signature structure and binding
         shell: pwsh
         run: |
+          . ./scripts/lib/updater-signature.ps1
           $name = "squeezegram-$env:VERSION-setup-x64.exe"
           $sig = Join-Path 'dist-release' "$name.sig"
-          if (-not (Test-Path -LiteralPath $sig -PathType Leaf)) { throw "Signature not found: $sig" }
-          $text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((Get-Content -LiteralPath $sig -Raw).Trim()))
-          $expected = '(?m)^trusted comment: timestamp:\d+\tfile:' + [regex]::Escape($name) + '\tversion:' + [regex]::Escape($env:VERSION) + '\r?$'
-          if ($text -notmatch $expected) { throw "The signature's trusted comment does not carry file $name and version $env:VERSION" }
+          $signature = (Get-Content -LiteralPath $sig -Raw).Trim()
+          Assert-UpdaterSignature -Signature $signature -Version $env:VERSION -AssetName $name
 
       - name: Write latest.json
         shell: pwsh
