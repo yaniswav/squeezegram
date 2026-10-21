@@ -116,17 +116,27 @@ Describe 'Updater signature structure and binding' {
                     Set-Content -LiteralPath (Join-Path $dir $asset) -Value $assetSignature
                     return
                 }
+                if ($asset -eq $name) {
+                    if (-not $missingInstaller) { Set-Content -LiteralPath (Join-Path $dir $asset) -Value 'installer bytes' }
+                    return
+                }
             }
             throw "Unexpected gh call: $($a -join ' ')"
         }
         function Invoke-TestPublish([switch] $DryRun) {
-            & (Join-Path $script:scripts 'publish-channel.ps1') -Tag 'v1.2.3' -Repository 'yaniswav/squeezegram' -DryRun:$DryRun
+            & (Join-Path $script:scripts 'publish-channel.ps1') -Tag 'v1.2.3' -Repository 'yaniswav/squeezegram' -Minisign $script:fakeMinisign -DryRun:$DryRun
         }
+        # A fake verifier: records its arguments and exits with the code the test chose.
+        $script:fakeMinisign = Join-Path $TestDrive 'fake-minisign.ps1'
+        Set-Content -LiteralPath $script:fakeMinisign -Value '$env:FAKE_MINISIGN_ARGS = $args -join " "; exit [int] $env:FAKE_MINISIGN_EXIT'
     }
     BeforeEach {
         $script:manifestSignature = New-SyntheticSignature
         $script:assetSignature = $script:manifestSignature
         $script:calls = New-Object 'System.Collections.Generic.List[string]'
+        $script:missingInstaller = $false
+        $env:FAKE_MINISIGN_EXIT = '0'
+        $env:FAKE_MINISIGN_ARGS = ''
     }
 
     It 'accepts a matching minisign envelope' { Assert-Fixture (New-SyntheticSignature) }
@@ -167,7 +177,37 @@ Describe 'Updater signature structure and binding' {
 
     It 'allows matching release assets through the publication dry run' {
         Invoke-TestPublish -DryRun
-        if ($script:calls.Count -ne 4 -or $script:calls[3] -notmatch '^release view channel-v1 ') { throw 'Expected all pre-upload checks' }
+        if ($script:calls.Count -ne 5 -or $script:calls[4] -notmatch '^release view channel-v1 ') { throw 'Expected all pre-upload checks' }
+        if ($env:FAKE_MINISIGN_ARGS -notmatch '^-V -m .*squeezegram-1\.2\.3-setup-x64\.exe -x .*installer\.minisig -p .*updater\.pub$') { throw "Unexpected minisign arguments: $env:FAKE_MINISIGN_ARGS" }
+    }
+    It 'refuses a failed cryptographic verification before accessing the channel' {
+        $env:FAKE_MINISIGN_EXIT = '1'
+        Assert-Refused { Invoke-TestPublish } 'minisign rejected'
+        if ($script:calls.Count -ne 4 -or ($script:calls -join ';') -match 'channel-v1') { throw 'Expected refusal before channel operations' }
+    }
+    It 'refuses a missing installer before accessing the channel' {
+        $script:missingInstaller = $true
+        Assert-Refused { Invoke-TestPublish } 'did not download'
+        if ($script:calls.Count -ne 4 -or ($script:calls -join ';') -match 'channel-v1') { throw 'Expected refusal before channel operations' }
+        if ($env:FAKE_MINISIGN_ARGS) { throw 'The verifier ran without an installer' }
+    }
+    It 'refuses a missing verifier binary before accessing the channel' {
+        Assert-Refused { & (Join-Path $script:scripts 'publish-channel.ps1') -Tag 'v1.2.3' -Repository 'yaniswav/squeezegram' -Minisign (Join-Path $TestDrive 'absent') } 'binary not found'
+        if ($script:calls.Count -ne 4) { throw 'Expected refusal before channel operations' }
+    }
+    It 'verifies with the real minisign binary when MINISIGN_BIN is set' -Skip:(-not $env:MINISIGN_BIN) {
+        $dir = Join-Path $TestDrive 'real'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $file = Join-Path $dir 'installer.exe'
+        Set-Content -LiteralPath $file -Value 'installer bytes'
+        # Throwaway key pair, no password; it never leaves the test drive.
+        & $env:MINISIGN_BIN -G -W -p (Join-Path $dir 'k.pub') -s (Join-Path $dir 'k.key') | Out-Null
+        & $env:MINISIGN_BIN -S -s (Join-Path $dir 'k.key') -x (Join-Path $dir 'i.minisig') -t "timestamp:1`tfile:installer.exe`tversion:1.2.3" -m $file | Out-Null
+        $sig = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $dir 'i.minisig')))
+        $pub = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $dir 'k.pub')))
+        Assert-UpdaterSignatureValid -Minisign $env:MINISIGN_BIN -Installer $file -Signature $sig -PublicKey $pub -Work (Join-Path $dir 'w1')
+        Set-Content -LiteralPath $file -Value 'tampered bytes'
+        Assert-Refused { Assert-UpdaterSignatureValid -Minisign $env:MINISIGN_BIN -Installer $file -Signature $sig -PublicKey $pub -Work (Join-Path $dir 'w2') } 'minisign rejected'
     }
     It 'refuses a wrong version before accessing the channel' {
         $script:assetSignature = New-SyntheticSignature ($script:comment.Replace('version:1.2.3', 'version:1.999.0'))

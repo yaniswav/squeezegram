@@ -5,10 +5,10 @@
 # URL, older version than the channel's).
 #
 # It has contents: write and nothing else: no "release" environment, so no signing key and no
-# Telegram secret; it builds nothing and runs no downloaded binary. The only code it runs is
-# the checked-out repository's own script and the gh CLI of the runner image, with the
-# repository's GITHUB_TOKEN. The tag is passed through the environment, never interpolated
-# into the script.
+# Telegram secret; it builds nothing. The only code it runs is the checked-out repository's own
+# script, the gh CLI of the runner image, with the repository's GITHUB_TOKEN, and one pinned
+# binary: minisign, which verifies the installer's signature before the channel is touched. The
+# tag is passed through the environment, never interpolated into the script.
 #
 # It starts on a release "published" event, so the release must be published from the GitHub
 # page or with a local gh: an event caused by GITHUB_TOKEN (for example a release published by
@@ -38,10 +38,29 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+    env:
+      # minisign 0.12 (asset of the 0.12 release of jedisct1/minisign), static Linux build.
+      MINISIGN_URL: https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
+      MINISIGN_SHA256: 9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Download minisign and check its SHA-256
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'minisign'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $archive = Join-Path $dir 'minisign.tar.gz'
+          Invoke-WebRequest -Uri $env:MINISIGN_URL -OutFile $archive -MaximumRedirection 5
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:MINISIGN_SHA256) {
+            throw "minisign: SHA-256 $actual does not match the pinned $env:MINISIGN_SHA256"
+          }
+          tar -xzf $archive -C $dir minisign-linux/x86_64/minisign
+          if ($LASTEXITCODE -ne 0) { throw "tar failed with exit code $LASTEXITCODE" }
+          chmod +x (Join-Path $dir 'minisign-linux/x86_64/minisign')
 
       - name: Publish the channel manifest
         shell: pwsh
@@ -49,4 +68,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
           REPOSITORY: ${{ github.repository }}
-        run: ./scripts/publish-channel.ps1 -Tag $env:TAG -Repository $env:REPOSITORY
+        run: ./scripts/publish-channel.ps1 -Tag $env:TAG -Repository $env:REPOSITORY -Minisign (Join-Path $env:RUNNER_TEMP 'minisign/minisign-linux/x86_64/minisign')

@@ -40,3 +40,26 @@ function Assert-UpdaterSignature {
         throw "The signature's trusted comment does not carry file $AssetName and version $Version"
     }
 }
+
+# Cryptographic check: the pinned minisign binary verifies Ed25519 over the installer and the
+# global signature over the trusted comment, against the app's updater public key (the base64
+# of a minisign .pub file, as in tauri.conf.json). Any failure throws.
+function Assert-UpdaterSignatureValid {
+    param(
+        [Parameter(Mandatory)][string] $Minisign,
+        [Parameter(Mandatory)][string] $Installer,
+        [Parameter(Mandatory)][string] $Signature,
+        [Parameter(Mandatory)][string] $PublicKey,
+        [Parameter(Mandatory)][string] $Work
+    )
+
+    if (-not (Test-Path -LiteralPath $Minisign -PathType Leaf)) { throw "minisign binary not found: $Minisign" }
+    if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) { throw "Installer not found: $Installer" }
+    New-Item -ItemType Directory -Force -Path $Work | Out-Null
+    $sigFile = Join-Path $Work 'installer.minisig'
+    $pubFile = Join-Path $Work 'updater.pub'
+    [IO.File]::WriteAllBytes($sigFile, (ConvertFrom-UpdaterBase64 $Signature))
+    [IO.File]::WriteAllBytes($pubFile, (ConvertFrom-UpdaterBase64 $PublicKey))
+    $output = & $Minisign -V -m $Installer -x $sigFile -p $pubFile 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "minisign rejected the installer signature (exit code ${LASTEXITCODE}): $($output -join ' ')" }
+}

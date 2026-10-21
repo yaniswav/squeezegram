@@ -17,11 +17,12 @@
       - latest.json must name this version, point at this release's installer and carry a
         structurally valid signature whose trusted comment names this version and installer;
       - the .sig asset must exactly match the signature in latest.json;
+      - the pinned minisign binary (-Minisign, hash-checked by the workflow) must verify that
+        signature over the installer asset with the updater public key of tauri.conf.json;
       - the channel release must exist and be a pre-release, not a draft;
       - the manifest already on the channel must belong to the same channel and must not be newer
         (an older release published late never rolls the channel back).
-    These checks do not verify cryptographic authenticity; the updater verifies that with the
-    app's public key. A forged signature with a matching comment can still pass this script.
+    The envelope and binding checks are structural; the minisign step is the cryptographic one.
     Re-running it for the version already on the channel does nothing. After the upload it reads
     the public URL the app uses, retrying while GitHub's CDN catches up, and fails unless that
     URL now serves this version.
@@ -35,16 +36,21 @@
 .PARAMETER Repository
     GitHub repository as owner/name.
 
+.PARAMETER Minisign
+    Path of the minisign executable (jedisct1/minisign), whose version and SHA-256 the caller
+    pins. Required: there is no unverified publication.
+
 .PARAMETER DryRun
     Runs every check, then stops before the upload.
 
 .EXAMPLE
-    pwsh -File scripts\publish-channel.ps1 -Tag v1.0.1 -Repository yaniswav/squeezegram -DryRun
+    pwsh -File scripts\publish-channel.ps1 -Tag v1.0.1 -Repository yaniswav/squeezegram -Minisign C:\tools\minisign.exe -DryRun
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string] $Tag,
     [Parameter(Mandatory)][string] $Repository,
+    [Parameter(Mandatory)][string] $Minisign,
     [switch] $DryRun
 )
 
@@ -115,13 +121,19 @@ function Publish-Channel {
     $expectedUrl = "https://github.com/$Repository/releases/download/$Tag/$setup"
     if ($platform.url -ne $expectedUrl) { throw "latest.json of $Tag points at '$($platform.url)', expected $expectedUrl" }
     # The tag fixes both values; the manifest and its .sig asset must agree before any
-    # channel operation. This is a format/binding check, not signature verification.
+    # channel operation. This is a format/binding check; the minisign check follows.
     Invoke-Gh @('release', 'download', $Tag, '--repo', $Repository, '--pattern', "$setup.sig", '--dir', $newDir) | Out-Null
     $sigFile = Join-Path $newDir "$setup.sig"
     if (-not (Test-Path -LiteralPath $sigFile -PathType Leaf)) { throw "gh did not download $setup.sig of $Tag" }
     $signature = (Get-Content -LiteralPath $sigFile -Raw).Trim()
     Assert-UpdaterSignature -Signature $signature -Version $version -AssetName $setup
     if ($platform.signature -isnot [string] -or $platform.signature -cne $signature) { throw "latest.json of $Tag does not match $setup.sig" }
+    # Ed25519 over the installer itself, still before any channel operation.
+    Invoke-Gh @('release', 'download', $Tag, '--repo', $Repository, '--pattern', $setup, '--dir', $newDir) | Out-Null
+    $installer = Join-Path $newDir $setup
+    if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "gh did not download $setup of $Tag" }
+    $pubkey = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '../src-tauri/tauri.conf.json') -Raw | ConvertFrom-Json).plugins.updater.pubkey
+    Assert-UpdaterSignatureValid -Minisign $Minisign -Installer $installer -Signature $signature -PublicKey $pubkey -Work (Join-Path $Work 'verify')
 
     # d. The channel release is created once by the owner; this script never creates it.
     try { $channel = Get-ReleaseInfo $channelTag }
