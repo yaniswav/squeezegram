@@ -426,6 +426,9 @@ mod tests {
         store
             .transition(id, State::Unknown, &Changes::new())
             .unwrap();
+        store
+            .remember_reconciliation_candidates(&store.get_item(id).unwrap(), vec![123])
+            .unwrap();
         store.mark_sent(id, Some(123)).unwrap();
         let recorded: (String, i64) = store
             .conn()
@@ -475,6 +478,9 @@ mod tests {
             store.get_item(ids[1]).unwrap().hold_reason.as_deref(),
             Some("awaiting_primary")
         );
+        store
+            .remember_reconciliation_candidates(&store.get_item(ids[0]).unwrap(), vec![123])
+            .unwrap();
         store.mark_sent(ids[0], Some(123)).unwrap();
         let cleared = store.clear_items(ClearScope::Finished, None).unwrap();
         assert!(

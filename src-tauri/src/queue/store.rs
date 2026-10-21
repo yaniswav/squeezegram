@@ -596,18 +596,22 @@ fn unneeded_outputs(items: &[&Item], released: &[&Item]) -> Vec<String> {
 
 pub struct Store {
     conn: Connection,
+    // Reconciliation ids are trusted only in this process and for this uncertain send.
+    reconciliation_candidates: HashMap<i64, Vec<i64>>,
 }
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         Ok(Self {
             conn: db::open(path)?,
+            reconciliation_candidates: HashMap::new(),
         })
     }
 
     pub fn open_in_memory() -> Result<Self> {
         Ok(Self {
             conn: db::open_in_memory()?,
+            reconciliation_candidates: HashMap::new(),
         })
     }
 
@@ -1019,7 +1023,9 @@ impl Store {
     }
 
     pub fn transition(&mut self, id: i64, to: State, changes: &Changes) -> Result<State> {
-        state::transition(&mut self.conn, id, to, changes)
+        let from = state::transition(&mut self.conn, id, to, changes)?;
+        self.reconciliation_candidates.remove(&id);
+        Ok(from)
     }
 
     /// `pending_review` → `ready`, all or nothing.
@@ -1216,6 +1222,9 @@ impl Store {
                     .map(path_key),
             )
             .collect();
+        for item in &removed {
+            self.reconciliation_candidates.remove(&item.id);
+        }
         for temp in removed.iter().filter_map(|item| item.temp_path.as_deref()) {
             if !protected.contains(&path_key(temp)) {
                 remove_quietly(temp);
@@ -1395,9 +1404,34 @@ impl Store {
         Ok(to)
     }
 
+    pub(crate) fn remember_reconciliation_candidates(
+        &mut self,
+        item: &Item,
+        candidates: Vec<i64>,
+    ) -> Result<()> {
+        // The search awaits Telegram; a retry or edit may have changed the item meanwhile.
+        if item.state != State::Unknown || self.get_item(item.id)? != *item {
+            return Err(QueueError::InvalidValue(
+                "stale reconciliation search".into(),
+            ));
+        }
+        self.reconciliation_candidates.insert(item.id, candidates);
+        Ok(())
+    }
+
     /// `unknown` → `sent` confirmed by the user (`item_resolve_unknown`), with the message id
     /// of a reconciliation candidate or without; writes a `sent` history row. Returns the item.
     pub fn mark_sent(&mut self, id: i64, message_id: Option<i64>) -> Result<Item> {
+        if let Some(message_id) = message_id
+            && !self
+                .reconciliation_candidates
+                .get(&id)
+                .is_some_and(|candidates| candidates.contains(&message_id))
+        {
+            return Err(QueueError::InvalidValue(
+                "message was not proposed for reconciliation".into(),
+            ));
+        }
         self.transition(
             id,
             State::Sent,
@@ -2729,6 +2763,114 @@ mod tests {
     }
 
     #[test]
+    fn reconciliation_candidates_are_scoped_replaced_and_cleared_on_retry() {
+        let mut store = memory_store();
+        let id = add_item(&mut store, "a.mp4");
+        let other = add_item(&mut store, "b.mp4");
+        store
+            .conn()
+            .execute("UPDATE items SET content_id = '10:reconciliation'", [])
+            .unwrap();
+        force_state(&store, id, State::Unknown);
+        force_state(&store, other, State::Unknown);
+        let before = store.get_item(id).unwrap();
+        assert!(matches!(
+            store.mark_sent(id, Some(55)),
+            Err(QueueError::InvalidValue(_))
+        ));
+        store
+            .remember_reconciliation_candidates(&before, vec![55])
+            .unwrap();
+        assert!(store.mark_sent(other, Some(55)).is_err(), "another item");
+        store
+            .remember_reconciliation_candidates(&before, vec![66])
+            .unwrap();
+        assert!(store.mark_sent(id, Some(55)).is_err(), "replaced search");
+        store
+            .remember_reconciliation_candidates(&before, vec![])
+            .unwrap();
+        assert!(store.mark_sent(id, Some(66)).is_err(), "empty search");
+        assert_eq!(store.get_item(id).unwrap(), before);
+        assert_eq!(store.get_item(other).unwrap().state, State::Unknown);
+        assert!(
+            store
+                .query_history(&HistoryFilter::default())
+                .unwrap()
+                .is_empty()
+        );
+
+        store
+            .remember_reconciliation_candidates(&before, vec![55])
+            .unwrap();
+        store.retry(id).unwrap();
+        force_state(&store, id, State::Unknown);
+        assert!(
+            store.mark_sent(id, Some(55)).is_err(),
+            "retry clears candidates"
+        );
+        assert_eq!(store.mark_sent(id, None).unwrap().tg_message_id, None);
+    }
+
+    #[test]
+    fn reconciliation_rejects_search_results_from_an_old_attempt() {
+        let mut store = memory_store();
+        let id = add_item(&mut store, "a.mp4");
+        force_state(&store, id, State::Unknown);
+        let old = store.get_item(id).unwrap();
+        store.retry(id).unwrap();
+        for to in [
+            State::Probing,
+            State::Encoded,
+            State::Uploading,
+            State::Unknown,
+        ] {
+            let changes = if to == State::Uploading {
+                Changes::new().bump_attempts()
+            } else {
+                Changes::new()
+            };
+            store.transition(id, to, &changes).unwrap();
+        }
+        assert!(
+            store
+                .remember_reconciliation_candidates(&old, vec![55])
+                .is_err()
+        );
+        assert!(store.mark_sent(id, Some(55)).is_err());
+        store
+            .remember_reconciliation_candidates(&store.get_item(id).unwrap(), vec![66])
+            .unwrap();
+        assert_eq!(
+            store.mark_sent(id, Some(66)).unwrap().tg_message_id,
+            Some(66)
+        );
+    }
+
+    #[test]
+    fn reconciliation_candidates_require_a_new_search_after_restart() {
+        let dir = TestDir::new("reconciliation-restart");
+        let path = dir.path().join("queue.db");
+        let mut store = Store::open(&path).unwrap();
+        store.upsert_destination(&destination(1, 0)).unwrap();
+        let id = add_item(&mut store, "a.mp4");
+        force_state(&store, id, State::Unknown);
+        store
+            .remember_reconciliation_candidates(&store.get_item(id).unwrap(), vec![55])
+            .unwrap();
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        assert!(store.mark_sent(id, Some(55)).is_err());
+        assert_eq!(store.get_item(id).unwrap().state, State::Unknown);
+        store
+            .remember_reconciliation_candidates(&store.get_item(id).unwrap(), vec![55])
+            .unwrap();
+        assert_eq!(
+            store.mark_sent(id, Some(55)).unwrap().tg_message_id,
+            Some(55)
+        );
+    }
+
+    #[test]
     fn mark_sent_records_a_sent_history_row() {
         let mut store = memory_store();
         let id = add_item(&mut store, "a.mp4");
@@ -2739,6 +2881,9 @@ mod tests {
                 "UPDATE items SET content_id = '1:a', last_error = 'TG_TIMEOUT' WHERE id = ?1",
                 [id],
             )
+            .unwrap();
+        store
+            .remember_reconciliation_candidates(&store.get_item(id).unwrap(), vec![55])
             .unwrap();
         let item = store.mark_sent(id, Some(55)).unwrap();
         assert_eq!(item.state, State::Sent);

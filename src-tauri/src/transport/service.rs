@@ -397,6 +397,15 @@ pub async fn reconcile(
         not_before_unix,
     };
     let candidates = transport.verify_sent(&probe).await?;
+    queue.with_store(|store| {
+        store.remember_reconciliation_candidates(
+            &item,
+            candidates
+                .iter()
+                .map(|candidate| candidate.message_id)
+                .collect(),
+        )
+    })?;
     tracing::info!(
         event = "reconcile",
         item_id,
@@ -542,7 +551,7 @@ mod tests {
     use crate::queue::events::recorder::Recorder;
     use crate::queue::orchestrator::{PauseRange, Unavailable};
     use crate::queue::store::{NewItem, Store};
-    use crate::queue::test_util::force_state;
+    use crate::queue::test_util::{TestDir, force_state};
     use crate::transport::Me;
     use crate::transport::mock::{
         MOCK_ARCHIVED_CHAT, MOCK_ARCHIVED_FORUM, MOCK_DELETED, MOCK_FORUM, MOCK_OLD_GROUP,
@@ -831,13 +840,16 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_is_read_only_and_needs_an_unknown_item() {
+        let dir = TestDir::new("reconcile");
+        let source = dir.file("a.mp4", b"0123456789");
+        let output = dir.file("a_sq.mp4", b"123");
         let mock = MockTransport::authorized();
         let queue = queue();
         let list = refresh_destinations(&mock, &queue).await.unwrap();
         let saved = find(&list, MOCK_SAVED, 0);
         let id = queue
             .add(&[NewItem {
-                source_path: "C:\\videos\\a.mp4".into(),
+                source_path: source.clone(),
                 source_size: 10,
                 source_mtime: 1,
                 destination_id: saved.id,
@@ -852,9 +864,9 @@ mod tests {
         queue
             .with_store(|s| {
                 s.conn().execute(
-                    "UPDATE items SET output_path = 'C:\\tmp\\a_sq.mp4', output_size = 3
-                     WHERE id = ?1",
-                    [id],
+                    "UPDATE items SET output_path = ?1, output_size = 3,
+                         content_id = '10:reconciliation' WHERE id = ?2",
+                    rusqlite::params![output, id],
                 )?;
                 Ok(())
             })
@@ -869,7 +881,7 @@ mod tests {
         let now = chrono::Utc::now().timestamp();
         let found = mock.seed_message(target, MediaKind::Video, "a_sq.mp4", 3, now);
         mock.seed_message(target, MediaKind::Video, "a_sq.mp4", 3, now - 86_400);
-        mock.seed_message(target, MediaKind::Video, "other.mp4", 3, now);
+        let other = mock.seed_message(target, MediaKind::Video, "other.mp4", 3, now);
         let candidates = reconcile(&mock, &queue, id).await.unwrap();
         let ids: Vec<i64> = candidates.iter().map(|c| c.message_id).collect();
         assert_eq!(ids, [found], "name, size and date window");
@@ -881,6 +893,34 @@ mod tests {
         let json = serde_json::to_value(&candidates[0]).unwrap();
         assert_eq!(json["kind"], "video");
         assert_eq!(json["file_name"], "a_sq.mp4");
+
+        let before = queue.with_store(|s| s.get_item(id)).unwrap();
+        assert!(matches!(
+            queue.resolve_unknown(
+                id,
+                crate::queue::orchestrator::ResolveAction::MarkSent,
+                Some(other),
+            ),
+            Err(QueueError::InvalidValue(_))
+        ));
+        assert_eq!(queue.with_store(|s| s.get_item(id)).unwrap(), before);
+        assert!(Path::new(&output).is_file());
+        assert!(queue.history(&Default::default()).unwrap().is_empty());
+        assert_eq!(
+            queue
+                .resolve_unknown(
+                    id,
+                    crate::queue::orchestrator::ResolveAction::MarkSent,
+                    Some(found),
+                )
+                .unwrap(),
+            State::Sent
+        );
+        assert!(!Path::new(&output).exists());
+        assert!(Path::new(&source).is_file());
+        let history = queue.history(&Default::default()).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].message_id, Some(found));
     }
 
     /// A held duplicate in a supergroup gets the link of the earlier message; in Saved

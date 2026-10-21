@@ -356,6 +356,11 @@ async fn batch_primary_unknown_holds_dependents_until_manual_confirmation() {
     );
     assert_eq!(h.send.order(), [ids[0]]);
     h.orch
+        .with_store(|store| {
+            store.remember_reconciliation_candidates(&store.get_item(ids[0])?, vec![1000])
+        })
+        .unwrap();
+    h.orch
         .resolve_unknown(ids[0], ResolveAction::MarkSent, Some(1000))
         .unwrap();
     h.wait_state(ids[1], State::Sent).await;
@@ -1039,6 +1044,21 @@ async fn resolve_unknown_marks_sent_or_retries() {
     let encoded = h.item(marked).output_path.unwrap();
     assert!(Path::new(&encoded).exists());
 
+    assert!(matches!(
+        h.orch
+            .resolve_unknown(marked, ResolveAction::MarkSent, Some(4242)),
+        Err(QueueError::InvalidValue(_))
+    ));
+    assert_eq!(h.item(marked).state, Unknown);
+    assert!(
+        Path::new(&encoded).exists(),
+        "refusal keeps the encoded file"
+    );
+    h.orch
+        .with_store(|store| {
+            store.remember_reconciliation_candidates(&store.get_item(marked)?, vec![4242])
+        })
+        .unwrap();
     assert_eq!(
         h.orch
             .resolve_unknown(marked, ResolveAction::MarkSent, Some(4242))
