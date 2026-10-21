@@ -1,14 +1,20 @@
 # Release build: runs only when a tag vX.Y.Z is pushed to this repository.
-# It builds the installer and the portable zip, signs the installer for the updater and
-# creates a DRAFT GitHub release. It never publishes: the owner reviews the draft and
-# publishes it by hand. Publishing the draft triggers publish-channel.yml, which copies
+# It builds the installer and the portable zip, signs the installer for the updater in a
+# separate job and creates a DRAFT GitHub release. It never publishes: the owner reviews the
+# draft and publishes it by hand. Publishing the draft triggers publish-channel.yml, which copies
 # latest.json to the update channel release channel-v<N> that the app reads.
 #
-# Secrets used (repository secrets, never written to a file or printed):
-#   SQUEEZEGRAM_TG_API_ID, SQUEEZEGRAM_TG_API_HASH   compiled into the executable by build.rs
-#   TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD)          updater signature of the installer
-# They are only visible to the "Build" step of the first job. The job that creates the
-# release has contents: write and no other secret.
+# Secrets used (never written to a file or printed). Each environment waits for the owner's
+# approval and only accepts v* tags:
+#   environment "release":          SQUEEZEGRAM_TG_API_ID, SQUEEZEGRAM_TG_API_HASH
+#                                   compiled into the executable by build.rs; only the "Build"
+#                                   step of the build job sees them
+#   environment "release-signing":  TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD), the updater key;
+#                                   only the signing step of the sign job sees it
+# The build job (pnpm, cargo, crates, build.rs, Inno) never sees the signing key. The sign job
+# runs nothing from the project's dependency tree. The job that creates the release has
+# contents: write and no secret. No job uses a cache: a release build must not consume what
+# another workflow wrote.
 name: release
 
 on:
@@ -34,13 +40,14 @@ env:
 jobs:
   build:
     name: Build
-    # The signing key and the Telegram identity live in the "release" environment, which
-    # only accepts v* tags and waits for the owner's approval before this job starts.
+    # The Telegram identity lives in the "release" environment, which only accepts v* tags
+    # and waits for the owner's approval before this job starts. The signing key is not here.
     environment: release
     runs-on: windows-latest
     timeout-minutes: 90
     outputs:
       version: ${{ steps.version.outputs.version }}
+      installer_sha256: ${{ steps.installer.outputs.installer_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,18 +59,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
-          cache: pnpm
 
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: 1.99.0
           components: clippy, rustfmt
-
-      # Restore only: a build that saw the release secrets never writes a cache.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: src-tauri
-          save-if: false
 
       # The tag must be vX.Y.Z with X.Y.Z the version shared by package.json, Cargo.toml and
       # tauri.conf.json (scripts/check-versions.ps1 fails if those three differ).
@@ -124,11 +124,12 @@ jobs:
           Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile (Join-Path $dir 'MicrosoftEdgeWebview2Setup.exe') -MaximumRedirection 5
 
       # The only step that sees the secrets. build-release.ps1 reads them from the
-      # environment (build.rs and the Tauri bundler do); nothing echoes them or writes them
-      # to a file, and no shell tracing is on.
+      # environment (build.rs does); nothing echoes them or writes them to a file, and no
+      # shell tracing is on. Without TAURI_SIGNING_PRIVATE_KEY it builds an unsigned installer;
+      # the sign job signs it.
       # It downloads no tool and runs no binary fetched in this step: Inno Setup and the
       # bootstrapper arrive in the two steps above and are only verified here. (Cargo still
-      # fetches the crates of Cargo.lock, checksum-verified, if the cache lacks them.)
+      # fetches the crates of Cargo.lock, checksum-verified.)
       # It also generates THIRD-PARTY-NOTICES.txt (installer and zip) and fails if a crate or
       # package has no licence text.
       - name: Build installer, portable zip and checksums
@@ -136,37 +137,146 @@ jobs:
         env:
           SQUEEZEGRAM_TG_API_ID: ${{ secrets.SQUEEZEGRAM_TG_API_ID }}
           SQUEEZEGRAM_TG_API_HASH: ${{ secrets.SQUEEZEGRAM_TG_API_HASH }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          foreach ($name in 'SQUEEZEGRAM_TG_API_ID', 'SQUEEZEGRAM_TG_API_HASH', 'TAURI_SIGNING_PRIVATE_KEY') {
+          foreach ($name in 'SQUEEZEGRAM_TG_API_ID', 'SQUEEZEGRAM_TG_API_HASH') {
             if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name))) {
               throw "The repository secret $name is not set"
             }
           }
           & ./scripts/build-release.ps1
 
-      - name: Write latest.json and the release notes
+      # The sign job signs exactly these bytes: it recomputes this hash and refuses a mismatch.
+      - name: Hash the installer
+        id: installer
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $installer = Join-Path 'dist-release' "squeezegram-$env:VERSION-setup-x64.exe"
+          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "installer_sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Write the release notes
         shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
           REF_NAME: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          $sig = Join-Path 'dist-release' "squeezegram-$env:VERSION-setup-x64.exe.sig"
-          & ./scripts/make-latest-json.ps1 -Version $env:VERSION -Tag $env:REF_NAME -Repository $env:REPOSITORY -SignatureFile $sig
           & ./scripts/render-release-notes.ps1 -Version $env:VERSION -Tag $env:REF_NAME -Repository $env:REPOSITORY
 
-      # Handed to the next job, which holds the write permission. The files are those the
-      # release will carry anyway; a short retention keeps an abandoned draft's files from
+      # Handed to the sign job. A short retention keeps an abandoned draft's files from
       # lingering as workflow artifacts.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-unsigned
+          path: |
+            dist-release/squeezegram-${{ steps.version.outputs.version }}-setup-x64.exe
+            dist-release/squeezegram-${{ steps.version.outputs.version }}-portable-x64.zip
+            dist-release/SHA256SUMS.txt
+            dist-release/release-notes.md
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    name: Sign installer
+    needs: build
+    # Holds the updater signing key and nothing else: no node, pnpm, Rust, cache or project
+    # install, so no dependency of the project runs next to the key. The only code it runs is
+    # the scripts/ folder of this tag and a pinned tauri-cli binary.
+    environment: release-signing
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # Standalone tauri-cli 2.12.1 (asset of the tauri-cli-v2.12.1 release of tauri-apps/tauri).
+      TAURI_CLI_URL: https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.12.1/cargo-tauri-x86_64-pc-windows-msvc.zip
+      TAURI_CLI_SHA256: d3919ebe0bf7013dd98293862784dd37b8f76db2d650e13a3ec11c5dd799c519
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      # Only the scripts folder: make-latest-json.ps1 needs nothing else.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: true
+
+      - name: Download tauri-cli and check its SHA-256
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'tauri-cli'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $dir 'cargo-tauri.zip'
+          Invoke-WebRequest -Uri $env:TAURI_CLI_URL -OutFile $zip -MaximumRedirection 5
+          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:TAURI_CLI_SHA256) {
+            throw "tauri-cli: SHA-256 $actual does not match the pinned $env:TAURI_CLI_SHA256"
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath $dir
+          if (-not (Test-Path -LiteralPath (Join-Path $dir 'cargo-tauri.exe') -PathType Leaf)) { throw 'cargo-tauri.exe missing from the archive' }
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-unsigned
+          path: dist-release
+
+      # The build job hashed the installer before upload; sign only those bytes.
+      - name: Check the installer against the build job
+        shell: pwsh
+        env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.installer_sha256 }}
+        run: |
+          $installer = Join-Path 'dist-release' "squeezegram-$env:VERSION-setup-x64.exe"
+          $actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ([string]::IsNullOrEmpty($env:EXPECTED_SHA256) -or $actual -ne $env:EXPECTED_SHA256) {
+            throw "Installer: SHA-256 $actual does not match the build job's '$env:EXPECTED_SHA256'"
+          }
+
+      # The only step that sees the signing key. The pinned binary reads it from the
+      # environment; nothing echoes it or writes it to a file, and no shell tracing is on.
+      - name: Sign the installer for the updater
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw 'The secret TAURI_SIGNING_PRIVATE_KEY is not set'
+          }
+          $installer = Join-Path 'dist-release' "squeezegram-$env:VERSION-setup-x64.exe"
+          & (Join-Path $env:RUNNER_TEMP 'tauri-cli/cargo-tauri.exe') signer sign --app-version $env:VERSION $installer
+          if ($LASTEXITCODE -ne 0) { throw "tauri signer sign failed with exit code $LASTEXITCODE" }
+
+      # The .sig is the base64 of a minisign file; its trusted comment is signed and carries
+      # "timestamp:<n>", "file:<name>" and "version:<version>", tab separated (tauri-cli 2.12.1,
+      # helpers/updater_signature.rs). The updater can bind the update to that version.
+      - name: Check the signature
+        shell: pwsh
+        run: |
+          $name = "squeezegram-$env:VERSION-setup-x64.exe"
+          $sig = Join-Path 'dist-release' "$name.sig"
+          if (-not (Test-Path -LiteralPath $sig -PathType Leaf)) { throw "Signature not found: $sig" }
+          $text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((Get-Content -LiteralPath $sig -Raw).Trim()))
+          $expected = '(?m)^trusted comment: timestamp:\d+\tfile:' + [regex]::Escape($name) + '\tversion:' + [regex]::Escape($env:VERSION) + '\r?$'
+          if ($text -notmatch $expected) { throw "The signature's trusted comment does not carry file $name and version $env:VERSION" }
+
+      - name: Write latest.json
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          $sig = Join-Path 'dist-release' "squeezegram-$env:VERSION-setup-x64.exe.sig"
+          & ./scripts/make-latest-json.ps1 -Version $env:VERSION -Tag $env:REF_NAME -Repository $env:REPOSITORY -SignatureFile $sig
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-files
           path: |
-            dist-release/squeezegram-${{ steps.version.outputs.version }}-setup-x64.exe
-            dist-release/squeezegram-${{ steps.version.outputs.version }}-setup-x64.exe.sig
-            dist-release/squeezegram-${{ steps.version.outputs.version }}-portable-x64.zip
+            dist-release/squeezegram-${{ needs.build.outputs.version }}-setup-x64.exe
+            dist-release/squeezegram-${{ needs.build.outputs.version }}-setup-x64.exe.sig
+            dist-release/squeezegram-${{ needs.build.outputs.version }}-portable-x64.zip
             dist-release/SHA256SUMS.txt
             dist-release/latest.json
             dist-release/release-notes.md
@@ -175,7 +285,7 @@ jobs:
 
   draft-release:
     name: Create draft release
-    needs: build
+    needs: [build, sign]
     runs-on: windows-latest
     timeout-minutes: 15
     permissions:

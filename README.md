@@ -148,6 +148,8 @@ The script stages the pinned TDLib library, generates notices, builds the app, c
 
 Do not publish these local outputs: the executable embeds the Telegram API identity supplied at build time, including values from your local `.env`. Public release artifacts are built by the release workflow with the intended release identity. Updater signatures are separate from Windows code signing; a local build without the updater signing environment has no `.sig` file.
 
+Release setup (owner, once): `.github/workflows/release.yml` uses two GitHub environments, each with the owner as required reviewer and a deployment rule that allows only `v*` tags. In `release`, keep the secrets `SQUEEZEGRAM_TG_API_ID` and `SQUEEZEGRAM_TG_API_HASH` (build job). Create `release-signing` and move `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` into it (sign job, which runs no project dependency). Delete those two secrets from `release` and from the repository secrets.
+
 ## License
 
 squeezegram is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, modify and share it for noncommercial purposes as defined in that license. Commercial use requires a separate written agreement with the author: open an issue on this repository to ask.
