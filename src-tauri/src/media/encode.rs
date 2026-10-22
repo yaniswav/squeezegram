@@ -1153,16 +1153,29 @@ pub async fn strip(job: &Job<'_>) -> Result<Produced> {
     result
 }
 
-/// A video sent as it is but for its metadata, unlike a remux for Telegram: every stream is
-/// kept (all audio tracks, subtitles) and the chapters too (titles the author wrote, not
-/// where or with what the video was shot). Gone: the file's metadata (location, make, model),
+/// A video sent as it is but for its metadata, unlike a remux for Telegram: all audio tracks,
+/// subtitles and chapters stay (titles the author wrote, not where the video was shot).
+/// Covers and attachments may contain private metadata in their bytes, so they are dropped.
+/// Gone too: the file's metadata (location, make, model),
 /// each stream's (creation time, a handler name a camera may fill with its model) and the
 /// data tracks, where action cameras record their GPS telemetry. Each track's language is not
 /// private and is written back from the probe (`Plan::stream_languages`, codes checked there);
 /// titles are not, being free text.
 fn strip_video_args(job: &Job<'_>, part: &Path) -> Args {
     let mut args = common_start(job.input)
-        .all(&["-map", "0", "-map", "-0:d", "-ignore_unknown", "-c", "copy"])
+        .all(&[
+            "-map",
+            "0",
+            "-map",
+            "-0:d",
+            "-map",
+            "-0:disp:attached_pic?",
+            "-map",
+            "-0:t?",
+            "-ignore_unknown",
+            "-c",
+            "copy",
+        ])
         .all(&["-map_metadata", "-1", "-map_metadata:s", "-1"]);
     for (index, language) in job.plan.stream_languages.iter().enumerate() {
         if let Some(language) = language {
@@ -2131,6 +2144,54 @@ mod tests {
         assert!(first.ends_with("-an -f null NUL"));
         assert!(second.contains("-pass 2 -passlogfile C:\\tmp\\1\\pass"));
         assert!(second.contains("-c:a aac") && second.ends_with("clip_sq.mp4.part"));
+    }
+
+    #[test]
+    fn conversion_maps_only_the_selected_video_and_audio_not_covers_or_attachments() {
+        let fx = Fixture::new();
+        let mut plan = sample_plan();
+        plan.video_index = Some(1);
+        plan.audio_index = Some(3);
+        let check = |args: Args| {
+            let list = to_strings(args);
+            let maps: Vec<&str> = list
+                .windows(2)
+                .filter(|pair| pair[0] == "-map")
+                .map(|pair| pair[1].as_str())
+                .collect();
+            assert_eq!(maps, ["0:1", "0:3"]);
+        };
+        for kind in [Kind::Encode, Kind::Remux, Kind::RemuxAudio] {
+            plan.kind = kind;
+            fx.args(&plan, |job, part| {
+                if kind == Kind::Encode {
+                    for pass in [Pass::Single, Pass::First, Pass::Second] {
+                        check(encode_args(job, Encoder::X264, 1_000_000, pass, part));
+                    }
+                } else {
+                    check(remux_args(job, part));
+                }
+                remux_args(job, part)
+            });
+        }
+    }
+
+    #[test]
+    fn strip_drops_covers_and_attachments_without_selecting_only_the_first_video() {
+        let fx = Fixture::new();
+        let mut plan = sample_plan();
+        plan.kind = Kind::Strip;
+        plan.stream_languages = vec![None, Some("fra".into()), Some("deu".into())];
+        let (list, text) = fx.args(&plan, strip_video_args);
+        let maps: Vec<&str> = list
+            .windows(2)
+            .filter(|pair| pair[0] == "-map")
+            .map(|pair| pair[1].as_str())
+            .collect();
+        assert_eq!(maps, ["0", "-0:d", "-0:disp:attached_pic?", "-0:t?"]);
+        assert!(text.contains("-c copy -map_metadata -1 -map_metadata:s -1"));
+        assert!(text.contains("-metadata:s:1 language=fra -metadata:s:2 language=deu"));
+        assert!(!text.contains("-sn") && !text.contains("-an"));
     }
 
     #[test]

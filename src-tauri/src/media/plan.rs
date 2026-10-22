@@ -463,15 +463,13 @@ pub struct PrivateData {
 }
 
 /// The streams the `PRIVATE_TAGS` copy writes (`encode::strip_video_args`: data tracks and
-/// streams of an unknown kind are left out), each with its language, in output order.
+/// covers, attachments and streams of an unknown kind are left out), each with its language,
+/// in output order.
 pub fn copied_languages(info: &MediaInfo) -> Vec<Option<String>> {
     info.streams
         .iter()
         .filter(|stream| {
-            matches!(
-                stream.kind.as_str(),
-                "video" | "audio" | "subtitle" | "attachment"
-            )
+            matches!(stream.kind.as_str(), "video" | "audio" | "subtitle") && !stream.attached_pic
         })
         .map(|stream| stream.language.clone())
         .collect()
@@ -917,6 +915,30 @@ mod tests {
         assert!(
             uhd.contains("min(3840,iw)") && uhd.contains("min(2160,ih)"),
             "{uhd}"
+        );
+    }
+
+    #[test]
+    fn copied_languages_follow_only_the_streams_left_after_cover_removal() {
+        let info = super::super::probe::parse(
+            r#"{"streams":[
+                {"index":0,"codec_type":"video","disposition":{"attached_pic":1}},
+                {"index":1,"codec_type":"video","tags":{"language":"eng"}},
+                {"index":2,"codec_type":"attachment"},
+                {"index":3,"codec_type":"audio","tags":{"language":"fra"}},
+                {"index":4,"codec_type":"data"},
+                {"index":5,"codec_type":"subtitle","tags":{"language":"deu"}},
+                {"index":6,"codec_type":"video"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            copied_languages(&info),
+            [
+                Some("eng".into()),
+                Some("fra".into()),
+                Some("deu".into()),
+                None
+            ]
         );
     }
 

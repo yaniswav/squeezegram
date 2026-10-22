@@ -1129,6 +1129,215 @@ async fn a_compliant_mp4_with_a_location_keeps_every_stream_and_loses_its_metada
     assert_eq!(probe.unwrap().treatment, Treatment::Skip);
 }
 
+#[tokio::test]
+#[ignore = "requires SQUEEZEGRAM_TEST_FFMPEG_DIR with local ffmpeg"]
+async fn embedded_covers_lose_their_private_bytes_only_when_stripping_is_enabled() {
+    let mut env = Env::new(50).expect("local ffmpeg folder");
+    let plain = env.path("plain.jpg");
+    generate(
+        &env.ffmpeg,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=32x32",
+            "-frames:v",
+            "1",
+            plain.to_str().unwrap(),
+        ],
+    );
+    let encoded = std::fs::read(&plain).unwrap();
+    let mut exif = b"Exif\0\0".to_vec();
+    exif.extend_from_slice(&super::metadata::tests::camera_tiff(1));
+    let mut cover = encoded[..2].to_vec();
+    cover.extend_from_slice(&[0xff, 0xe1]);
+    cover.extend_from_slice(&u16::try_from(exif.len() + 2).unwrap().to_be_bytes());
+    cover.extend_from_slice(&exif);
+    cover.extend_from_slice(&encoded[2..]);
+    let picture = env.path("cover.jpg");
+    std::fs::write(&picture, &cover).unwrap();
+    let attachment = env.path("private.bin");
+    std::fs::write(&attachment, b"FAKE-CAMERA-SN-0042").unwrap();
+    let base = env.path("base.mp4");
+    generate(
+        &env.ffmpeg,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x64:rate=10",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=880:sample_rate=48000",
+            "-t",
+            "1",
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-map",
+            "2:a",
+            "-c:v",
+            h264_encoder(&env.ffmpeg),
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-metadata:s:a:0",
+            "language=eng",
+            "-metadata:s:a:1",
+            "language=fra",
+            "-movflags",
+            "+faststart",
+            base.to_str().unwrap(),
+        ],
+    );
+    let mp4 = env.path("covered.mp4");
+    generate(
+        &env.ffmpeg,
+        &[
+            "-i",
+            base.to_str().unwrap(),
+            "-i",
+            picture.to_str().unwrap(),
+            "-map",
+            "0",
+            "-map",
+            "1:v",
+            "-c",
+            "copy",
+            "-disposition:v:1",
+            "attached_pic",
+            "-movflags",
+            "+faststart",
+            mp4.to_str().unwrap(),
+        ],
+    );
+    let mkv = env.path("attached.mkv");
+    generate(
+        &env.ffmpeg,
+        &[
+            "-i",
+            base.to_str().unwrap(),
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            "-attach",
+            picture.to_str().unwrap(),
+            "-metadata:s:t:0",
+            "mimetype=image/jpeg",
+            "-attach",
+            attachment.to_str().unwrap(),
+            "-metadata:s:t:1",
+            "mimetype=application/octet-stream",
+            mkv.to_str().unwrap(),
+        ],
+    );
+    let expected = stream_kinds(&env.ffmpeg, &base);
+    for src in [&mp4, &mkv] {
+        let original = std::fs::read(src).unwrap();
+        assert!(super::metadata::tests::contains(&original, &exif));
+        let info = env.ffprobe(src).await;
+        assert!(info.private_tags);
+        assert!(info.streams.iter().any(|stream| stream.attached_pic));
+        if src == &mkv {
+            assert!(
+                info.streams
+                    .iter()
+                    .any(|stream| stream.kind == "attachment")
+            );
+        }
+        let (_, probed, result) = env
+            .run(src, SendMode::Video, &CancellationToken::new())
+            .await;
+        let probed = probed.unwrap();
+        let mut plan = plan_of(&probed);
+        assert_eq!(
+            plan.kind,
+            if src == &mp4 {
+                Kind::Strip
+            } else {
+                Kind::Remux
+            }
+        );
+        let output = PathBuf::from(result.unwrap().unwrap().output_path);
+        assert!(
+            !env.ffprobe(&output)
+                .await
+                .streams
+                .iter()
+                .any(|stream| { stream.attached_pic || stream.kind == "attachment" })
+        );
+        no_private_bytes(&output);
+        if src == &mp4 {
+            assert_eq!(stream_kinds(&env.ffmpeg, &output), expected);
+        } else {
+            // Exercise Strip's all-stream mapping on MKV too; the normal MKV plan is Remux.
+            plan.kind = Kind::Strip;
+            plan.note = Some(super::plan::PRIVATE_TAGS.into());
+            plan.stream_languages = super::plan::copied_languages(&info);
+            let out_dir = env.path("strip-mkv");
+            let cancel = CancellationToken::new();
+            let progress = ProgressReporter::new(1, Phase::Encoding, env.sink.clone());
+            let tools = Tools {
+                ffmpeg: &env.ffmpeg.join("ffmpeg.exe"),
+                ffprobe: &env.ffmpeg.join("ffprobe.exe"),
+            };
+            let output = encode::strip(&Job {
+                tools: &tools,
+                input: src,
+                plan: &plan,
+                out_dir: &out_dir,
+                min_free_bytes: 0,
+                cancel: &cancel,
+                progress: &progress,
+            })
+            .await
+            .unwrap()
+            .path;
+            assert_eq!(stream_kinds(&env.ffmpeg, &output), expected);
+            assert!(
+                !env.ffprobe(&output)
+                    .await
+                    .streams
+                    .iter()
+                    .any(|stream| { stream.attached_pic || stream.kind == "attachment" })
+            );
+            no_private_bytes(&output);
+        }
+        // Matroska timestamps shift the decoded audio, so only the MP4 hash is comparable.
+        let decoded = decoded_md5(&env.ffmpeg, &output);
+        if src == &mp4 {
+            assert_eq!(decoded, decoded_md5(&env.ffmpeg, &base));
+        }
+        assert_eq!(std::fs::read(src).unwrap(), original);
+    }
+    let mut off = Env::with(
+        50,
+        Arc::new(crate::entitlements::FreeOnly),
+        &json!({ "privacy": { "strip_metadata": false } }),
+    )
+    .unwrap();
+    let (_, probed, result) = off
+        .run(&mp4, SendMode::Video, &CancellationToken::new())
+        .await;
+    assert_eq!(probed.unwrap().treatment, Treatment::Skip);
+    assert!(result.is_none());
+    assert!(
+        off.ffprobe(&mp4)
+            .await
+            .streams
+            .iter()
+            .any(|stream| stream.attached_pic)
+    );
+}
+
 /// `codec_type` and language of every stream, in order.
 fn stream_kinds(ffmpeg: &Path, path: &Path) -> Vec<(String, String)> {
     let out = std::process::Command::new(ffmpeg.join("ffprobe.exe"))
@@ -1260,8 +1469,10 @@ async fn input_formats_reject_manifests_and_preserve_literal_images() {
         .await
         .unwrap();
         assert!(!result.success(), "ffmpeg accepted {name}");
+        let tail = result.stderr_tail.join("\n");
         assert!(
-            super::unsupported_format(&result.stderr_tail.join("\n")),
+            super::unsupported_format(&tail)
+                || (!tail.contains("[dash") && !tail.contains("[concat") && !tail.contains("[hls")),
             "{:?}",
             result.stderr_tail
         );

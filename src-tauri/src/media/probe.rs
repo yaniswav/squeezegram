@@ -100,6 +100,8 @@ pub struct StreamInfo {
     /// ffprobe's `codec_type`: `video`, `audio`, `subtitle`, `data`, `attachment`…
     pub kind: String,
     pub language: Option<String>,
+    /// Required so cached probes made before cover detection are refreshed.
+    pub attached_pic: bool,
 }
 
 /// An ISO 639 code as ffmpeg writes it (`eng`, `fra`, `pt`): letters only, at most 8. Anything
@@ -263,12 +265,14 @@ pub fn parse(json: &str) -> Result<MediaInfo, serde_json::Error> {
             .map(|stream| StreamInfo {
                 kind: stream.codec_type.clone().unwrap_or_default(),
                 language: stream.tags.get("language").and_then(language_code),
+                attached_pic: stream.disposition.attached_pic != 0,
             })
             .collect(),
-        // A data track (GoPro GPMF, timed metadata) may record the GPS track itself.
+        // Data tracks may record GPS; covers and attachments may hide private image metadata.
         private_tags: raw.format.tags.keys().any(|key| private_tag(key))
             || raw.streams.iter().any(|stream| {
-                stream.codec_type.as_deref() == Some("data")
+                matches!(stream.codec_type.as_deref(), Some("data" | "attachment"))
+                    || stream.disposition.attached_pic != 0
                     || stream.tags.keys().any(|key| private_tag(key))
             }),
     })
@@ -553,6 +557,22 @@ mod tests {
         let plain = r#"{"streams":[{"index":0,"codec_type":"video","codec_name":"h264",
             "tags":{"language":"eng","handler_name":"VideoHandler"}}],"format":{}}"#;
         assert!(!parse(plain).unwrap().private_tags);
+    }
+
+    #[test]
+    fn covers_and_attachments_trigger_stripping_without_container_tags() {
+        for stream in [
+            r#"{"index":1,"codec_type":"video","disposition":{"attached_pic":1}}"#,
+            r#"{"index":1,"codec_type":"attachment","tags":{"mimetype":"image/jpeg"}}"#,
+        ] {
+            let info = parse(&format!(
+                r#"{{"streams":[{{"index":0,"codec_type":"video","codec_name":"h264"}},{stream}]}}"#
+            ))
+            .unwrap();
+            assert!(info.private_tags);
+            assert_eq!(info.video.unwrap().index, 0);
+        }
+        assert!(serde_json::from_str::<StreamInfo>(r#"{"kind":"video","language":null}"#).is_err());
     }
 
     #[test]

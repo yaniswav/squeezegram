@@ -2546,6 +2546,45 @@ mod tests {
         assert!(reusable_info(&analyzed_item(Some("{")), Some((10, 1))).is_none());
     }
 
+    #[test]
+    fn cover_removal_respects_privacy_and_keeps_conversion_stream_selection() {
+        let fx = analyzed_item(None);
+        let source = Path::new("clip.mp4");
+        let info = probe::parse(
+            r#"{"streams":[
+                {"index":0,"codec_type":"video","disposition":{"attached_pic":1}},
+                {"index":1,"codec_type":"video","codec_name":"h264"},
+                {"index":2,"codec_type":"audio","codec_name":"aac","tags":{"language":"fra"}},
+                {"index":3,"codec_type":"attachment"}]}"#,
+        )
+        .unwrap();
+        let mut old = serde_json::to_value(&info).unwrap();
+        for stream in old["streams"].as_array_mut().unwrap() {
+            stream.as_object_mut().unwrap().remove("attached_pic");
+        }
+        assert!(reusable_info(&analyzed_item(Some(&old.to_string())), Some((10, 1))).is_none());
+        let mut settings = Settings::default();
+        for kind in [Kind::Skip, Kind::Encode, Kind::Remux, Kind::RemuxAudio] {
+            let mut plan = sample_plan();
+            plan.kind = kind;
+            plan.video_index = Some(1);
+            plan.audio_index = Some(2);
+            settings.privacy.strip_metadata = false;
+            assert_eq!(
+                with_privacy(&settings, plan.clone(), source, &fx, Some(&info)),
+                plan
+            );
+            settings.privacy.strip_metadata = true;
+            let on = with_privacy(&settings, plan.clone(), source, &fx, Some(&info));
+            if kind == Kind::Skip {
+                assert_eq!(on.kind, Kind::Strip);
+                assert_eq!(on.stream_languages, [None, Some("fra".into())]);
+            } else {
+                assert_eq!(on, plan);
+            }
+        }
+    }
+
     /// The badge and the probing see the same plan: a JPEG sent as a file becomes a stripped
     /// copy, unless the setting is off, the file is no JPEG/PNG/WebP, or it is too big to read.
     #[test]
