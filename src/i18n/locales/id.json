@@ -741,7 +741,7 @@
       "openFolder": "Buka folder log",
       "export": "Ekspor laporan debug",
       "exporting": "Mengekspor…",
-      "exportHint": "Menyimpan berkas .zip berisi jurnal terbaru, versi yang digunakan, dan kode kesalahan terakhir. Nama folder dan chat disamarkan. Tidak ada yang dikirim ke mana pun: Anda yang memutuskan apakah akan membagikannya.",
+      "exportHint": "Menyimpan berkas .zip berisi jurnal terbaru, versi yang digunakan, dan kode kesalahan terakhir. Folder dihapus, nama berkas diganti dengan penanda netral (file-1, file-2…), dan chat disamarkan. Tidak ada yang dikirim ke mana pun: Anda yang memutuskan apakah akan membagikannya.",
       "exported": "Laporan disimpan: {{path}}"
     },
     "updates": {

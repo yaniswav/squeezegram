@@ -1,6 +1,7 @@
 //! `debug_export`: a zip with `report.json` (versions, encoder detection,
 //! last queue error codes, settings without paths or identity) and the recent journal files,
-//! every path masked to `<path>/name` and secrets scrubbed again. Only journal files are read
+//! every path masked to `<path>/file-N` (one marker per file name in the archive) and secrets
+//! scrubbed again. Only journal files are read
 //! from the folder: never the TDLib log, never a database.
 
 use std::fs::File;
@@ -13,7 +14,7 @@ use zip::write::SimpleFileOptions;
 
 use super::file;
 use super::record::Record;
-use super::redact;
+use super::redact::{self, Masker};
 
 /// Uncompressed journal bytes put in an export, newest files first.
 pub const MAX_LOG_BYTES: u64 = 20 * 1024 * 1024;
@@ -27,12 +28,12 @@ pub struct ExportSummary {
 }
 
 /// One journal line with every string masked; `None` if it is not a journal record.
-pub fn mask_line(line: &str) -> Option<String> {
+pub fn mask_line(line: &str, masker: &Masker) -> Option<String> {
     let value: Value = serde_json::from_str(line).ok()?;
     let mut record = Record::from_value(value)?;
-    record.msg = redact::mask_text(&record.msg);
+    record.msg = masker.mask_text(&record.msg);
     let mut fields = Value::Object(std::mem::take(&mut record.fields));
-    redact::map_strings(&mut fields, &redact::mask_text);
+    redact::map_strings(&mut fields, &|text| masker.mask_text(text));
     if let Value::Object(map) = fields {
         record.fields = map;
     }
@@ -41,8 +42,9 @@ pub fn mask_line(line: &str) -> Option<String> {
 
 /// Writes the zip at `out` (through `out.part`, then renamed).
 pub fn write_zip(out: &Path, report: &Value, log_dir: &Path) -> io::Result<ExportSummary> {
+    let masker = Masker::default();
     let mut report = report.clone();
-    redact::map_strings(&mut report, &redact::mask_text);
+    redact::map_strings(&mut report, &|text| masker.mask_text(text));
 
     let mut chosen = Vec::new();
     let mut budget = MAX_LOG_BYTES;
@@ -86,7 +88,7 @@ pub fn write_zip(out: &Path, report: &Value, log_dir: &Path) -> io::Result<Expor
             if line.trim().is_empty() {
                 continue;
             }
-            match mask_line(&line) {
+            match mask_line(&line, &masker) {
                 Some(masked) => {
                     zip.write_all(masked.as_bytes())?;
                     zip.write_all(b"\n")?;
@@ -161,8 +163,14 @@ mod tests {
         }
         assert!(!all.contains("Alice"), "{all}");
         assert!(!all.contains("TDLIB") && !all.contains("DATABASE"));
-        assert!(all.contains("<path>/clip.mp4") && all.contains("<path>/clip_sq.mp4.part"));
-        assert!(all.contains("<path>/ffmpeg.exe"));
+        assert!(
+            !all.contains("clip.") && !all.contains("clip_") && !all.contains("ffmpeg.exe"),
+            "{all}"
+        );
+        // One marker per name across the whole archive: the report, then the journal lines.
+        assert_eq!(all.matches("<path>/file-1.exe").count(), 1);
+        assert_eq!(all.matches("<path>/file-2.mp4").count(), 2);
+        assert!(all.contains("<path>/file-3.part"));
         assert!(!out.with_extension("zip.part").exists());
     }
 }

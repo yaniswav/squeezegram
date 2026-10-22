@@ -306,7 +306,7 @@ async fn no_secret_reaches_the_journal() {
         .to_string_lossy()
         .into_owned();
     assert!(!exported.contains(&folder), "full path exported");
-    assert!(exported.contains("<path>/clip.mp4"));
+    assert!(exported.contains("<path>/file-1.mp4") && !exported.contains("clip"));
 }
 
 #[tokio::test(start_paused = true)]

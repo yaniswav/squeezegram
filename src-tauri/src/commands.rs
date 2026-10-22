@@ -1799,7 +1799,7 @@ pub async fn debug_export(
             "encoder_detection": state.media.detection_report().await,
             "queue_errors": state.queue.with_store(|store| store.recent_errors(EXPORT_ERRORS))?,
             "settings": settings_for_report(&state.settings.get()),
-            "notes": "Paths are masked as <path>/name; chats are hashed (c:xxxxxx). No TDLib log, no database.",
+            "notes": "Folders are removed and file names become markers (<path>/file-N, the same name keeps the same marker); chats are hashed (c:xxxxxx). No TDLib log, no database.",
         });
         let target = out.clone();
         let summary = tauri::async_runtime::spawn_blocking(move || {

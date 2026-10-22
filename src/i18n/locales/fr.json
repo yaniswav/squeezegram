@@ -771,7 +771,7 @@
       "openFolder": "Ouvrir le dossier des journaux",
       "export": "Exporter un rapport de débogage",
       "exporting": "Exportation…",
-      "exportHint": "Enregistre un fichier .zip avec le journal récent, les versions utilisées et les derniers codes d'erreur. Les noms de dossiers et les chats sont masqués. Rien n'est envoyé ailleurs : vous choisissez de le partager ou non.",
+      "exportHint": "Enregistre un fichier .zip avec le journal récent, les versions utilisées et les derniers codes d'erreur. Les dossiers sont retirés, les noms de fichiers sont remplacés par des repères neutres (file-1, file-2…) et les chats sont masqués. Rien n'est envoyé ailleurs : vous choisissez de le partager ou non.",
       "exported": "Rapport enregistré : {{path}}"
     },
     "updates": {

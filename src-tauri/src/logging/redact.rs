@@ -1,6 +1,8 @@
 //! What never leaves as is: chat identifiers (hashed everywhere), secrets in texts that come
 //! from outside the Rust code (the UI), and, in `debug_export` only, user paths.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -86,9 +88,59 @@ fn link_end(chars: &[char], i: usize) -> usize {
     end
 }
 
-/// Replaces e-mail addresses, `+`-prefixed phone numbers, `tg://` links (QR login tokens,
-/// proxies), `t.me` proxy links and 32-hex-digit words (the shape of an `api_hash`) with
-/// placeholders. Applied to every text the UI sends to the journal, and to the export.
+fn is_base64url(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "_-".contains(c)
+}
+
+/// Phone numbers written without `+` in a national layout (`d` is a digit, the rest literal):
+/// fixed layouts only, so ids, dates, versions and addresses are left alone.
+const PHONE_SHAPES: [&str; 5] = [
+    "0d dd dd dd dd",
+    "0d.dd.dd.dd.dd",
+    "0d-dd-dd-dd-dd",
+    "ddd-ddd-dddd",
+    "(ddd) ddd-dddd",
+];
+
+/// Length of the national-layout phone number starting at `i` (a whole word), or `None`.
+fn phone_shape_at(chars: &[char], i: usize) -> Option<usize> {
+    if i > 0 && chars[i - 1].is_alphanumeric() {
+        return None;
+    }
+    PHONE_SHAPES.iter().find_map(|shape| {
+        let n = shape.chars().count();
+        let same = i + n <= chars.len()
+            && shape.chars().zip(&chars[i..]).all(|(p, c)| {
+                if p == 'd' {
+                    c.is_ascii_digit()
+                } else {
+                    p == *c
+                }
+            });
+        let whole = !matches!(chars.get(i + n), Some(c) if c.is_alphanumeric());
+        (same && whole).then_some(n)
+    })
+}
+
+/// Length of a bot token (`123456789:AA…`, 30 or more secret characters) starting at `i`.
+fn bot_token_at(chars: &[char], i: usize) -> Option<usize> {
+    if !chars[i].is_ascii_digit() || (i > 0 && chars[i - 1].is_ascii_digit()) {
+        return None;
+    }
+    let digits = chars[i..].iter().take_while(|c| c.is_ascii_digit()).count();
+    if !(5..=12).contains(&digits) || chars.get(i + digits) != Some(&':') {
+        return None;
+    }
+    let secret = chars[i + digits + 1..]
+        .iter()
+        .take_while(|c| is_base64url(**c))
+        .count();
+    (secret >= 30).then_some(digits + 1 + secret)
+}
+
+/// Replaces e-mail addresses, phone numbers, `SQZ1` license keys, bot tokens, `tg://` links
+/// (QR login tokens, proxies), `t.me` proxy links and 32-hex-digit words (the shape of an
+/// `api_hash`) with placeholders. Applied to every text the UI sends to the journal, and to the export.
 pub fn scrub_secrets(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
@@ -99,6 +151,31 @@ pub fn scrub_secrets(text: &str) -> String {
         if is_hex32_at(&chars, i) {
             out.push_str("<hex32>");
             i += API_HASH_HEX;
+            continue;
+        }
+        // `SQZ1.<payload>.<signature>`: a license key, base64url parts joined by dots.
+        if starts_with_text(&chars[i..], "SQZ1.") && (i == 0 || !chars[i - 1].is_alphanumeric()) {
+            let mut end = i + 5;
+            while end < chars.len() && (is_base64url(chars[end]) || chars[end] == '.') {
+                end += 1;
+            }
+            while chars[end - 1] == '.' {
+                end -= 1;
+            }
+            if end > i + 5 {
+                out.push_str("<license>");
+                i = end;
+                continue;
+            }
+        }
+        if let Some(len) = bot_token_at(&chars, i) {
+            out.push_str("<bot_token>");
+            i += len;
+            continue;
+        }
+        if let Some(len) = phone_shape_at(&chars, i) {
+            out.push_str("<phone>");
+            i += len;
             continue;
         }
         // tg://login?token=…, tg://… : up to whitespace or a quote.
@@ -122,9 +199,17 @@ pub fn scrub_secrets(text: &str) -> String {
             i = link_end(&chars, i);
             continue;
         }
-        // +33 6 12 34 56 78, +1-555-0100: 7 digits or more after the plus sign.
-        if chars[i] == '+' {
-            let mut end = i + 1;
+        // +33 6 12 34 56 78, 0033 6 12 34 56 78: 7 digits or more after the `+` or the `00`.
+        let prefix = if chars[i] == '+' {
+            1
+        } else if starts_with_text(&chars[i..], "00") && (i == 0 || !chars[i - 1].is_alphanumeric())
+        {
+            2
+        } else {
+            0
+        };
+        if prefix > 0 {
+            let mut end = i + prefix;
             let mut digits = 0;
             while end < chars.len() && (chars[end].is_ascii_digit() || " -().".contains(chars[end]))
             {
@@ -134,7 +219,7 @@ pub fn scrub_secrets(text: &str) -> String {
                 end += 1;
             }
             if digits >= 7 {
-                while end > i + 1 && !chars[end - 1].is_ascii_digit() {
+                while end > i + prefix && !chars[end - 1].is_ascii_digit() {
                     end -= 1;
                 }
                 out.push_str("<phone>");
@@ -199,60 +284,104 @@ fn path_prefix_at(chars: &[char], i: usize) -> Option<usize> {
 
 /// Characters that cannot be in a Windows path, so they end one (`:` past the drive too).
 fn ends_path(c: char) -> bool {
-    "\"'<>|*?\n\r\t:;,".contains(c)
+    "\"<>|*?\n\r\t:".contains(c)
 }
 
-/// `<path>/name`: the last component only; a bare profile folder (`C:\Users\name`) is hidden
-/// entirely since its name is the Windows account name.
-fn masked(path: &str) -> String {
-    let trimmed = path.trim_end_matches([' ', '\\', '/', '.']);
-    let parts: Vec<&str> = trimmed
-        .split(['\\', '/'])
-        .filter(|p| !p.is_empty())
-        .collect();
-    if parts.len() <= 3
-        && parts
-            .get(1)
-            .is_some_and(|p| p.eq_ignore_ascii_case("users"))
-    {
-        return "<path>".into();
+/// Valid in a Windows name (`Clients,Secret\a.mp4`), so they end a path only when no folder
+/// separator follows before the next character that cannot be in a path.
+fn ends_soft(chars: &[char], end: usize) -> bool {
+    ",;'".contains(chars[end])
+        && !chars[end + 1..]
+            .iter()
+            .take_while(|c| !ends_path(**c))
+            .any(|c| *c == '\\' || *c == '/')
+}
+
+/// Extensions kept on a masked file name: media types and `.part`, nothing that names anyone.
+const KEPT_EXTENSIONS: [&str; 20] = [
+    "mp4", "mkv", "mov", "webm", "avi", "m4v", "ts", "mp3", "m4a", "ogg", "wav", "flac", "jpg",
+    "jpeg", "png", "gif", "webp", "heic", "part", "exe",
+];
+
+/// The file names of one export: a name always gets the same marker, so support can follow one
+/// file across lines, and the next export starts again at `file-1`.
+#[derive(Default)]
+pub struct Masker {
+    names: RefCell<HashMap<String, String>>,
+}
+
+impl Masker {
+    fn marker(&self, name: &str) -> String {
+        let mut names = self.names.borrow_mut();
+        let next = names.len() + 1;
+        let key = name.to_lowercase();
+        names
+            .entry(key.clone())
+            .or_insert_with(|| {
+                let extension = Path::new(&key)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .filter(|e| KEPT_EXTENSIONS.contains(e));
+                match extension {
+                    Some(e) => format!("file-{next}.{e}"),
+                    None => format!("file-{next}"),
+                }
+            })
+            .clone()
     }
-    format!(
-        "<path>/{}",
-        parts.last().copied().unwrap_or_default().trim()
-    )
-}
 
-/// Replaces every absolute path in `text` by `<path>/<last component>`. Spaces are allowed
-/// inside a path, so a path followed by words keeps those words in its "name": never a folder.
-pub fn mask_paths(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut i = 0;
-    while i < chars.len() {
-        if let Some(prefix) = path_prefix_at(&chars, i) {
-            let mut end = i + prefix;
-            // A space followed by another path ends this one.
-            while end < chars.len()
-                && !ends_path(chars[end])
-                && !(chars[end].is_whitespace() && path_prefix_at(&chars, end + 1).is_some())
-            {
-                end += 1;
-            }
-            let path: String = chars[i..end].iter().collect();
-            out.push_str(&masked(&path));
-            i = end;
-            continue;
+    /// `<path>/file-N`: no folder, the last component as a marker; a bare profile folder
+    /// (`C:\Users\name`) is hidden entirely since its name is the Windows account name.
+    fn masked(&self, path: &str) -> String {
+        let trimmed = path.trim_end_matches([' ', '\\', '/', '.']);
+        let parts: Vec<&str> = trimmed
+            .split(['\\', '/'])
+            .filter(|p| !p.is_empty())
+            .collect();
+        let name = parts.last().copied().unwrap_or_default().trim();
+        if name.is_empty()
+            || (parts.len() <= 3
+                && parts
+                    .get(1)
+                    .is_some_and(|p| p.eq_ignore_ascii_case("users")))
+        {
+            return "<path>".into();
         }
-        out.push(chars[i]);
-        i += 1;
+        format!("<path>/{}", self.marker(name))
     }
-    out
-}
 
-/// Everything `debug_export` applies to a text: paths, then secrets.
-pub fn mask_text(text: &str) -> String {
-    scrub_secrets(&mask_paths(text))
+    /// Replaces every absolute path in `text` by `<path>/file-N`. Spaces are allowed inside a
+    /// path, so a path followed by words keeps those words in its "name": never a folder.
+    pub fn mask_paths(&self, text: &str) -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let mut out = String::with_capacity(text.len());
+        let mut i = 0;
+        while i < chars.len() {
+            if let Some(prefix) = path_prefix_at(&chars, i) {
+                let mut end = i + prefix;
+                // A space followed by another path ends this one.
+                while end < chars.len()
+                    && !ends_path(chars[end])
+                    && !ends_soft(&chars, end)
+                    && !(chars[end].is_whitespace() && path_prefix_at(&chars, end + 1).is_some())
+                {
+                    end += 1;
+                }
+                let path: String = chars[i..end].iter().collect();
+                out.push_str(&self.masked(&path));
+                i = end;
+                continue;
+            }
+            out.push(chars[i]);
+            i += 1;
+        }
+        out
+    }
+
+    /// Everything `debug_export` applies to a text: paths, then secrets.
+    pub fn mask_text(&self, text: &str) -> String {
+        scrub_secrets(&self.mask_paths(text))
+    }
 }
 
 /// Applies `f` to every string of a JSON value (keys untouched).
@@ -319,41 +448,125 @@ mod tests {
     }
 
     #[test]
-    fn paths_keep_only_their_last_component() {
+    fn paths_keep_only_a_marker_of_their_last_component() {
         let cases = [
             (
                 "C:\\Users\\Alice\\Videos\\clip one.mp4",
-                "<path>/clip one.mp4",
+                "<path>/file-1.mp4",
             ),
             (
                 "open C:/Users/Alice/a.mkv: No such file",
-                "open <path>/a.mkv: No such file",
+                "open <path>/file-1.mkv: No such file",
             ),
             (
-                "\\\\nas\\share\\x.mp4 and D:\\tmp\\1\\",
-                "<path>/x.mp4 and <path>/1",
+                "\\\\nas\\share\\x.mp4|D:\\tmp\\1\\",
+                "<path>/file-1.mp4|<path>/file-2",
             ),
-            ("\\\\?\\C:\\long\\b.mp4", "<path>/b.mp4"),
-            ("-i \"C:\\in put\\a.mkv\" -y", "-i \"<path>/a.mkv\" -y"),
+            ("\\\\?\\C:\\long\\b.mp4", "<path>/file-1.mp4"),
+            ("-i \"C:\\in put\\a.mkv\" -y", "-i \"<path>/file-1.mkv\" -y"),
+            ("C:\\Users\\Alice", "<path>"),
             ("ratio 16:9, h264", "ratio 16:9, h264"),
             ("http://x/y", "http://x/y"),
         ];
         for (text, expected) in cases {
-            assert_eq!(mask_paths(text), expected, "{text}");
+            assert_eq!(Masker::default().mask_paths(text), expected, "{text}");
         }
     }
 
     #[test]
+    fn a_name_has_one_marker_for_the_whole_archive_and_unknown_extensions_go() {
+        let masker = Masker::default();
+        let first = masker.mask_text("C:\\Alice\\Wedding Jones.MP4|D:\\x\\secret.acme");
+        assert_eq!(first, "<path>/file-1.mp4|<path>/file-2");
+        assert_eq!(
+            masker.mask_text("E:\\other\\wedding jones.mp4|C:\\y\\Other.mov"),
+            "<path>/file-1.mp4|<path>/file-3.mov"
+        );
+    }
+
+    #[test]
+    fn commas_semicolons_and_apostrophes_in_folder_names_do_not_end_the_path() {
+        let masker = Masker::default();
+        let cases = [
+            "C:\\Users\\Alice\\Clients,Confidentiel\\dossier\\clip.mp4",
+            "C:\\Work\\Clients;Secret\\dossier\\clip.mp4",
+            "C:\\Work\\O'Brien Films\\dossier\\clip.mp4",
+            "C:\\Work\\Clients, Confidentiel Inc\\dossier\\clip.mp4",
+            "failed on C:\\Work\\Clients,Secret\\dossier\\clip.mp4",
+        ];
+        for text in cases {
+            let masked = masker.mask_text(text);
+            for word in [
+                "Confidentiel",
+                "Secret",
+                "Brien",
+                "dossier",
+                "Alice",
+                "Work",
+            ] {
+                assert!(!masked.contains(word), "{text} -> {masked}");
+            }
+            assert!(masked.ends_with("<path>/file-1.mp4"), "{masked}");
+        }
+        // The same characters still end a path when they are punctuation around it.
+        assert_eq!(
+            Masker::default().mask_text("'C:\\a\\b.mp4', C:\\c\\d.mp4; then 'E:\\f\\g.mp4'"),
+            "'<path>/file-1.mp4', <path>/file-2.mp4; then '<path>/file-3.mp4'"
+        );
+    }
+
+    #[test]
+    fn json_separators_end_a_path_inside_a_string() {
+        let masker = Masker::default();
+        let mut value = json!({
+            "list": ["C:\\Clients,Secret\\dossier\\a.mp4", "D:\\x;y\\b.mkv"],
+            "text": "{\"in\":\"C:\\\\Clients,Secret\\\\dossier\\\\a.mp4\",\"n\":3}"
+        });
+        map_strings(&mut value, &|text| masker.mask_text(text));
+        assert_eq!(
+            value,
+            json!({
+                "list": ["<path>/file-1.mp4", "<path>/file-2.mkv"],
+                "text": "{\"in\":\"<path>/file-1.mp4\",\"n\":3}"
+            })
+        );
+    }
+
+    #[test]
+    fn licenses_bot_tokens_and_phones_without_a_plus_are_scrubbed() {
+        let text = "key SQZ1.eyJ2IjoxfQ_-abc.c2ln-_xyz. then \
+                    https://api.telegram.org/bot123456789:AAHdummyDummyDummyDummyDummyDummy12/getMe, \
+                    id 987654321:ZZdummyDummyDummyDummyDummyDummyDum, \
+                    call 06 12 34 56 78 or 06.12.34.56.78 or 555-010-0199 or (555) 010-0199 \
+                    or 0033 6 12 34 56 78 or 0033612345678.";
+        assert_eq!(
+            scrub_secrets(text),
+            "key <license>. then https://api.telegram.org/bot<bot_token>/getMe, \
+             id <bot_token>, call <phone> or <phone> or <phone> or <phone> \
+             or <phone> or <phone>."
+        );
+    }
+
+    #[test]
+    fn numbers_that_are_not_secrets_stay() {
+        let text = "SQZ1 and SQZ1. alone, xSQZ1.abc, at 12:34567 size 1234567890123 \
+                    ip 192.168.1.100 date 2026-10-09 07:12:01 v1.2.3 \
+                    token 123456789:short 4 5 6 0612345678 100-200-3000x";
+        assert_eq!(scrub_secrets(text), text);
+    }
+
+    #[test]
     fn every_string_of_a_value_is_masked() {
+        let masker = Masker::default();
         let mut value = json!({
             "args": ["-i", "C:\\Users\\Alice\\a.mp4"],
             "nested": { "dir": "C:\\Users\\Alice" },
             "count": 3
         });
-        map_strings(&mut value, &mask_text);
+        map_strings(&mut value, &|text| masker.mask_text(text));
         assert_eq!(
             value,
-            json!({ "args": ["-i", "<path>/a.mp4"], "nested": { "dir": "<path>" }, "count": 3 })
+            json!({ "args": ["-i", "<path>/file-1.mp4"], "nested": { "dir": "<path>" }, "count": 3 })
         );
     }
 }

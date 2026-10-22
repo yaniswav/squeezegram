@@ -756,7 +756,7 @@
       "openFolder": "Open the log folder",
       "export": "Export a debug report",
       "exporting": "Exporting…",
-      "exportHint": "Saves a .zip file with the recent journal, the versions in use and the latest error codes. Folder names and chats are masked. Nothing is sent anywhere: you choose whether to share it.",
+      "exportHint": "Saves a .zip file with the recent journal, the versions in use and the latest error codes. Folders are removed, file names are replaced by neutral markers (file-1, file-2…) and chats are masked. Nothing is sent anywhere: you choose whether to share it.",
       "exported": "Report saved: {{path}}"
     },
     "updates": {

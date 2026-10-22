@@ -771,7 +771,7 @@
       "openFolder": "Abrir a pasta de registros",
       "export": "Exportar um relatório de depuração",
       "exporting": "Exportando…",
-      "exportHint": "Salva um arquivo .zip com o registro recente, as versões em uso e os últimos códigos de erro. Nomes de pastas e chats são mascarados. Nada é enviado para nenhum lugar: você decide se quer compartilhar.",
+      "exportHint": "Salva um arquivo .zip com o registro recente, as versões em uso e os últimos códigos de erro. As pastas são removidas, os nomes de arquivo são trocados por marcadores neutros (file-1, file-2…) e os chats são mascarados. Nada é enviado para nenhum lugar: você decide se quer compartilhar.",
       "exported": "Relatório salvo: {{path}}"
     },
     "updates": {

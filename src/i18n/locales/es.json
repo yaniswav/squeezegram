@@ -771,7 +771,7 @@
       "openFolder": "Abrir la carpeta de registros",
       "export": "Exportar un informe de depuración",
       "exporting": "Exportando…",
-      "exportHint": "Guarda un archivo .zip con el registro reciente, las versiones en uso y los últimos códigos de error. Los nombres de carpetas y los chats se ocultan. No se envía nada a ningún sitio: usted decide si lo comparte.",
+      "exportHint": "Guarda un archivo .zip con el registro reciente, las versiones en uso y los últimos códigos de error. Las carpetas se eliminan, los nombres de archivo se sustituyen por marcadores neutros (file-1, file-2…) y los chats se ocultan. No se envía nada a ningún sitio: usted decide si lo comparte.",
       "exported": "Informe guardado: {{path}}"
     },
     "updates": {
