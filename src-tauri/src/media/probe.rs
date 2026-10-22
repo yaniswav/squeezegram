@@ -45,6 +45,19 @@ impl VideoInfo {
         matches!(self.field_order.as_deref(), Some("tt" | "bb" | "tb" | "bt"))
     }
 
+    /// More than 8 bits per color, by the name of the pixel format (`yuv420p10le`, `rgb48be`,
+    /// `gray16le`, `p010le`, `gbrpf32le`).
+    pub fn deep_color(&self) -> bool {
+        let Some(fmt) = self.pix_fmt.as_deref() else {
+            return false;
+        };
+        let name = fmt.trim_end_matches("le").trim_end_matches("be");
+        let digits = name.len() - name.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+        name[name.len() - digits..]
+            .parse::<u32>()
+            .is_ok_and(|bits| matches!(bits, 9 | 10 | 12 | 14 | 16 | 32 | 48 | 64))
+    }
+
     pub fn has_alpha(&self) -> bool {
         let Some(fmt) = self.pix_fmt.as_deref() else {
             return false;
@@ -359,6 +372,8 @@ async fn probe_as(
         return Err(MediaError::failed(
             if super::unsupported_format(&output.stderr_tail.join("\n")) {
                 "INPUT_FORMAT_UNSUPPORTED"
+            } else if super::out_of_memory(&output.stderr_tail.join("\n"), output.code) {
+                "MEMORY_LIMIT"
             } else {
                 "FILE_UNREADABLE"
             },
@@ -453,6 +468,46 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+
+    #[test]
+    fn deep_color_is_read_from_the_pixel_format_name() {
+        let deep = |fmt: &str| {
+            let video = VideoInfo {
+                index: 0,
+                codec: "png".into(),
+                profile: None,
+                width: 1,
+                height: 1,
+                sar: None,
+                pix_fmt: Some(fmt.into()),
+                field_order: None,
+                color_transfer: None,
+                rotation: 0,
+                bit_rate: None,
+                hdr: false,
+            };
+            video.deep_color()
+        };
+        for wide in [
+            "rgb48be",
+            "rgba64le",
+            "gray16be",
+            "ya16le",
+            "yuv420p10le",
+            "yuv444p12le",
+            "gbrp16le",
+            "p010le",
+            "gbrpf32le",
+        ] {
+            assert!(deep(wide), "{wide}");
+        }
+        for plain in [
+            "rgb24", "rgba", "gray", "ya8", "pal8", "yuvj420p", "yuv420p", "bgr24", "rgb565le",
+            "rgb555le", "monob",
+        ] {
+            assert!(!deep(plain), "{plain}");
+        }
+    }
 
     #[test]
     fn both_probes_restrict_formats_and_protocols() {

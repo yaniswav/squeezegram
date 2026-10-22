@@ -333,6 +333,7 @@ mod tests {
                 preset: plan::EncodePreset::Balanced,
                 target_bytes: None,
                 moov_first: None,
+                caps: crate::caps::Caps::default(),
             };
             plan::build_plan(Some(&info), &input).unwrap()
         };

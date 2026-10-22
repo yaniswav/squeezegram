@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use super::QueueError;
+use crate::caps::Caps;
 use crate::media::plan;
 
 /// Video containers ffprobe/ffmpeg handle; anything else in a folder is skipped.
@@ -47,16 +48,23 @@ pub struct Expanded {
 }
 
 /// Expands folders. A path that does not exist or cannot be read refuses the whole call
-/// (`FILE_UNREADABLE`), as for a single file. Links and junctions inside a folder are not
-/// followed (no cycles); hidden entries (`.name`) are skipped silently.
-pub fn expand(paths: &[String]) -> Result<Expanded, QueueError> {
+/// (`FILE_UNREADABLE`), as for a single file; so does a folder deeper than `caps.folder_depth`
+/// levels or more than `caps.files_per_add` files in all (`FOLDER_TOO_DEEP`, `TOO_MANY_FILES`).
+/// Links and junctions inside a folder are not followed (no cycles); hidden entries (`.name`)
+/// are skipped silently.
+pub fn expand(paths: &[String], caps: &Caps) -> Result<Expanded, QueueError> {
     let mut expanded = Expanded::default();
     for path in paths {
         let unreadable = || QueueError::FileUnreadable(path.clone());
         let metadata = std::fs::metadata(path).map_err(|_| unreadable())?;
         if metadata.is_dir() {
             let mut skipped = 0;
-            walk(Path::new(path), &mut expanded.files, &mut skipped).map_err(|_| unreadable())?;
+            walk(Path::new(path), caps, &mut expanded.files, &mut skipped).map_err(|error| {
+                match error {
+                    QueueError::Io(_) => unreadable(),
+                    other => other,
+                }
+            })?;
             if skipped > 0 {
                 expanded.skipped.push(Skipped {
                     folder: path.clone(),
@@ -64,14 +72,29 @@ pub fn expand(paths: &[String]) -> Result<Expanded, QueueError> {
                 });
             }
         } else {
+            too_many(expanded.files.len(), caps)?;
             expanded.files.push(path.clone());
         }
     }
     Ok(expanded)
 }
 
-fn walk(dir: &Path, files: &mut Vec<String>, skipped: &mut usize) -> std::io::Result<()> {
-    let mut entries: Vec<(String, PathBuf, std::fs::FileType)> = Vec::new();
+/// `TOO_MANY_FILES` when one more file would pass the cap of an add.
+fn too_many(files: usize, caps: &Caps) -> Result<(), QueueError> {
+    if files >= caps.files_per_add {
+        return Err(QueueError::OverCap {
+            code: "TOO_MANY_FILES",
+            max: caps.files_per_add,
+        });
+    }
+    Ok(())
+}
+
+type Listing = std::vec::IntoIter<(String, PathBuf, std::fs::FileType)>;
+
+/// The entries of `dir`, sorted by name (case-insensitive), hidden ones left out.
+fn entries(dir: &Path) -> std::io::Result<Listing> {
+    let mut entries = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -81,13 +104,37 @@ fn walk(dir: &Path, files: &mut Vec<String>, skipped: &mut usize) -> std::io::Re
         entries.push((name.to_lowercase(), entry.path(), entry.file_type()?));
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
-    for (_, path, kind) in entries {
+    Ok(entries.into_iter())
+}
+
+/// Depth first with a stack of its own, so that no tree can overflow the thread's: one pending
+/// listing per level, at most `caps.folder_depth` below `dir`.
+fn walk(
+    dir: &Path,
+    caps: &Caps,
+    files: &mut Vec<String>,
+    skipped: &mut usize,
+) -> Result<(), QueueError> {
+    let mut levels = vec![entries(dir)?];
+    while let Some(level) = levels.last_mut() {
+        let Some((_, path, kind)) = level.next() else {
+            levels.pop();
+            continue;
+        };
         if kind.is_symlink() {
             continue;
         }
         if kind.is_dir() {
-            walk(&path, files, skipped)?;
+            // `levels.len()` is the depth of the folder about to be listed.
+            if levels.len() > caps.folder_depth {
+                return Err(QueueError::OverCap {
+                    code: "FOLDER_TOO_DEEP",
+                    max: caps.folder_depth,
+                });
+            }
+            levels.push(entries(&path)?);
         } else if kind.is_file() && is_media(&path) {
+            too_many(files.len(), caps)?;
             files.push(path.to_string_lossy().into_owned());
         } else {
             *skipped += 1;
@@ -121,7 +168,11 @@ mod tests {
         }
         let single = dir.file("loose.bin", b"x");
 
-        let expanded = expand(&[single.clone(), root.to_string_lossy().into_owned()]).unwrap();
+        let expanded = expand(
+            &[single.clone(), root.to_string_lossy().into_owned()],
+            &Caps::default(),
+        )
+        .unwrap();
         let names: Vec<String> = expanded
             .files
             .iter()
@@ -158,14 +209,106 @@ mod tests {
         let dir = TestDir::new("intake-missing");
         let missing = dir.path().join("nope").to_string_lossy().into_owned();
         assert!(matches!(
-            expand(std::slice::from_ref(&missing)),
+            expand(std::slice::from_ref(&missing), &Caps::default()),
             Err(QueueError::FileUnreadable(p)) if p == missing
         ));
         let empty = dir.path().join("empty");
         std::fs::create_dir(&empty).unwrap();
         assert_eq!(
-            expand(&[empty.to_string_lossy().into_owned()]).unwrap(),
+            expand(&[empty.to_string_lossy().into_owned()], &Caps::default()).unwrap(),
             Expanded::default()
+        );
+    }
+
+    fn over_cap(result: Result<Expanded, QueueError>) -> (&'static str, usize) {
+        match result {
+            Err(QueueError::OverCap { code, max }) => (code, max),
+            other => panic!("expected a cap refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_tree_deeper_than_the_cap_is_refused_and_the_cap_itself_is_walked() {
+        let dir = TestDir::new("intake-depth");
+        let caps = Caps {
+            folder_depth: 3,
+            ..Caps::default()
+        };
+        // `leaf` sits 3 levels under `root`: allowed; one more level is not.
+        let root = dir.path().join("root");
+        let leaf = root.join("a").join("b").join("c");
+        std::fs::create_dir_all(&leaf).unwrap();
+        std::fs::write(leaf.join("deep.mp4"), b"x").unwrap();
+        let given = [root.to_string_lossy().into_owned()];
+        assert_eq!(expand(&given, &caps).unwrap().files.len(), 1);
+        std::fs::create_dir(leaf.join("d")).unwrap();
+        assert_eq!(over_cap(expand(&given, &caps)), ("FOLDER_TOO_DEEP", 3));
+    }
+
+    #[test]
+    fn a_2000_level_tree_is_walked_on_a_small_stack_and_refused_by_the_cap() {
+        let dir = TestDir::new("intake-2000");
+        let mut deep = dir.path().join("root");
+        for _ in 0..2000 {
+            deep.push("d");
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("bottom.mp4"), b"x").unwrap();
+        let given = [dir.path().join("root").to_string_lossy().into_owned()];
+        assert_eq!(
+            over_cap(expand(&given, &Caps::default())),
+            ("FOLDER_TOO_DEEP", 32)
+        );
+        // With the cap out of the way, a stack that a recursion of 2000 levels would overflow.
+        let caps = Caps {
+            folder_depth: 5000,
+            ..Caps::default()
+        };
+        let files = std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || expand(&given, &caps).map(|expanded| expanded.files.len()))
+            .unwrap()
+            .join()
+            .expect("no stack overflow")
+            .unwrap();
+        assert_eq!(files, 1);
+    }
+
+    #[test]
+    fn more_files_than_the_cap_refuse_the_add_and_the_cap_itself_is_taken() {
+        let dir = TestDir::new("intake-count");
+        let caps = Caps {
+            files_per_add: 4,
+            ..Caps::default()
+        };
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        for name in ["a.mp4", "b.mp4", "sub/c.mp4", "sub/d.jpg"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        let folder = [root.to_string_lossy().into_owned()];
+        assert_eq!(expand(&folder, &caps).unwrap().files.len(), 4);
+        // Not media: skipped, not counted.
+        std::fs::write(root.join("notes.txt"), b"x").unwrap();
+        assert_eq!(expand(&folder, &caps).unwrap().files.len(), 4);
+        std::fs::write(root.join("e.mov"), b"x").unwrap();
+        assert_eq!(over_cap(expand(&folder, &caps)), ("TOO_MANY_FILES", 4));
+        // Files given one by one count too.
+        let single = dir.file("loose.bin", b"x");
+        let one = Caps {
+            files_per_add: 1,
+            ..Caps::default()
+        };
+        assert_eq!(
+            expand(std::slice::from_ref(&single), &one)
+                .unwrap()
+                .files
+                .len(),
+            1
+        );
+        assert_eq!(
+            over_cap(expand(&[single.clone(), single], &one)),
+            ("TOO_MANY_FILES", 1)
         );
     }
 }

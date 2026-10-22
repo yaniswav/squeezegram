@@ -74,6 +74,14 @@
     "ENCODER_FALLBACK_suspected_kill_gpu_off": "L'encodeur GPU ({{from}}) s'est arrêté après {{duration}} sans message d'erreur. Un autre programme a peut-être arrêté ffmpeg, mais une panne de l'encodeur GPU reste possible. squeezegram est passé à l'encodeur CPU ({{to}}) et le conserve jusqu'au redémarrage de l'application.",
     "CODEC_FALLBACK": "Le HEVC n'est pas disponible sur cet ordinateur : ce fichier a donc été compressé en H.264.",
     "OUTPUT_TOO_LARGE": "Ce fichier ne peut pas passer sous la limite d'envoi, même compressé.",
+    "PHOTO_TOO_LARGE": "Cette photo fait {{found}} mégapixels et la limite est de {{max}}. Réduisez-la ou envoyez-la comme fichier.",
+    "VIDEO_TOO_LARGE": "Les images de cette vidéo font {{found}} mégapixels et la limite est de {{max}}. Réduisez-la ou envoyez-la comme fichier.",
+    "VIDEO_TOO_LONG": "Cette vidéo dure {{found}} heures et la limite est de {{max}}. Coupez-la ou envoyez-la comme fichier.",
+    "MEMORY_LIMIT": "Le traitement de ce fichier demandait trop de mémoire et a été arrêté. Utilisez un fichier plus petit ou envoyez-le comme fichier.",
+    "ENCODE_STALLED": "La compression n'a pas progressé pendant {{minutes}} minutes et a été arrêtée. Réessayez avec ce fichier.",
+    "FOLDER_TOO_DEEP": "Les sous-dossiers descendent à plus de {{max}} niveaux. Rien n'a été ajouté. Choisissez un dossier plus proche des fichiers.",
+    "TOO_MANY_FILES": "Cet ajout porterait sur plus de {{max}} fichiers à la fois. Rien n'a été ajouté. Ajoutez-les en plusieurs fois.",
+    "QUEUE_FULL": "La file contiendrait plus de {{max}} éléments. Rien n'a été ajouté. Videz les éléments terminés ou ajoutez moins de fichiers.",
     "CAPTION_TOO_LONG": "Cette légende est trop longue : {{length}} caractères, alors que Telegram en autorise {{max}}. Raccourcissez-la et réessayez ; rien n'a été envoyé.",
     "DISK_SPACE": "Espace libre insuffisant dans le dossier temporaire.",
     "DUPLICATE": "Déjà envoyé à cette destination.",
@@ -626,6 +634,23 @@
         "custom": "Taille personnalisée",
         "mb": "Target size (Mo)",
         "error": "Enter a whole number of Mo from 1 to 4000."
+      },
+      "caps": {
+        "title": "Limites de sécurité",
+        "hint": "Elles empêchent un seul fichier d'épuiser la mémoire ou le temps de cet ordinateur. Tout le monde a les valeurs par défaut affichées ; avec Premium, vous pouvez abaisser chaque limite ou la relever jusqu'au double de sa valeur par défaut.",
+        "range": "Par défaut {{default}}, jusqu'à {{max}}.",
+        "error": "Saisissez un nombre de {{min}} à {{max}}.",
+        "errorWhole": "Saisissez un nombre entier de {{min}} à {{max}}.",
+        "photo_mpx": "Plus grande photo (Mpx)",
+        "photo_wide_mpx": "Plus grande photo avec transparence ou 16 bits (Mpx)",
+        "video_mpx": "Plus grande image de vidéo (Mpx)",
+        "threads": "Threads de l'encodeur",
+        "memory_gb": "Mémoire par processus ffmpeg (Go)",
+        "duration_h": "Vidéo la plus longue (heures)",
+        "stall_min": "Arrêter un encodage bloqué depuis (minutes)",
+        "folder_depth": "Niveaux de dossiers",
+        "files_per_add": "Fichiers par ajout",
+        "queue_items": "Éléments dans la file"
       }
     },
     "watch": {

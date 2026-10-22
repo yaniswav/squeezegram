@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::caps::CapSettings;
 use crate::media::plan::{EncodePreset, ResolutionCap, TARGET_MB_RANGE, VideoCodec};
 use crate::queue::orchestrator::PauseRange;
 use crate::transport::proxy::{Proxy, ProxyKind};
@@ -140,6 +141,9 @@ pub struct AdvancedEncoding {
     /// Custom output size in MiB, within `TARGET_MB_RANGE`. `null`: fill the upload limit. At
     /// or above the effective limit it is the same as `null`.
     pub target_mb: Option<u64>,
+    /// Safety caps (`caps`), adjustable within a hard ceiling. Out-of-range values are clamped
+    /// where they are used, never refused.
+    pub caps: CapSettings,
 }
 
 impl AdvancedEncoding {
@@ -150,6 +154,7 @@ impl AdvancedEncoding {
         video_codec: VideoCodec::H264,
         preset: EncodePreset::Balanced,
         target_mb: None,
+        caps: CapSettings::DEFAULT,
     };
 }
 
@@ -771,12 +776,77 @@ mod tests {
               "updates": { "check_automatically": true, "last_check_at": null },
               "advanced_encoding": {
                 "max_resolution": "1080p", "audio_kbps": 128, "video_codec": "h264",
-                "preset": "balanced", "target_mb": null
+                "preset": "balanced", "target_mb": null,
+                "caps": {
+                  "photo_mpx": 210.0, "photo_wide_mpx": 64.0, "video_mpx": 37.75,
+                  "threads": 6.0, "memory_gb": 4.0, "duration_h": 12.0, "stall_min": 10.0,
+                  "folder_depth": 32.0, "files_per_add": 10000.0, "queue_items": 20000.0
+                }
               },
               "background": { "close_action": "quit" },
               "network": { "proxy": null },
               "privacy": { "strip_metadata": true }
             })
+        );
+    }
+
+    #[test]
+    fn saved_caps_out_of_range_load_and_are_clamped_where_used() {
+        let dir = TestDir::new("settings-caps");
+        let path = dir.path().join(FILE_NAME);
+        // A file without caps (older, or the section removed) takes the defaults.
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old["advanced_encoding"]
+            .as_object_mut()
+            .unwrap()
+            .remove("caps");
+        std::fs::write(&path, old.to_string()).unwrap();
+        let store = SettingsStore::load(path.clone()).unwrap();
+        assert_eq!(store.get().advanced_encoding.caps, CapSettings::DEFAULT);
+
+        // Numbers no page would send: the app starts, the file is not rewritten, and the
+        // values in use are clamped to [1, twice the default].
+        let mut wild = serde_json::to_value(Settings::default()).unwrap();
+        wild["advanced_encoding"]["caps"] = json!({
+            "photo_mpx": -3, "photo_wide_mpx": 1e300, "video_mpx": 0, "threads": 1000000,
+            "memory_gb": 0.2, "duration_h": 99, "stall_min": -1, "folder_depth": 7.6,
+            "files_per_add": 4e9, "queue_items": 5
+        });
+        let text = wild.to_string();
+        std::fs::write(&path, &text).unwrap();
+        let store = SettingsStore::load(path.clone()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        let caps = store.get().advanced_encoding.caps.resolve();
+        assert_eq!(
+            (caps.photo_pixels, caps.photo_wide_pixels, caps.video_pixels),
+            (1_000_000, 128_000_000, 1_000_000)
+        );
+        assert_eq!(
+            (caps.threads, caps.memory_bytes, caps.max_duration_s),
+            (12, 1 << 30, 24 * 3600)
+        );
+        assert_eq!(
+            (
+                caps.stall,
+                caps.folder_depth,
+                caps.files_per_add,
+                caps.queue_items
+            ),
+            (Duration::from_secs(60), 8, 20_000, 5)
+        );
+
+        // A patch changes only the caps it names.
+        let saved = store
+            .set(&json!({ "advanced_encoding": { "caps": { "photo_mpx": 300 } } }))
+            .unwrap();
+        assert_eq!(saved.advanced_encoding.caps.photo_mpx, 300.0);
+        assert_eq!(saved.advanced_encoding.caps.threads, 1e6);
+        assert_eq!(
+            store
+                .set(&json!({ "advanced_encoding": { "caps": { "threads": "many" } } }))
+                .unwrap_err()
+                .code(),
+            "SETTINGS_INVALID"
         );
     }
 

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs"
 import { test } from "node:test"
 import {
   AUTOMATIC_ENCODING,
+  DEFAULT_CAPS,
   effectiveEncoding,
   encodingOverrideDecoder,
   isTargetMb,
@@ -259,6 +260,7 @@ test("without the feature the automatic values are shown, whatever is saved", ()
     video_codec: "hevc",
     preset: "quality",
     target_mb: 50,
+    caps: { ...DEFAULT_CAPS, threads: 12, photo_mpx: 400 },
   } as const
 
   assert.deepEqual(effectiveEncoding(saved, true), saved)
@@ -268,6 +270,7 @@ test("without the feature the automatic values are shown, whatever is saved", ()
     video_codec: "h264",
     preset: "balanced",
     target_mb: null,
+    caps: DEFAULT_CAPS,
   })
   assert.deepEqual(effectiveEncoding(saved, false), AUTOMATIC_ENCODING)
 

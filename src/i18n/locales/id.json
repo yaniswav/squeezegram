@@ -74,6 +74,14 @@
     "ENCODER_FALLBACK_suspected_kill_gpu_off": "Encoder GPU ({{from}}) berhenti setelah {{duration}} tanpa pesan kesalahan. Program lain mungkin telah menghentikan ffmpeg, tetapi kegagalan encoder GPU juga mungkin terjadi. squeezegram beralih ke encoder CPU ({{to}}) dan terus memakainya sampai aplikasi dimulai ulang.",
     "CODEC_FALLBACK": "HEVC tidak tersedia di komputer ini, sehingga berkas ini dikompresi sebagai H.264.",
     "OUTPUT_TOO_LARGE": "Berkas ini tidak dapat masuk di bawah batas unggah, bahkan setelah dikompresi.",
+    "PHOTO_TOO_LARGE": "Foto ini berukuran {{found}} megapiksel dan batasnya {{max}}. Kecilkan, atau kirim sebagai berkas.",
+    "VIDEO_TOO_LARGE": "Bingkai video ini berukuran {{found}} megapiksel dan batasnya {{max}}. Kecilkan, atau kirim sebagai berkas.",
+    "VIDEO_TOO_LONG": "Video ini berdurasi {{found}} jam dan batasnya {{max}}. Potong, atau kirim sebagai berkas.",
+    "MEMORY_LIMIT": "Pemrosesan berkas ini membutuhkan terlalu banyak memori dan dihentikan. Gunakan berkas yang lebih kecil, atau kirim sebagai berkas.",
+    "ENCODE_STALLED": "Kompresi tidak maju selama {{minutes}} menit dan dihentikan. Coba lagi dengan berkas ini.",
+    "FOLDER_TOO_DEEP": "Subfolder lebih dari {{max}} tingkat dalamnya. Tidak ada yang ditambahkan. Pilih folder yang lebih dekat ke berkas.",
+    "TOO_MANY_FILES": "Ini akan menambahkan lebih dari {{max}} berkas sekaligus. Tidak ada yang ditambahkan. Tambahkan secara bertahap.",
+    "QUEUE_FULL": "Antrean akan berisi lebih dari {{max}} item. Tidak ada yang ditambahkan. Bersihkan item yang selesai, atau tambahkan lebih sedikit berkas.",
     "CAPTION_TOO_LONG": "Keterangan ini terlalu panjang: {{length}} karakter, sedangkan Telegram mengizinkan {{max}}. Perpendek lalu coba lagi; tidak ada yang dikirim.",
     "DISK_SPACE": "Ruang kosong di folder sementara tidak cukup.",
     "DUPLICATE": "Sudah pernah dikirim ke tujuan ini.",
@@ -596,6 +604,23 @@
         "custom": "Ukuran kustom",
         "mb": "Ukuran target (MB)",
         "error": "Masukkan bilangan bulat MB dari 1 sampai 4000."
+      },
+      "caps": {
+        "title": "Batas keamanan",
+        "hint": "Batas ini mencegah satu berkas menghabiskan memori atau waktu komputer ini. Semua orang mendapat nilai bawaan yang ditampilkan; dengan Premium Anda dapat menurunkan setiap batas atau menaikkannya hingga dua kali nilai bawaan.",
+        "range": "Bawaan {{default}}, hingga {{max}}.",
+        "error": "Masukkan angka dari {{min}} sampai {{max}}.",
+        "errorWhole": "Masukkan bilangan bulat dari {{min}} sampai {{max}}.",
+        "photo_mpx": "Foto terbesar (Mpx)",
+        "photo_wide_mpx": "Foto terbesar dengan transparansi atau 16 bit (Mpx)",
+        "video_mpx": "Bingkai video terbesar (Mpx)",
+        "threads": "Thread encoder",
+        "memory_gb": "Memori per proses ffmpeg (GB)",
+        "duration_h": "Video terpanjang (jam)",
+        "stall_min": "Hentikan encode yang macet selama (menit)",
+        "folder_depth": "Tingkat folder",
+        "files_per_add": "Berkas per penambahan",
+        "queue_items": "Item dalam antrean"
       }
     },
     "watch": {

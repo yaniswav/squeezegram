@@ -40,6 +40,10 @@ pub enum QueueError {
     ItemStarted(i64),
     #[error("unreadable file: {0}")]
     FileUnreadable(String),
+    /// An add over a safety cap (`caps`): `FOLDER_TOO_DEEP`, `TOO_MANY_FILES` or `QUEUE_FULL`,
+    /// with the cap in effect.
+    #[error("{code}: over the cap of {max}")]
+    OverCap { code: &'static str, max: usize },
     #[error("invalid value in database: {0}")]
     InvalidValue(String),
     #[error("database schema version {0} is newer than this app")]
@@ -62,6 +66,7 @@ impl QueueError {
             QueueError::IllegalTransition { .. } => "ILLEGAL_TRANSITION",
             QueueError::ItemStarted(_) => "ITEM_STARTED",
             QueueError::FileUnreadable(_) => "FILE_UNREADABLE",
+            QueueError::OverCap { code, .. } => code,
         }
     }
 }

@@ -13,6 +13,17 @@ use tokio_util::sync::CancellationToken;
 /// Upper bound of collected stdout (ffprobe JSON is a few KB).
 const MAX_COLLECTED: usize = 32 * 1024 * 1024;
 
+/// Memory one child may use, set by `set_memory_limit` before a job starts children. The
+/// default is the cap everyone has (`caps::CapSettings::DEFAULT`).
+static MEMORY_LIMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(4 << 30);
+
+/// Limits the memory of every ffmpeg and ffprobe started from now on (a running one keeps what
+/// it has: Windows applies the limit to the next allocations). A child that cannot get more
+/// fails like an ordinary ffmpeg error. Windows only (the Job Object).
+pub fn set_memory_limit(bytes: u64) {
+    MEMORY_LIMIT.store(bytes, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ending {
     /// The process ended by itself.
@@ -278,13 +289,14 @@ mod job {
 
     use std::ffi::c_void;
     use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use tokio::process::Child;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        SetInformationJobObject,
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, SetInformationJobObject,
     };
     use windows::core::PCWSTR;
 
@@ -296,23 +308,32 @@ mod job {
 
     fn create() -> Option<Job> {
         // SAFETY: plain Win32 calls with valid, correctly sized arguments.
+        let handle = unsafe { CreateJobObjectW(None, PCWSTR::null()).ok()? };
+        limit(handle, super::MEMORY_LIMIT.load(Ordering::Relaxed)).ok()?;
+        Some(Job(handle))
+    }
+
+    /// Kill-on-close and `memory` bytes per process, in one call: they are one structure.
+    pub(super) fn limit(handle: HANDLE, memory: u64) -> windows::core::Result<()> {
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        info.ProcessMemoryLimit = usize::try_from(memory).unwrap_or(usize::MAX);
+        // SAFETY: `info` is a valid structure of the size given, alive during the call.
         unsafe {
-            let handle = CreateJobObjectW(None, PCWSTR::null()).ok()?;
-            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             SetInformationJobObject(
                 handle,
                 JobObjectExtendedLimitInformation,
                 (&raw const info).cast::<c_void>(),
                 size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             )
-            .ok()?;
-            Some(Job(handle))
         }
     }
 
     pub fn attach(child: &Child) {
         static JOB: OnceLock<Option<Job>> = OnceLock::new();
+        /// The memory limit last set on the job (0: none yet).
+        static APPLIED: AtomicU64 = AtomicU64::new(0);
         let Some(job) = JOB.get_or_init(create) else {
             tracing::warn!(
                 event = "job_object_failed",
@@ -320,12 +341,54 @@ mod job {
             );
             return;
         };
+        // The limit of the moment, for this child and the others in the job.
+        let memory = super::MEMORY_LIMIT.load(Ordering::Relaxed);
+        if APPLIED.swap(memory, Ordering::Relaxed) != memory
+            && let Err(error) = limit(job.0, memory)
+        {
+            tracing::warn!(event = "job_object_failed", error = %error, "could not set the memory limit");
+        }
         let Some(process) = child.raw_handle() else {
             return;
         };
         // SAFETY: both handles are valid; the child handle stays open while `child` lives.
         if let Err(error) = unsafe { AssignProcessToJobObject(job.0, HANDLE(process)) } {
             tracing::warn!(event = "job_object_failed", error = %error, "could not attach a child to the Job Object");
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod job_tests {
+    use std::ffi::c_void;
+
+    use windows::Win32::System::JobObjects::{
+        CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        QueryInformationJobObject,
+    };
+    use windows::core::PCWSTR;
+
+    #[test]
+    fn the_job_holds_kill_on_close_and_the_memory_limit_asked() {
+        // A job of its own: the app's would change the limit of every other test.
+        // SAFETY: plain Win32 calls with valid arguments; `info` outlives them.
+        unsafe {
+            let handle = CreateJobObjectW(None, PCWSTR::null()).unwrap();
+            super::job::limit(handle, 3 << 30).unwrap();
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            QueryInformationJobObject(
+                Some(handle),
+                JobObjectExtendedLimitInformation,
+                (&raw mut info).cast::<c_void>(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                None,
+            )
+            .unwrap();
+            assert_eq!(info.ProcessMemoryLimit, 3 << 30);
+            let flags = info.BasicLimitInformation.LimitFlags;
+            assert!(flags.contains(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE));
+            assert!(flags.contains(JOB_OBJECT_LIMIT_PROCESS_MEMORY));
         }
     }
 }

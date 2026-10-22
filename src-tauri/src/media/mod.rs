@@ -35,6 +35,21 @@ fn unsupported_format(stderr: &str) -> bool {
     stderr.contains("not on whitelist")
 }
 
+/// ffmpeg or ffprobe out of memory, as the memory limit of the Job Object makes them
+/// (`procs::set_memory_limit`): `AVERROR(ENOMEM)` as exit code, Windows' `STATUS_NO_MEMORY`, or
+/// ffmpeg's own words.
+pub(super) fn out_of_memory(stderr: &str, code: Option<i32>) -> bool {
+    code == Some(-12)
+        || code == Some(0xC000_0017_u32 as i32)
+        || [
+            "Cannot allocate memory",
+            "Out of memory",
+            "get_buffer() failed",
+        ]
+        .iter()
+        .any(|marker| stderr.contains(marker))
+}
+
 fn file_input(mut args: procs::Args, input: &std::path::Path) -> procs::Args {
     // Force single-file image readers: filename patterns otherwise select image2 before probing.
     let image_format = input.extension().and_then(|e| e.to_str()).and_then(|e| {

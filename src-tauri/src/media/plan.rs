@@ -6,6 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::probe::{MediaInfo, VideoInfo};
+use crate::caps::Caps;
 use crate::queue::store::SendMode;
 
 pub const MIB: u64 = 1024 * 1024;
@@ -271,7 +272,7 @@ impl Plan {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 pub enum PlanError {
     /// OUTPUT_TOO_LARGE: nothing can fit.
     #[error("the output cannot fit under the limit")]
@@ -279,6 +280,14 @@ pub enum PlanError {
     /// FILE_UNREADABLE: no usable video/image, or no duration to size an encode.
     #[error("the file has no usable media")]
     Unreadable,
+    /// PHOTO_TOO_LARGE, VIDEO_TOO_LARGE or VIDEO_TOO_LONG: over a safety cap (`caps`), refused
+    /// before any work. `found` and `max` are in the unit of the message: Mpx, or hours.
+    #[error("{code}: {found} over the maximum of {max}")]
+    Capped {
+        code: &'static str,
+        found: f64,
+        max: f64,
+    },
 }
 
 impl PlanError {
@@ -286,8 +295,22 @@ impl PlanError {
         match self {
             PlanError::TooLarge => "OUTPUT_TOO_LARGE",
             PlanError::Unreadable => "FILE_UNREADABLE",
+            PlanError::Capped { code, .. } => code,
         }
     }
+}
+
+/// `Capped` when a frame of `pixels` is over `max`; the value is rounded up so that it never
+/// reads as within the cap.
+fn check_pixels(code: &'static str, pixels: u64, max: u64) -> Result<(), PlanError> {
+    if pixels > max {
+        return Err(PlanError::Capped {
+            code,
+            found: (pixels as f64 / 1e5).ceil() / 10.0,
+            max: max as f64 / 1e6,
+        });
+    }
+    Ok(())
 }
 
 pub struct PlanInput<'a> {
@@ -307,6 +330,8 @@ pub struct PlanInput<'a> {
     pub target_bytes: Option<u64>,
     /// Result of `probe::moov_first` for an MP4, if known.
     pub moov_first: Option<bool>,
+    /// The safety caps in effect (`stage::caps_in_effect`).
+    pub caps: Caps,
 }
 
 fn empty_plan(kind: Kind, input: &PlanInput<'_>, ext: &str) -> Plan {
@@ -380,6 +405,23 @@ pub fn build_plan(info: Option<&MediaInfo>, input: &PlanInput<'_>) -> Result<Pla
         return Ok(plan);
     }
 
+    // Only a file that is decoded and encoded costs memory and time: a copy does not.
+    let (width, height) = video.rotated_size();
+    check_pixels(
+        "VIDEO_TOO_LARGE",
+        u64::from(width) * u64::from(height),
+        input.caps.video_pixels,
+    )?;
+    if let Some(seconds) = info
+        .duration_s
+        .filter(|s| *s > input.caps.max_duration_s as f64)
+    {
+        return Err(PlanError::Capped {
+            code: "VIDEO_TOO_LONG",
+            found: (seconds / 360.0).ceil() / 10.0,
+            max: input.caps.max_duration_s as f64 / 3600.0,
+        });
+    }
     let duration = info.duration_s.ok_or(PlanError::Unreadable)?;
     let audio_kbps = audio.map(|_| input.audio_kbps);
     plan.video_bps =
@@ -446,6 +488,14 @@ fn plan_photo(video: &VideoInfo, input: &PlanInput<'_>) -> Result<Plan, PlanErro
         plan.note = Some("photo_ratio".into());
         return Ok(plan);
     }
+    // The decode of a photo with transparency or more than 8 bits per color costs about 18 bytes
+    // per pixel, twice a plain one at most: its own, lower cap.
+    let max = if video.has_alpha() || video.deep_color() {
+        input.caps.photo_wide_pixels
+    } else {
+        input.caps.photo_pixels
+    };
+    check_pixels("PHOTO_TOO_LARGE", u64::from(width) * u64::from(height), max)?;
     plan.photo = Some(photo_size(width, height));
     Ok(plan)
 }
@@ -581,6 +631,7 @@ mod tests {
             preset: EncodePreset::Balanced,
             target_bytes: None,
             moov_first: Some(true),
+            caps: Caps::default(),
         }
     }
 
@@ -887,8 +938,18 @@ mod tests {
             PlanError::Unreadable
         );
         let long = info(video("hevc", "Main", "yuv420p"), None, Some(1_000_000.0));
+        // Past the duration cap it is refused as too long; with the cap out of the way, as too
+        // large for the limit.
         assert_eq!(
-            build_plan(Some(&long), &input(&source, MIB)).unwrap_err(),
+            build_plan(Some(&long), &input(&source, MIB))
+                .unwrap_err()
+                .code(),
+            "VIDEO_TOO_LONG"
+        );
+        let mut unbounded = input(&source, MIB);
+        unbounded.caps.max_duration_s = u64::MAX;
+        assert_eq!(
+            build_plan(Some(&long), &unbounded).unwrap_err(),
             PlanError::TooLarge
         );
         // No audio: the audio bitrate is not reserved.
@@ -1063,5 +1124,91 @@ mod tests {
             (plan.kind, plan.note.as_deref()),
             (Kind::Skip, Some("photo_ratio"))
         );
+    }
+
+    fn capped(plan: Result<Plan, PlanError>) -> (&'static str, f64, f64) {
+        match plan {
+            Err(PlanError::Capped { code, found, max }) => (code, found, max),
+            other => panic!("expected a cap refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_photo_is_taken_at_its_cap_and_refused_just_above() {
+        let source = PathBuf::from("pic.jpg");
+        let caps = Caps {
+            photo_pixels: 20_000_000,
+            photo_wide_pixels: 8_000_000,
+            ..Caps::default()
+        };
+        let plan_for = |pix_fmt: &str, width: u32, height: u32| {
+            let mut v = video("mjpeg", "", pix_fmt);
+            (v.width, v.height) = (width, height);
+            let mut input = input(&source, MIB);
+            input.caps = caps;
+            build_plan(Some(&info(v, None, None)), &input)
+        };
+        assert_eq!(plan_for("yuvj420p", 5000, 4000).unwrap().kind, Kind::Photo);
+        assert_eq!(
+            capped(plan_for("yuvj420p", 5000, 4001)),
+            ("PHOTO_TOO_LARGE", 20.1, 20.0)
+        );
+        // Transparency or more than 8 bits per color: the lower cap.
+        for wide in ["rgba", "rgb48be", "yuv420p10le"] {
+            assert_eq!(
+                plan_for(wide, 4000, 2000).unwrap().kind,
+                Kind::Photo,
+                "{wide}"
+            );
+            assert_eq!(
+                capped(plan_for(wide, 4000, 2001)),
+                ("PHOTO_TOO_LARGE", 8.1, 8.0),
+                "{wide}"
+            );
+        }
+        assert_eq!(plan_for("rgb24", 4000, 2001).unwrap().kind, Kind::Photo);
+    }
+
+    #[test]
+    fn a_video_to_encode_is_refused_above_its_frame_and_duration_caps() {
+        let source = PathBuf::from("clip.mkv");
+        let caps = Caps {
+            video_pixels: 3840 * 2160,
+            max_duration_s: 1800,
+            ..Caps::default()
+        };
+        let plan_for = |width: u32, height: u32, rotation: i32, seconds: f64| {
+            let mut v = video("hevc", "Main", "yuv420p");
+            (v.width, v.height, v.rotation) = (width, height, rotation);
+            let mut input = input(&source, 900 * MIB);
+            input.caps = caps;
+            build_plan(Some(&info(v, Some("aac"), Some(seconds))), &input)
+        };
+        assert_eq!(plan_for(3840, 2160, 0, 1800.0).unwrap().kind, Kind::Encode);
+        assert_eq!(plan_for(2160, 3840, 90, 60.0).unwrap().kind, Kind::Encode);
+        assert_eq!(
+            capped(plan_for(3840, 2161, 0, 60.0)),
+            ("VIDEO_TOO_LARGE", 8.3, 8.2944)
+        );
+        assert_eq!(
+            capped(plan_for(2161, 3840, 90, 60.0)),
+            ("VIDEO_TOO_LARGE", 8.3, 8.2944)
+        );
+        assert_eq!(
+            capped(plan_for(1920, 1080, 0, 1800.5)),
+            ("VIDEO_TOO_LONG", 0.6, 0.5)
+        );
+
+        // A copy needs no memory and no time: an oversized or long file sent as it is passes.
+        let mut v = video("h264", "High", "yuv420p");
+        v.width = 4096;
+        let mut input = input(&source, MIB);
+        input.caps = Caps {
+            video_pixels: 1,
+            max_duration_s: 1,
+            ..caps
+        };
+        let plan = build_plan(Some(&info(v, Some("aac"), Some(90_000.0))), &input).unwrap();
+        assert_eq!(plan.kind, Kind::Remux);
     }
 }

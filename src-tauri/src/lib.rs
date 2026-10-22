@@ -12,6 +12,7 @@
 //! - `session_end`: the clean shutdown when Windows logs off or shuts down
 //! - `background`: close to the tray, the tray icon and its menu (paid feature `background`)
 //! - `settings`: versioned settings
+//! - `caps`: safety caps on photos, videos, folders and the queue (defaults; Premium adjusts)
 //! - `limit`: the effective upload limit (settings, else the signed-in account)
 //! - `logging`: the JSON Lines journal
 //! - `entitlements`: paid features, granted by a license verified offline (`LicenseEntitlements`)
@@ -19,6 +20,7 @@
 //! - `init_failure`: the message box shown when the app cannot start (no window yet)
 
 pub mod background;
+pub mod caps;
 pub mod caption;
 mod commands;
 pub mod entitlements;

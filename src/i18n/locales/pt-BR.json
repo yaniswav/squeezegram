@@ -74,6 +74,14 @@
     "ENCODER_FALLBACK_suspected_kill_gpu_off": "O codificador da placa de vídeo ({{from}}) parou após {{duration}} sem mensagem de erro. Outro programa pode ter interrompido o ffmpeg, mas uma falha no codificador da placa de vídeo também é possível. O squeezegram mudou para o codificador do processador ({{to}}) e continuará usando-o até o app ser reiniciado.",
     "CODEC_FALLBACK": "O HEVC não está disponível neste computador, então este arquivo foi comprimido em H.264.",
     "OUTPUT_TOO_LARGE": "Este arquivo não cabe no limite de envio, mesmo comprimido.",
+    "PHOTO_TOO_LARGE": "Esta foto tem {{found}} megapixels e o limite é {{max}}. Reduza-a ou envie-a como arquivo.",
+    "VIDEO_TOO_LARGE": "Os quadros deste vídeo têm {{found}} megapixels e o limite é {{max}}. Reduza-o ou envie-o como arquivo.",
+    "VIDEO_TOO_LONG": "Este vídeo dura {{found}} horas e o limite é {{max}}. Corte-o ou envie-o como arquivo.",
+    "MEMORY_LIMIT": "O processamento deste arquivo precisava de memória demais e foi interrompido. Use um arquivo menor ou envie-o como arquivo.",
+    "ENCODE_STALLED": "A compressão não avançou por {{minutes}} minutos e foi interrompida. Tente novamente com este arquivo.",
+    "FOLDER_TOO_DEEP": "As subpastas descem mais de {{max}} níveis. Nada foi adicionado. Escolha uma pasta mais próxima dos arquivos.",
+    "TOO_MANY_FILES": "Isso adicionaria mais de {{max}} arquivos de uma vez. Nada foi adicionado. Adicione-os em várias partes.",
+    "QUEUE_FULL": "A fila teria mais de {{max}} itens. Nada foi adicionado. Limpe os itens concluídos ou adicione menos arquivos.",
     "CAPTION_TOO_LONG": "Esta legenda é longa demais: {{length}} caracteres, e o Telegram permite {{max}}. Encurte-a e tente novamente; nada foi enviado.",
     "DISK_SPACE": "Não há espaço livre suficiente na pasta temporária.",
     "DUPLICATE": "Já enviado para este destino.",
@@ -626,6 +634,23 @@
         "custom": "Tamanho personalizado",
         "mb": "Tamanho alvo (MB)",
         "error": "Digite um número inteiro de MB de 1 a 4000."
+      },
+      "caps": {
+        "title": "Limites de segurança",
+        "hint": "Impedem que um único arquivo esgote a memória ou o tempo deste computador. Todos recebem os valores padrão mostrados; com o Premium você pode reduzir cada limite ou elevá-lo até o dobro do padrão.",
+        "range": "Padrão {{default}}, até {{max}}.",
+        "error": "Digite um número de {{min}} a {{max}}.",
+        "errorWhole": "Digite um número inteiro de {{min}} a {{max}}.",
+        "photo_mpx": "Maior foto (Mpx)",
+        "photo_wide_mpx": "Maior foto com transparência ou 16 bits (Mpx)",
+        "video_mpx": "Maior quadro de vídeo (Mpx)",
+        "threads": "Threads do codificador",
+        "memory_gb": "Memória por processo do ffmpeg (GB)",
+        "duration_h": "Vídeo mais longo (horas)",
+        "stall_min": "Interromper uma codificação parada há (minutos)",
+        "folder_depth": "Níveis de pastas",
+        "files_per_add": "Arquivos por adição",
+        "queue_items": "Itens na fila"
       }
     },
     "watch": {

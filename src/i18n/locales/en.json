@@ -74,6 +74,14 @@
     "ENCODER_FALLBACK_suspected_kill_gpu_off": "The GPU encoder ({{from}}) stopped after {{duration}} without an error message. Another program may have stopped ffmpeg, but a GPU encoder failure is also possible. squeezegram switched to the CPU encoder ({{to}}) and keeps using it until the app restarts.",
     "CODEC_FALLBACK": "HEVC is not available on this computer, so this file was compressed as H.264 instead.",
     "OUTPUT_TOO_LARGE": "This file can't fit under the upload limit, even compressed.",
+    "PHOTO_TOO_LARGE": "This photo is {{found}} megapixels and the limit is {{max}}. Reduce it, or send it as a file.",
+    "VIDEO_TOO_LARGE": "The frames of this video are {{found}} megapixels and the limit is {{max}}. Reduce it, or send it as a file.",
+    "VIDEO_TOO_LONG": "This video lasts {{found}} hours and the limit is {{max}}. Cut it, or send it as a file.",
+    "MEMORY_LIMIT": "Processing this file needed too much memory and was stopped. Use a smaller file, or send it as a file.",
+    "ENCODE_STALLED": "The compression made no progress for {{minutes}} minutes and was stopped. Retry this file.",
+    "FOLDER_TOO_DEEP": "Subfolders go more than {{max}} levels deep. Nothing was added. Choose a folder closer to the files.",
+    "TOO_MANY_FILES": "This would add more than {{max}} files at once. Nothing was added. Add them in several parts.",
+    "QUEUE_FULL": "The queue would hold more than {{max}} items. Nothing was added. Clear finished items, or add fewer files.",
     "CAPTION_TOO_LONG": "This caption is too long: {{length}} characters, and Telegram allows {{max}}. Shorten it and retry; nothing was sent.",
     "DISK_SPACE": "Not enough free space in the temporary folder.",
     "DUPLICATE": "Already sent to this destination.",
@@ -611,6 +619,23 @@
         "custom": "Custom size",
         "mb": "Target size (MB)",
         "error": "Enter a whole number of MB from 1 to 4000."
+      },
+      "caps": {
+        "title": "Safety limits",
+        "hint": "These keep a single file from using up this computer's memory or time. Everyone gets the defaults shown; with Premium you can lower each one or raise it up to twice its default.",
+        "range": "Default {{default}}, up to {{max}}.",
+        "error": "Enter a number from {{min}} to {{max}}.",
+        "errorWhole": "Enter a whole number from {{min}} to {{max}}.",
+        "photo_mpx": "Largest photo (Mpx)",
+        "photo_wide_mpx": "Largest photo with transparency or 16 bits (Mpx)",
+        "video_mpx": "Largest video frame (Mpx)",
+        "threads": "Encoder threads",
+        "memory_gb": "Memory per ffmpeg process (GB)",
+        "duration_h": "Longest video (hours)",
+        "stall_min": "Stop an encode that stalls for (minutes)",
+        "folder_depth": "Folder levels",
+        "files_per_add": "Files per add",
+        "queue_items": "Items in the queue"
       }
     },
     "watch": {

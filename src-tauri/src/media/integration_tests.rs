@@ -18,6 +18,7 @@ use super::encode::{self, Job};
 use super::plan::{Kind, MIB, Plan};
 use super::probe;
 use super::stage::FfmpegStage;
+use crate::caps::Caps;
 use crate::entitlements::{EntitlementStatus, Entitlements, Feature};
 use crate::limit::LimitResolver;
 use crate::queue::events::recorder::Recorder;
@@ -617,6 +618,7 @@ async fn cpu_fallback_encoders_smoke() {
             min_free_bytes: 0,
             cancel: &cancel,
             progress: &ctx.progress,
+            caps: Caps::default(),
         };
         match encode::encode_video(&job, encoder).await {
             Ok(produced) => {
@@ -1297,6 +1299,7 @@ async fn embedded_covers_lose_their_private_bytes_only_when_stripping_is_enabled
                 min_free_bytes: 0,
                 cancel: &cancel,
                 progress: &progress,
+                caps: Caps::default(),
             })
             .await
             .unwrap()

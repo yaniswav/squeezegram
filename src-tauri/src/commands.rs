@@ -16,12 +16,13 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::background::Background;
 use crate::background::autostart::AutostartError;
+use crate::caps::Caps;
 use crate::entitlements::store::StoreError;
 use crate::entitlements::{self, EntitlementStatus, Entitlements, Feature, LicenseEntitlements};
 use crate::limit::{EffectiveLimit, LimitResolver};
 use crate::logging::{self, export, frontend};
 use crate::media::plan::EncodingOverride;
-use crate::media::stage::{CodecSupport, EncodeEstimate, FfmpegStage, GpuFailure};
+use crate::media::stage::{CodecSupport, EncodeEstimate, FfmpegStage, GpuFailure, caps_in_effect};
 use crate::queue::events::{
     EventSink, QUEUE_ALERT, QUEUE_CHANGED, QUEUE_PROGRESS, QUEUE_STATUS, QueueAlert, QueueChanged,
     QueueProgress, QueueStatus, SIDECARS_PROGRESS, SIDECARS_STATUS, SidecarProgress,
@@ -119,6 +120,7 @@ impl From<QueueError> for CommandError {
                 json!({ "itemId": item_id, "from": from, "to": to })
             }
             QueueError::FileUnreadable(path) => json!({ "path": path }),
+            QueueError::OverCap { max, .. } => json!({ "max": max }),
             other => {
                 tracing::warn!(event = "command_error_detail", error_code = other.code(), error = %other, "queue error");
                 json!({})
@@ -396,7 +398,8 @@ fn source_file(path: &str) -> Result<(i64, i64), QueueError> {
 /// Files and folders (walked recursively, non-media files skipped with a `FILES_SKIPPED`
 /// alert per folder), for each of `destination_ids`. All or nothing: an unreadable path or an
 /// unknown destination refuses the whole call. More than one destination is a paid feature.
-#[tauri::command]
+/// Off the interface thread: a folder is walked, and a network drive is slow.
+#[tauri::command(async)]
 pub fn queue_add(
     state: State<'_, AppState>,
     paths: Vec<String>,
@@ -405,9 +408,11 @@ pub fn queue_add(
     caption: Option<String>,
     upload_once: Option<bool>,
 ) -> CommandResult<Vec<i64>> {
+    let caps = caps_in_effect(&state.settings.get(), state.entitlements.as_ref());
     add_files_with_strategy(
         &state.queue,
         state.entitlements.as_ref(),
+        &caps,
         &paths,
         &destination_ids,
         send_mode,
@@ -435,6 +440,7 @@ pub(crate) fn add_files(
     add_files_with_strategy(
         queue,
         entitlements,
+        &Caps::default(),
         paths,
         destination_ids,
         send_mode,
@@ -443,9 +449,11 @@ pub(crate) fn add_files(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // one call per field of `queue_add`, plus the caps
 fn add_files_with_strategy(
     queue: &Orchestrator,
     entitlements: &dyn Entitlements,
+    caps: &Caps,
     paths: &[String],
     destination_ids: &[i64],
     send_mode: Option<SendMode>,
@@ -487,7 +495,17 @@ fn add_files_with_strategy(
             };
             targets.push((destination_id, mode));
         }
-        let expanded = intake::expand(paths)?;
+        let expanded = intake::expand(paths, caps)?;
+        let held = queue.with_store(|store| store.item_count())?;
+        if held.saturating_add(expanded.files.len().saturating_mul(targets.len()))
+            > caps.queue_items
+        {
+            return Err(QueueError::OverCap {
+                code: "QUEUE_FULL",
+                max: caps.queue_items,
+            }
+            .into());
+        }
         let mut items = Vec::with_capacity(expanded.files.len() * targets.len());
         for path in expanded.files {
             let (size, mtime) = source_file(&path)?;
@@ -2365,6 +2383,53 @@ mod tests {
         assert_eq!(queue.list().unwrap().len(), before);
         let none = add_files(&queue, &Licensed, &paths, &[], None, None).unwrap_err();
         assert_eq!(none.code, "DESTINATION_NOT_FOUND");
+    }
+
+    #[test]
+    fn an_add_over_a_cap_queues_nothing_and_the_cap_itself_is_taken() {
+        let dir = TestDir::new("commands-caps");
+        let paths = [
+            dir.file("a.mp4", b"a"),
+            dir.file("b.mp4", b"b"),
+            dir.file("c.mp4", b"c"),
+        ];
+        let queue = idle_queue();
+        let chat = queue
+            .with_store(|store| Ok(first_destination(store)))
+            .unwrap();
+        let caps = Caps {
+            queue_items: 3,
+            files_per_add: 2,
+            ..Caps::default()
+        };
+        let add = |paths: &[String]| {
+            add_files_with_strategy(&queue, &Licensed, &caps, paths, &[chat], None, None, false)
+        };
+        let queued = || queue.list().unwrap().len();
+
+        // Three files in one add: one over the cap of an add, nothing queued.
+        let many = add(&paths).unwrap_err();
+        assert_eq!(
+            (many.code, many.params),
+            ("TOO_MANY_FILES", json!({ "max": 2 }))
+        );
+        assert_eq!(queued(), 0);
+
+        // 1 + 2 = 3 items: the cap itself. One more is refused whole, whatever it is.
+        add(&paths[..1]).unwrap();
+        add(&paths[1..]).unwrap();
+        assert_eq!(queued(), 3);
+        let full = add(&paths[..1]).unwrap_err();
+        assert_eq!(
+            (full.code, full.params),
+            ("QUEUE_FULL", json!({ "max": 3 }))
+        );
+        assert_eq!(queued(), 3);
+
+        // Clearing the queue gives the room back (finished items count until it is cleared).
+        queue.clear(crate::queue::store::ClearScope::All).unwrap();
+        assert_eq!(queued(), 0);
+        add(&paths[..2]).unwrap();
     }
 
     #[test]

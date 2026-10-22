@@ -74,6 +74,14 @@
     "ENCODER_FALLBACK_suspected_kill_gpu_off": "El codificador de la GPU ({{from}}) se detuvo tras {{duration}} sin mensaje de error. Puede que otro programa haya detenido ffmpeg, pero también es posible que haya fallado el codificador de la GPU. squeezegram cambió al codificador de la CPU ({{to}}) y lo seguirá usando hasta que se reinicie la aplicación.",
     "CODEC_FALLBACK": "HEVC no está disponible en este equipo, así que este archivo se comprimió como H.264.",
     "OUTPUT_TOO_LARGE": "Este archivo no cabe dentro del límite de subida, ni siquiera comprimido.",
+    "PHOTO_TOO_LARGE": "Esta foto tiene {{found}} megapíxeles y el límite es de {{max}}. Redúzcala o envíela como archivo.",
+    "VIDEO_TOO_LARGE": "Los fotogramas de este vídeo tienen {{found}} megapíxeles y el límite es de {{max}}. Redúzcalo o envíelo como archivo.",
+    "VIDEO_TOO_LONG": "Este vídeo dura {{found}} horas y el límite es de {{max}}. Recórtelo o envíelo como archivo.",
+    "MEMORY_LIMIT": "El procesamiento de este archivo necesitaba demasiada memoria y se detuvo. Use un archivo más pequeño o envíelo como archivo.",
+    "ENCODE_STALLED": "La compresión no avanzó durante {{minutes}} minutos y se detuvo. Vuelva a intentarlo con este archivo.",
+    "FOLDER_TOO_DEEP": "Las subcarpetas bajan más de {{max}} niveles. No se añadió nada. Elija una carpeta más cercana a los archivos.",
+    "TOO_MANY_FILES": "Esto añadiría más de {{max}} archivos a la vez. No se añadió nada. Añádalos en varias partes.",
+    "QUEUE_FULL": "La cola contendría más de {{max}} elementos. No se añadió nada. Vacíe los elementos terminados o añada menos archivos.",
     "CAPTION_TOO_LONG": "Este pie de foto es demasiado largo: {{length}} caracteres, y Telegram permite {{max}}. Acórtelo y vuelva a intentarlo; no se envió nada.",
     "DISK_SPACE": "No hay suficiente espacio libre en la carpeta temporal.",
     "DUPLICATE": "Ya se envió a este destino.",
@@ -626,6 +634,23 @@
         "custom": "Tamaño personalizado",
         "mb": "Tamaño objetivo (MB)",
         "error": "Introduzca un número entero de MB del 1 al 4000."
+      },
+      "caps": {
+        "title": "Límites de seguridad",
+        "hint": "Evitan que un solo archivo agote la memoria o el tiempo de este equipo. Todos tienen los valores predeterminados que se muestran; con Premium puede reducir cada límite o subirlo hasta el doble de su valor predeterminado.",
+        "range": "Predeterminado {{default}}, hasta {{max}}.",
+        "error": "Introduzca un número de {{min}} a {{max}}.",
+        "errorWhole": "Introduzca un número entero de {{min}} a {{max}}.",
+        "photo_mpx": "Foto más grande (Mpx)",
+        "photo_wide_mpx": "Foto más grande con transparencia o 16 bits (Mpx)",
+        "video_mpx": "Fotograma de vídeo más grande (Mpx)",
+        "threads": "Hilos del codificador",
+        "memory_gb": "Memoria por proceso de ffmpeg (GB)",
+        "duration_h": "Vídeo más largo (horas)",
+        "stall_min": "Detener una codificación bloqueada durante (minutos)",
+        "folder_depth": "Niveles de carpetas",
+        "files_per_add": "Archivos por adición",
+        "queue_items": "Elementos en la cola"
       }
     },
     "watch": {

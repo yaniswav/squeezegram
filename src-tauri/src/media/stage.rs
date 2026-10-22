@@ -15,7 +15,8 @@ use super::encode::{self, EncoderStop, Job};
 use super::metadata;
 use super::plan::{self, EncodingOverride, Kind, MIB, Plan, PlanInput, VideoCodec};
 use super::probe::{self, MediaInfo};
-use super::{MediaError, Result, hash};
+use super::{MediaError, Result, hash, procs};
+use crate::caps::Caps;
 use crate::entitlements::{Entitlements, Feature};
 use crate::limit::LimitResolver;
 use crate::queue::events::{Phase, Progress};
@@ -52,6 +53,28 @@ pub(crate) fn encoding_choice(
     (choice, true)
 }
 
+/// The safety caps in effect: the saved ones, clamped, while the license grants
+/// `advanced_encoding`; the defaults otherwise (and so as soon as the license is lost: the
+/// saved values stay in the file). Asked each time a cap is used.
+pub(crate) fn caps_in_effect(settings: &Settings, entitlements: &dyn Entitlements) -> Caps {
+    encoding_choice(settings, entitlements, None)
+        .0
+        .caps
+        .resolve()
+}
+
+/// A plan refused for a safety cap carries `{ found, max }` for the sentence.
+fn plan_failure(error: plan::PlanError) -> MediaError {
+    match error {
+        plan::PlanError::Capped { code, found, max } => MediaError::Reported {
+            code,
+            params: json!({ "found": found, "max": max }),
+            detail: error.to_string(),
+        },
+        other => MediaError::failed(other.code(), other.to_string()),
+    }
+}
+
 /// The plan input of `item` under `choice`.
 fn plan_input<'a>(
     source: &'a Path,
@@ -73,6 +96,7 @@ fn plan_input<'a>(
         preset: choice.preset,
         target_bytes: choice.target_mb.map(|mb| mb * MIB),
         moov_first,
+        caps: choice.caps.resolve(),
     }
 }
 
@@ -464,6 +488,7 @@ pub(crate) async fn encode_with_cpu_fallback(
         min_free_bytes: job.min_free_bytes,
         cancel: job.cancel,
         progress: job.progress,
+        caps: job.caps,
     };
     // `encode_video` deleted the GPU `.part` on its failure and starts from a fresh one.
     match encode::encode_video(&retry, cpu).await {
@@ -567,6 +592,12 @@ impl FfmpegStage {
         self.gpu.failure()
     }
 
+    /// Sets the memory limit of the ffmpeg and ffprobe processes about to start (`procs`): the
+    /// cap in effect now, which the first of them already runs under.
+    fn limit_memory(&self, settings: &Settings) {
+        procs::set_memory_limit(caps_in_effect(settings, self.entitlements.as_ref()).memory_bytes);
+    }
+
     fn temp_base(&self) -> Result<PathBuf> {
         Ok(temp_root(&self.settings.get().temp)?)
     }
@@ -661,6 +692,7 @@ impl FfmpegStage {
         file: Option<&EncodingOverride>,
     ) -> Result<EncodeEstimate> {
         let settings = self.settings.get();
+        self.limit_memory(&settings);
         let limit_bytes = self.limits.current().limit_bytes;
         let (choice, _) = encoding_choice(&settings, self.entitlements.as_ref(), file);
         let mut estimate = EncodeEstimate {
@@ -684,7 +716,8 @@ impl FfmpegStage {
                 estimate.bytes = None;
                 return Ok(estimate);
             }
-            Err(plan::PlanError::Unreadable) => {
+            // Over a safety cap too: the item fails with its own sentence when it runs.
+            Err(plan::PlanError::Unreadable | plan::PlanError::Capped { .. }) => {
                 estimate.outcome = "unknown";
                 estimate.bytes = None;
                 return Ok(estimate);
@@ -787,16 +820,17 @@ impl FfmpegStage {
         if stamp != Some((item.source_size, item.source_mtime)) {
             return Ok(None);
         }
+        let settings = self.settings.get();
         let info = if item.send_mode == SendMode::Document {
             None
         } else if let Some(info) = reusable_info(item, stamp) {
             Some(info)
         } else {
+            self.limit_memory(&settings);
             let resolved = self.sidecars.resolve().map_err(missing)?;
             let scan = !plan::is_image(&source);
             Some(probe::probe_in_background(&resolved.ffprobe, &source, scan, cancel).await?)
         };
-        let settings = self.settings.get();
         let (choice, _) = encoding_choice(
             &settings,
             self.entitlements.as_ref(),
@@ -825,6 +859,7 @@ impl FfmpegStage {
     async fn probe_inner(&self, item: &Item, ctx: &StageContext) -> Result<ProbeOutcome> {
         let started = std::time::Instant::now();
         let settings = self.settings.get();
+        self.limit_memory(&settings);
         // `limit_resolved`: the limit this item is planned for, and sent under (the plan
         // carries it to the upload).
         let limit = self.limits.resolve_logged();
@@ -905,8 +940,7 @@ impl FfmpegStage {
             json = summary.as_str(),
             "probe and identity done"
         );
-        let plan = plan::build_plan(info.as_ref(), &input)
-            .map_err(|e| MediaError::failed(e.code(), e.to_string()))?;
+        let plan = plan::build_plan(info.as_ref(), &input).map_err(plan_failure)?;
         let mut plan = with_privacy(&settings, plan, &source, item, info.as_ref());
 
         if plan.kind == Kind::Encode
@@ -1010,6 +1044,7 @@ impl FfmpegStage {
             ffprobe: &resolved.ffprobe,
         };
         let settings = self.settings.get();
+        self.limit_memory(&settings);
         let input = PathBuf::from(item.content_path());
         let job = Job {
             tools: &tools,
@@ -1019,6 +1054,8 @@ impl FfmpegStage {
             min_free_bytes: settings.temp.min_free_gb.saturating_mul(1 << 30),
             cancel: &ctx.cancel,
             progress: &ctx.progress,
+            // Asked now, not read from the plan: the license may have changed since the probe.
+            caps: caps_in_effect(&settings, self.entitlements.as_ref()),
         };
         let produced = match plan.kind {
             Kind::Encode => {
@@ -1414,7 +1451,17 @@ mod tests {
         cpu: Option<Encoder>,
         cancel_after: Option<Duration>,
     ) -> Run {
-        run_in_session(name, fake, plan, cpu, cancel_after, GpuSession::default()).await
+        let session = GpuSession::default();
+        run_in_session(
+            name,
+            fake,
+            plan,
+            cpu,
+            cancel_after,
+            session,
+            Caps::default(),
+        )
+        .await
     }
 
     /// The next item of a session: the GPU's memory comes from the previous runs.
@@ -1425,7 +1472,7 @@ mod tests {
         cpu: Option<Encoder>,
         session: GpuSession,
     ) -> Run {
-        run_in_session(name, fake, plan, cpu, None, session).await
+        run_in_session(name, fake, plan, cpu, None, session, Caps::default()).await
     }
 
     async fn run_in_session(
@@ -1435,6 +1482,7 @@ mod tests {
         cpu: Option<Encoder>,
         cancel_after: Option<Duration>,
         session: GpuSession,
+        caps: Caps,
     ) -> Run {
         let dir = TestDir::new(name);
         let (ffmpeg, ffprobe) = fake_tools(dir.path(), fake);
@@ -1456,6 +1504,7 @@ mod tests {
             min_free_bytes: 0,
             cancel: &cancel,
             progress: &progress,
+            caps,
         };
         if let Some(delay) = cancel_after {
             let canceller = cancel.clone();
@@ -1515,6 +1564,53 @@ mod tests {
             .expect("a cpu_fallback progress event");
         assert_eq!((fallback.phase, fallback.percent), (Phase::Encoding, 0.0));
         assert_eq!(progress.last().unwrap().percent, 100.0);
+    }
+
+    #[tokio::test]
+    async fn an_encode_that_stops_advancing_is_stopped_by_the_watchdog() {
+        // One progress block, then nothing for 12 s: the fake stays silent past the stall (long
+        // enough that a loaded machine has started it first).
+        let fake = Fake {
+            gpu_blocks: 1,
+            gpu_wait_s: 12,
+            ..SILENT
+        };
+        let caps = Caps {
+            stall: Duration::from_secs(3),
+            ..Caps::default()
+        };
+        let began = std::time::Instant::now();
+        let run = run_in_session(
+            "stall",
+            fake,
+            sample_plan(),
+            Some(Encoder::X264),
+            None,
+            GpuSession::default(),
+            caps,
+        )
+        .await;
+        let Err(MediaError::Reported { code, params, .. }) = run.result else {
+            panic!("expected the watchdog, got {:?}", run.result);
+        };
+        assert_eq!(code, "ENCODE_STALLED");
+        assert_eq!(params["minutes"], 0);
+        assert!(began.elapsed() < Duration::from_secs(10), "stopped early");
+        // Neither retried on the GPU nor handed to the CPU, and nothing half-written is left.
+        assert_eq!(run.calls, ["h264_nvenc fresh"]);
+        assert!(run.session.failure().is_none());
+        no_part_left(&run.out_dir);
+    }
+
+    #[tokio::test]
+    async fn the_watchdog_leaves_a_user_cancellation_a_cancellation() {
+        let fake = Fake {
+            gpu_blocks: 1,
+            gpu_wait_s: 5,
+            ..SILENT
+        };
+        let run = run("stall-cancel", fake, None, Some(Duration::from_millis(500))).await;
+        assert!(matches!(run.result, Err(MediaError::Cancelled)));
     }
 
     #[tokio::test]
@@ -1798,6 +1894,7 @@ mod tests {
             min_free_bytes: 0,
             cancel: &cancel,
             progress: &progress,
+            caps: Caps::default(),
         };
         let session = GpuSession::default();
         let result =
@@ -2144,6 +2241,7 @@ mod tests {
             min_free_bytes: 0,
             cancel: &cancel,
             progress: &progress,
+            caps: Caps::default(),
         };
         let session = GpuSession::default();
         let produced =
@@ -2237,6 +2335,7 @@ mod tests {
             preset: choice.preset,
             target_bytes: choice.target_mb.map(|mb| mb * plan::MIB),
             moov_first: None,
+            caps: choice.caps.resolve(),
         };
         (plan::build_plan(Some(&info), &input).unwrap(), advanced)
     }
@@ -2319,9 +2418,71 @@ mod tests {
                 video_codec: VideoCodec::Hevc,
                 preset: plan::EncodePreset::Quality,
                 target_mb: Some(40),
+                caps: Default::default(),
             },
             ..Settings::default()
         }
+    }
+
+    #[test]
+    fn caps_are_the_defaults_without_the_feature_and_the_clamped_saved_ones_with_it() {
+        let mut settings = Settings::default();
+        settings.advanced_encoding.caps = crate::caps::CapSettings {
+            photo_mpx: 300.0,
+            threads: 1e9,
+            folder_depth: -4.0,
+            ..crate::caps::CapSettings::DEFAULT
+        };
+        // Saved by hand or while Premium: free users always get the defaults.
+        assert_eq!(caps_in_effect(&settings, &Grants(false)), Caps::default());
+        let paid = caps_in_effect(&settings, &Grants(true));
+        assert_eq!(paid.photo_pixels, 300_000_000);
+        assert_eq!(paid.threads, 12, "clamped to twice the default");
+        assert_eq!(paid.folder_depth, 1, "clamped to the minimum");
+        assert_eq!(paid.files_per_add, Caps::default().files_per_add);
+        // The license goes: the defaults at once, the file is not rewritten.
+        assert_eq!(caps_in_effect(&settings, &Grants(false)), Caps::default());
+        assert_eq!(settings.advanced_encoding.caps.photo_mpx, 300.0);
+    }
+
+    #[test]
+    fn a_photo_over_the_cap_of_the_moment_is_refused_with_its_numbers() {
+        let mut settings = Settings::default();
+        settings.advanced_encoding.caps.photo_mpx = 400.0;
+        let photo = |settings: &Settings, entitlements: &dyn Entitlements| {
+            let info: MediaInfo = serde_json::from_value(json!({
+                "format_name": "png_pipe", "duration_s": null, "bit_rate": null,
+                "video": { "index": 0, "codec": "png", "profile": null, "width": 20000,
+                    "height": 15000, "sar": null, "pix_fmt": "rgb24", "field_order": null,
+                    "color_transfer": null, "rotation": 0, "bit_rate": null, "hdr": false },
+                "audio": null
+            }))
+            .unwrap();
+            let (choice, _) = encoding_choice(settings, entitlements, None);
+            let input = PlanInput {
+                source: Path::new(r"D:\pics\big.png"),
+                source_size: 1000,
+                send_mode: SendMode::Photo,
+                limit_bytes: 100 * plan::MIB,
+                margin: 0.03,
+                audio_kbps: 128,
+                cap: choice.max_resolution,
+                codec: choice.video_codec,
+                preset: choice.preset,
+                target_bytes: None,
+                moov_first: None,
+                caps: choice.caps.resolve(),
+            };
+            plan::build_plan(Some(&info), &input).map(|plan| plan.kind)
+        };
+        // 300 Mpx: over the free cap, within the raised one.
+        assert_eq!(photo(&settings, &Grants(true)), Ok(Kind::Photo));
+        let refused = photo(&settings, &Grants(false)).unwrap_err();
+        assert_eq!(refused.code(), "PHOTO_TOO_LARGE");
+        let MediaError::Reported { params, .. } = plan_failure(refused) else {
+            panic!("the numbers go with the code");
+        };
+        assert_eq!(params, json!({ "found": 300.0, "max": 210.0 }));
     }
 
     #[test]

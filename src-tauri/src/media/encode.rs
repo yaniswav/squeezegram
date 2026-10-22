@@ -7,6 +7,7 @@
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
@@ -17,6 +18,7 @@ use super::plan::{self, EncodePreset, Kind, PHOTO_MAX_BYTES, PhotoSize, Plan, Vi
 use super::probe;
 use super::procs::{self, Args, Ending, Spec};
 use super::{MediaError, Result};
+use crate::caps::Caps;
 use crate::queue::events::{Phase, Progress, ProgressReporter};
 
 /// An output shorter than its source by more than this is a truncated source.
@@ -38,6 +40,8 @@ pub struct Job<'a> {
     pub min_free_bytes: u64,
     pub cancel: &'a CancellationToken,
     pub progress: &'a ProgressReporter,
+    /// The safety caps in effect when the job starts (`stage::caps_in_effect`).
+    pub caps: Caps,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,20 +210,22 @@ pub fn video_options(
     options
 }
 
-fn common_start(input: &Path) -> Args {
-    super::file_input(
-        Args::new().all(&[
-            "-hide_banner",
-            "-nostdin",
-            "-loglevel",
-            "error",
-            "-y",
-            "-progress",
-            "pipe:1",
-            "-nostats",
-        ]),
-        input,
-    )
+/// `threads` limits the decoder (an input option); an encode also gives it to the encoder.
+fn common_start(input: &Path, threads: Option<u32>) -> Args {
+    let mut args = Args::new().all(&[
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-y",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+    ]);
+    if let Some(threads) = threads {
+        args = args.arg("-threads").arg(threads.to_string());
+    }
+    super::file_input(args, input)
 }
 
 fn map_streams(args: Args, plan: &Plan) -> Args {
@@ -248,7 +254,7 @@ fn passlog(job: &Job<'_>) -> PathBuf {
 /// Full command line of an encode.
 fn encode_args(job: &Job<'_>, encoder: Encoder, video_bps: u64, pass: Pass, part: &Path) -> Args {
     let plan = job.plan;
-    let mut args = common_start(job.input);
+    let mut args = common_start(job.input, Some(job.caps.threads));
     args = map_streams(args, plan);
     if let Some(vf) = &plan.vf {
         args = args.arg("-vf").arg(vf);
@@ -256,6 +262,9 @@ fn encode_args(job: &Job<'_>, encoder: Encoder, video_bps: u64, pass: Pass, part
     for option in video_options(encoder, plan.video_codec, plan.preset, video_bps) {
         args = args.arg(option);
     }
+    // Memory grows with threads times frame size: 8K with one thread per core passed 1.9 GB,
+    // with 4 threads 0.8 GB.
+    args = args.arg("-threads").arg(job.caps.threads.to_string());
     match pass {
         Pass::Single => {}
         Pass::First => {
@@ -298,7 +307,7 @@ fn encode_args(job: &Job<'_>, encoder: Encoder, video_bps: u64, pass: Pass, part
 
 fn remux_args(job: &Job<'_>, part: &Path) -> Args {
     let plan = job.plan;
-    let mut args = map_streams(common_start(job.input), plan);
+    let mut args = map_streams(common_start(job.input, None), plan);
     args = match (plan.kind, plan.audio_kbps) {
         (Kind::RemuxAudio, Some(kbps)) => args
             .all(&["-c:v", "copy", "-c:a", "aac", "-b:a"])
@@ -500,6 +509,8 @@ fn classify_failure(stderr: &str, code: Option<i32>, started: bool) -> &'static 
         "FFMPEG_ENCODER_UNAVAILABLE"
     } else if stderr.contains("No space left on device") {
         "DISK_SPACE"
+    } else if super::out_of_memory(stderr, code) {
+        "MEMORY_LIMIT"
     } else if super::unsupported_format(stderr) {
         "INPUT_FORMAT_UNSUPPORTED"
     } else if stderr.contains("moov atom not found")
@@ -774,6 +785,22 @@ async fn wait_before_retry(cancel: &CancellationToken, delay: Duration) -> Resul
     }
 }
 
+/// Returns once `progress` (the output time of an encode, in ms) has not moved for `stall`:
+/// the speed of the machine decides how long an encode takes, never whether it advances.
+async fn stall_watch(progress: &AtomicU64, stall: Duration) {
+    let tick = (stall / 10).max(Duration::from_millis(1));
+    let (mut seen, mut since) = (progress.load(Ordering::Relaxed), Instant::now());
+    loop {
+        tokio::time::sleep(tick).await;
+        let now = progress.load(Ordering::Relaxed);
+        if now != seen {
+            (seen, since) = (now, Instant::now());
+        } else if since.elapsed() >= stall {
+            return;
+        }
+    }
+}
+
 /// Runs ffmpeg with progress mapped onto `start..start+width` percent. `encoder` is the video
 /// encoder of an encode (`None` for a remux): a GPU one that stops mid-encode gives
 /// `MediaError::EncoderStopped`.
@@ -792,19 +819,26 @@ async fn run_ffmpeg_once(
     let mut reached_s = 0.0_f64;
     let report = diagnostic_report
         .and_then(|path| prepare_diagnostic_report(path).map(|value| (path.to_path_buf(), value)));
-    let output = procs::run(
-        ffmpeg_spec(
-            job,
-            args,
-            step,
-            report.as_ref().map(|(_, value)| value.as_os_str()),
-        ),
-        |line| {
+    // The watchdog stops ffmpeg through a child of the job's token: a cancellation of the job
+    // still reaches it.
+    let stop = job.cancel.child_token();
+    let moved = AtomicU64::new(0);
+    let mut spec = ffmpeg_spec(
+        job,
+        args,
+        step,
+        report.as_ref().map(|(_, value)| value.as_os_str()),
+    );
+    spec.cancel = Some(&stop);
+    let mut stalled = false;
+    let output = {
+        let run = procs::run(spec, |line| {
             let Some(update) = parser.feed(line) else {
                 return;
             };
             started |= update.out_time_s > 0.0;
             reached_s = update.out_time_s;
+            moved.store((update.out_time_s * 1000.0) as u64, Ordering::Relaxed);
             let elapsed = began.elapsed().as_secs_f64().max(0.001);
             let percent = update.percent.map(|p| start + width * p / 100.0);
             let remaining = duration_s
@@ -817,11 +851,33 @@ async fn run_ffmpeg_once(
                 phase: None,
                 detail: update.speed.map(|s| format!("{s:.1}x")),
             });
-        },
-    )
-    .await
+        });
+        tokio::pin!(run);
+        let watch = stall_watch(&moved, job.caps.stall);
+        tokio::pin!(watch);
+        loop {
+            tokio::select! {
+                done = &mut run => break done,
+                () = &mut watch, if !stalled => {
+                    stalled = true;
+                    stop.cancel();
+                }
+            }
+        }
+    }
     .map_err(|e| MediaError::failed("FFMPEG_MISSING", e.to_string()))?;
     match output.ending {
+        Ending::Cancelled if stalled => {
+            if let Some((path, _)) = &report {
+                remove_if_exists(path);
+            }
+            log_ffmpeg_end(&output, began, reached_s, Some("ENCODE_STALLED"), None);
+            return Err(MediaError::Reported {
+                code: "ENCODE_STALLED",
+                params: serde_json::json!({ "minutes": job.caps.stall.as_secs() / 60 }),
+                detail: format!("no progress for {:?}, stopped", job.caps.stall),
+            });
+        }
         Ending::Cancelled => {
             if let Some((path, _)) = &report {
                 remove_if_exists(path);
@@ -1162,7 +1218,7 @@ pub async fn strip(job: &Job<'_>) -> Result<Produced> {
 /// private and is written back from the probe (`Plan::stream_languages`, codes checked there);
 /// titles are not, being free text.
 fn strip_video_args(job: &Job<'_>, part: &Path) -> Args {
-    let mut args = common_start(job.input)
+    let mut args = common_start(job.input, None)
         .all(&[
             "-map",
             "0",
@@ -1498,7 +1554,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("-profile:v main -tag:v hvc1 -pix_fmt yuv420p"),
+            text.contains("-profile:v main -tag:v hvc1 -threads 6 -pix_fmt yuv420p"),
             "{text}"
         );
         assert!(
@@ -1576,6 +1632,7 @@ mod tests {
                 min_free_bytes: 0,
                 cancel: &fx.cancel,
                 progress: &fx.progress,
+                caps: Caps::default(),
             };
             let result = encode_video(&job, encoder).await;
             let calls = std::fs::read_to_string(self.dir.path().join("calls.txt"))
@@ -2016,6 +2073,7 @@ mod tests {
                 min_free_bytes: 0,
                 cancel: &self.cancel,
                 progress: &self.progress,
+                caps: Caps::default(),
             };
             let list = to_strings(make(&job, &job.part()));
             let text = list.join(" ");
@@ -2039,6 +2097,7 @@ mod tests {
             min_free_bytes: 0,
             cancel: &fx.cancel,
             progress: &fx.progress,
+            caps: Caps::default(),
         };
         for error in [
             encode_video(&job, Encoder::X264).await.unwrap_err(),
@@ -2098,7 +2157,7 @@ mod tests {
 
     #[test]
     fn normal_runs_log_only_errors_so_warnings_do_not_block_retries() {
-        let args = to_strings(common_start(Path::new("clip.mp4")));
+        let args = to_strings(common_start(Path::new("clip.mp4"), None));
         assert!(args.windows(2).any(|pair| pair == ["-loglevel", "error"]));
     }
 
@@ -2110,7 +2169,7 @@ mod tests {
             encode_args(job, Encoder::Nvenc, 1_000_000, Pass::Single, part)
         });
         assert!(text.starts_with(
-            &format!("-hide_banner -nostdin -loglevel error -y -progress pipe:1 -nostats -protocol_whitelist file -format_whitelist {} -i C:\\in put\\a.mkv", super::super::INPUT_FORMAT_WHITELIST)
+            &format!("-hide_banner -nostdin -loglevel error -y -progress pipe:1 -nostats -threads 6 -protocol_whitelist file -format_whitelist {} -i C:\\in put\\a.mkv", super::super::INPUT_FORMAT_WHITELIST)
         ));
         assert!(text.contains("-map 0:0 -map 0:2 -sn -dn -map_chapters -1 -map_metadata -1"));
         assert!(text.contains("-vf scale=w=2:h=2"));
@@ -2119,6 +2178,8 @@ mod tests {
         );
         assert!(list.last().unwrap().ends_with("clip_sq.mp4.part"));
         assert!(!text.contains("color_trc"));
+        // One thread per core is what made an 8K encode pass 1.9 GB: decoder and encoder.
+        assert_eq!(text.matches("-threads 6").count(), 2);
 
         plan.hdr = true;
         plan.audio_index = None;
@@ -2202,6 +2263,7 @@ mod tests {
         plan.audio_kbps = None;
         let (_, copy) = fx.args(&plan, remux_args);
         assert!(copy.contains("-c copy -movflags +faststart -f mp4"));
+        assert!(!copy.contains("-threads"), "a copy decodes nothing");
 
         plan.kind = Kind::RemuxAudio;
         plan.audio_kbps = Some(128);
@@ -2224,5 +2286,41 @@ mod tests {
         let (_, alpha) = fx.args(&plan, |job, part| photo_args(job, size, 5, part));
         assert!(alpha.contains("color=c=white:size=640x480"));
         assert!(alpha.contains("[1:v][0:v]overlay=format=auto:shortest=1,scale=100:50"));
+    }
+
+    #[test]
+    fn memory_failures_have_their_own_code() {
+        for (stderr, code) in [
+            ("", Some(-12)),
+            ("[vist#0:0/png] Cannot allocate memory", Some(1)),
+            ("", Some(0xC000_0017_u32 as i32)),
+        ] {
+            assert_eq!(classify_failure(stderr, code, true), "MEMORY_LIMIT");
+        }
+        assert_eq!(
+            classify_failure("No space left on device", Some(1), true),
+            "DISK_SPACE"
+        );
+        assert_eq!(classify_failure("", Some(1), true), "FFMPEG_FAILED");
+    }
+
+    #[tokio::test]
+    async fn the_stall_watch_returns_only_once_progress_has_stopped() {
+        let progress = AtomicU64::new(0);
+        let moving = async {
+            for n in 1..=15 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                progress.store(n, Ordering::Relaxed);
+            }
+        };
+        let watch = stall_watch(&progress, Duration::from_millis(400));
+        tokio::pin!(watch);
+        tokio::select! {
+            () = moving => {}
+            () = &mut watch => panic!("progress was moving"),
+        }
+        let stopped = Instant::now();
+        watch.await;
+        assert!(stopped.elapsed() >= Duration::from_millis(300));
     }
 }

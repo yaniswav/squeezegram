@@ -19,6 +19,7 @@ import {
   type JsonObject,
 } from "./json"
 import {
+  capsDecoder,
   encodePresetDecoder,
   encodingOverrideDecoder,
   maxResolutionDecoder,
@@ -1123,6 +1124,7 @@ const settingsDecoder = d.object<Settings>({
     video_codec: videoCodecDecoder,
     preset: encodePresetDecoder,
     target_mb: d.nullable(d.number),
+    caps: capsDecoder,
   }),
   background: d.object<Settings["background"]>({
     close_action: d.literals<CloseAction>({ quit: true, tray: true }),

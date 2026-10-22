@@ -1015,6 +1015,14 @@ impl Store {
         Ok(latest.as_deref().and_then(parse_iso))
     }
 
+    /// Items in the queue, finished ones included (until the user clears them).
+    pub fn item_count(&self) -> Result<usize> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
     /// What the queue has to do now, for the tray: items being worked on (`State::is_running`)
     /// and items that will run (`ready`, `encoded`). `pending_review` is the user's to decide.
     pub fn activity(&self) -> Result<Activity> {

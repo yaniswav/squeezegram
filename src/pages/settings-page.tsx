@@ -43,13 +43,21 @@ import { errorMessage, errorOf, type ErrorReport } from "@/i18n/errors"
 import {
   AUDIO_KBPS_CHOICES,
   AUTOMATIC_ENCODING,
+  CAP_KEYS,
+  CAP_MIN,
+  DEFAULT_CAPS,
   ENCODE_PRESETS,
   MAX_RESOLUTIONS,
   TARGET_MB_MAX,
   TARGET_MB_MIN,
   VIDEO_CODECS,
+  capIsWhole,
+  capMax,
   effectiveEncoding,
+  isCap,
   isTargetMb,
+  shownCap,
+  type CapKey,
 } from "@/lib/advanced-encoding"
 import { grants, hasStoredLicense, licenseView } from "@/lib/entitlements"
 import { formatDateTime, formatList, formatNumber } from "@/lib/format"
@@ -122,6 +130,8 @@ interface Draft {
   preset: EncodePreset
   targetMode: TargetMode
   targetMb: string
+  /** The safety limits, as typed. */
+  caps: Record<CapKey, string>
   pauseMin: string
   pauseMax: string
   captionTemplate: string
@@ -156,7 +166,7 @@ type DraftErrors = Partial<
     | "deviceName",
     ErrorKey
   >
->
+> & { caps?: Partial<Record<CapKey, true>> }
 
 function premiumOf(value: boolean | null): Premium {
   return value === null ? "auto" : value ? "yes" : "no"
@@ -188,6 +198,14 @@ function toDraft(settings: Settings): Draft {
     targetMode:
       settings.advanced_encoding.target_mb === null ? "limit" : "custom",
     targetMb: settings.advanced_encoding.target_mb?.toString() ?? "",
+    // Shown clamped, as the core uses them: a value out of range (a file edited by hand) must
+    // not block saving the rest.
+    caps: Object.fromEntries(
+      CAP_KEYS.map((key) => [
+        key,
+        shownCap(key, settings.advanced_encoding.caps[key]).toString(),
+      ]),
+    ) as Record<CapKey, string>,
     pauseMin: settings.send.pause_min_s.toString(),
     pauseMax: settings.send.pause_max_s.toString(),
     captionTemplate: settings.send.caption_template,
@@ -237,6 +255,14 @@ function validate(draft: Draft): DraftErrors {
     !(WHOLE.test(draft.targetMb.trim()) && isTargetMb(Number(draft.targetMb)))
   )
     errors.targetMb = "settings.advanced.target.error"
+
+  const badCaps = CAP_KEYS.filter(
+    (key) =>
+      draft.caps[key].trim() === "" || !isCap(key, Number(draft.caps[key])),
+  )
+
+  if (badCaps.length > 0)
+    errors.caps = Object.fromEntries(badCaps.map((key) => [key, true]))
 
   const margin = Number(draft.margin)
 
@@ -302,6 +328,19 @@ function toPatch(draft: Draft, settings: Settings): SettingsPatch {
 
   if (targetMb !== settings.advanced_encoding.target_mb)
     advanced.target_mb = targetMb
+
+  // Only the limits the user changed (against what the page showed).
+  const changedCaps = CAP_KEYS.filter(
+    (key) => draft.caps[key] !== saved.caps[key],
+  )
+
+  if (changedCaps.length > 0)
+    advanced.caps = {
+      ...settings.advanced_encoding.caps,
+      ...Object.fromEntries(
+        changedCaps.map((key) => [key, Number(draft.caps[key])]),
+      ),
+    }
 
   if (Object.keys(advanced).length > 0) patch.advanced_encoding = advanced
 
@@ -1683,6 +1722,7 @@ function SettingsForm({
       video_codec: draft.videoCodec,
       preset: draft.preset,
       target_mb: draft.targetMode === "custom" ? Number(draft.targetMb) : null,
+      caps: settings.advanced_encoding.caps,
     },
     advancedGranted,
   )
@@ -1737,7 +1777,7 @@ function SettingsForm({
     }
   }
 
-  const fieldError = (key: keyof DraftErrors) => {
+  const fieldError = (key: Exclude<keyof DraftErrors, "caps">) => {
     const message = errors[key]
 
     return message ? t(message) : undefined
@@ -1970,6 +2010,62 @@ function SettingsForm({
               )}
             </Field>
           )}
+        </div>
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-medium">
+              {t("settings.advanced.caps.title")}
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              {t("settings.advanced.caps.hint")}
+            </p>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {CAP_KEYS.map((key) => (
+              <Field
+                key={key}
+                id={`${ids}-cap-${key}`}
+                label={t(`settings.advanced.caps.${key}`)}
+                hint={t("settings.advanced.caps.range", {
+                  default: DEFAULT_CAPS[key],
+                  max: capMax(key),
+                })}
+                error={
+                  errors.caps?.[key]
+                    ? t(
+                        capIsWhole(key)
+                          ? "settings.advanced.caps.errorWhole"
+                          : "settings.advanced.caps.error",
+                        { min: CAP_MIN, max: capMax(key) },
+                      )
+                    : undefined
+                }
+              >
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="number"
+                    min={CAP_MIN}
+                    max={capMax(key)}
+                    step={capIsWhole(key) ? 1 : 0.01}
+                    inputMode={capIsWhole(key) ? "numeric" : "decimal"}
+                    disabled={!advancedGranted}
+                    value={
+                      advancedGranted
+                        ? draft.caps[key]
+                        : encoding.caps[key].toString()
+                    }
+                    onChange={(event) =>
+                      update("caps", {
+                        ...draft.caps,
+                        [key]: event.target.value,
+                      })
+                    }
+                  />
+                )}
+              </Field>
+            ))}
+          </div>
         </div>
         {advancedGranted && (
           <CodecNote codec={encoding.video_codec} support={codecSupport} />
