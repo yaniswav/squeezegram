@@ -9,6 +9,8 @@
 //! - only direct children of the root that are folders named like an item id (digits): the
 //!   root may be a folder the user picked, and `detect` or anything the user keeps there is not
 //!   ours;
+//! - the private copies of watched files (`<root>rozen\<item id>`) are swept the same way: a
+//!   folder survives only while an item that is not over (`sent`, `cancelled`) names its copy;
 //! - never a folder an item points to (`source_path`, `temp_path` or `output_path` inside it),
 //!   except that an EMPTY one is removed when only finished (`sent`, `cancelled`) items point
 //!   to it: its files were deleted with the send or the cancel, and nothing else would ever
@@ -49,11 +51,15 @@ fn referenced_paths(store: &Store) -> Option<Referenced> {
     let items = store.list_items().ok()?;
     let mut referenced = Referenced::default();
     for item in items {
-        let list = if matches!(item.state, State::Sent | State::Cancelled) {
+        let over = matches!(item.state, State::Sent | State::Cancelled);
+        let list = if over {
             &mut referenced.finished
         } else {
             &mut referenced.active
         };
+        if let Some(frozen) = item.frozen_path.as_ref().filter(|_| !over) {
+            list.push(PathBuf::from(frozen));
+        }
         list.extend(
             [Some(item.source_path), item.temp_path, item.output_path]
                 .into_iter()
@@ -91,7 +97,15 @@ pub fn sweep_orphans(root: &Path, store: &Store) -> Sweep {
         );
         return Sweep::default();
     };
-    let outcome = sweep_with(root, &referenced.active, &referenced.finished);
+    let mut outcome = sweep_with(root, &referenced.active, &referenced.finished);
+    let copies = sweep_with(
+        &root.join("frozen"),
+        &referenced.active,
+        &referenced.finished,
+    );
+    outcome.removed += copies.removed;
+    outcome.kept += copies.kept;
+    outcome.skipped += copies.skipped;
     tracing::info!(
         event = "temp_sweep",
         removed = outcome.removed,
@@ -341,6 +355,29 @@ mod tests {
 
         assert_eq!(outcome.removed, 1);
         assert!(!folder.exists());
+    }
+
+    #[test]
+    fn the_sweep_keeps_the_private_copy_of_a_waiting_item_and_removes_the_others() {
+        let dir = TestDir::new("sweep-frozen");
+        let root = dir.path().join("tmp");
+        let waiting = folder_with(&root.join("frozen"), "1", &["a.mp4"]);
+        let orphan = folder_with(&root.join("frozen"), "9", &["z.mp4"]);
+        let mut store = memory_store();
+        let id = add_item(&mut store, r"C:ideos.mp4");
+        store
+            .conn()
+            .execute(
+                "UPDATE items SET frozen_path = ?1 WHERE id = ?2",
+                rusqlite::params![waiting.join("a.mp4").to_string_lossy(), id],
+            )
+            .unwrap();
+
+        let outcome = sweep_orphans(&root, &store);
+
+        assert_eq!(outcome.removed, 1);
+        assert!(waiting.join("a.mp4").exists());
+        assert!(!orphan.exists());
     }
 
     #[test]

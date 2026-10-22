@@ -182,6 +182,8 @@ struct FakeSend {
     concurrency: Arc<Concurrency>,
     reuse_steps: Mutex<VecDeque<SendStep>>,
     routes: Mutex<Vec<(i64, SendVia)>>,
+    /// The bytes of the file each upload was handed.
+    sent: Mutex<Vec<(i64, Vec<u8>)>>,
 }
 
 impl FakeSend {
@@ -244,6 +246,13 @@ impl SendStage for FakeSend {
     ) -> std::result::Result<SendOutcome, SendError> {
         let _active = self.concurrency.enter();
         self.calls.lock().unwrap().push((item.id, Instant::now()));
+        if let Some(bytes) = item
+            .output_path
+            .as_ref()
+            .and_then(|p| std::fs::read(p).ok())
+        {
+            self.sent.lock().unwrap().push((item.id, bytes));
+        }
         self.entered.notify_one();
         tokio::time::sleep(Duration::from_millis(20)).await;
         let step = self
@@ -433,6 +442,7 @@ impl Harness {
         let send = Arc::new(FakeSend {
             reuse_steps: Mutex::new(VecDeque::new()),
             routes: Mutex::new(Vec::new()),
+            sent: Mutex::new(Vec::new()),
             steps: Mutex::new(VecDeque::new()),
             calls: Mutex::new(Vec::new()),
             entered: Notify::new(),
@@ -649,6 +659,68 @@ async fn skip_sends_the_source_and_keeps_it() {
     assert_eq!(item.output_path.as_deref(), Some(item.source_path.as_str()));
     assert!(Path::new(&item.source_path).exists());
     assert_eq!(h.media.encodes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_watched_file_replaced_after_its_copy_is_sent_as_approved() {
+    let h = Harness::new("orch-frozen", Treatment::Skip);
+    let path = h.dir.file("a.mp4", b"source");
+    let destination_id = h.orch.with_store(|s| Ok(first_destination(s))).unwrap();
+    let root = h.dir.path().join("frozen");
+    let id = h
+        .orch
+        .add_watched(
+            &NewItem {
+                source_path: path.clone(),
+                source_size: 6,
+                source_mtime: 1,
+                destination_id,
+                send_mode: SendMode::Video,
+                caption: String::new(),
+            },
+            &root,
+        )
+        .unwrap()
+        .unwrap();
+    let frozen = h.item(id).frozen_path.unwrap();
+    assert_eq!(std::fs::read(&frozen).unwrap(), b"source");
+
+    // Replaced by a file of the same size while it waited for approval.
+    std::fs::write(&path, b"CHANGE").unwrap();
+    h.orch.promote(&[id]).unwrap();
+    h.orch.start();
+    h.wait_state(id, Sent).await;
+
+    assert_eq!(
+        h.send.sent.lock().unwrap().as_slice(),
+        [(id, b"source".to_vec())]
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        b"CHANGE",
+        "original untouched"
+    );
+    assert!(!Path::new(&frozen).exists(), "copy deleted once sent");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_watched_file_that_cannot_be_copied_is_not_queued() {
+    let h = Harness::new("orch-frozen-missing", Treatment::Skip);
+    let destination_id = h.orch.with_store(|s| Ok(first_destination(s))).unwrap();
+    let missing = h.dir.path().join("gone.mp4").to_string_lossy().into_owned();
+    let result = h.orch.add_watched(
+        &NewItem {
+            source_path: missing,
+            source_size: 6,
+            source_mtime: 1,
+            destination_id,
+            send_mode: SendMode::Video,
+            caption: String::new(),
+        },
+        &h.dir.path().join("frozen"),
+    );
+    assert!(result.is_err());
+    assert!(h.orch.list().unwrap().is_empty(), "nothing left to approve");
 }
 
 #[tokio::test(start_paused = true)]

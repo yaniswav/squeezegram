@@ -1,7 +1,7 @@
 //! Synchronous queue API over the SQLite database.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
@@ -22,6 +22,8 @@ pub const HOLD_DUPLICATE: &str = "duplicate";
 pub const HOLD_WATCH: &str = "watch_pending";
 /// `origin` of an item found in a watched folder (`manual` for `queue_add`).
 pub const ORIGIN_WATCH: &str = "watch";
+/// Most watched files waiting for approval at once: each holds a full private copy on disk.
+pub const MAX_WAITING_COPIES: i64 = 20;
 /// `last_error` of an item rescheduled by Telegram's FLOOD_WAIT (F21).
 pub const FLOOD_WAIT_CODE: &str = "TG_FLOOD_WAIT";
 /// Longest minimum interval between two sends to a destination (F2): one week. Beyond it the
@@ -90,13 +92,24 @@ pub struct Item {
     /// Encoding choices of this file (schema v5); `None`: the global settings apply. Read by
     /// the media stage only while the license grants `advanced_encoding`.
     pub encoding_override: Option<EncodingOverride>,
+    /// The private copy of a watched file, frozen when it was queued for approval (schema v9).
+    #[serde(skip)]
+    pub frozen_path: Option<String>,
+}
+
+impl Item {
+    /// The file this item is analysed, encoded and sent from: its frozen copy when it has one
+    /// (what the user approved, whatever happens to the original), else its source.
+    pub fn content_path(&self) -> &str {
+        self.frozen_path.as_deref().unwrap_or(&self.source_path)
+    }
 }
 
 const ITEM_COLUMNS: &str = "id, position, source_path, source_size, source_mtime, content_id,
     identity_weak, destination_id, send_mode, caption, state, hold_reason, origin, media_json,
     plan_json, temp_path, output_path, output_size, progress_phase, progress_pct, attempts,
     last_error, next_run_at, tg_message_id, tg_sent_at, created_at, updated_at, batch_index,
-    batch_count, encoding_override";
+    batch_count, encoding_override, frozen_path";
 
 fn invalid(column: usize, error: QueueError) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, Box::new(error))
@@ -139,6 +152,7 @@ fn item_from_row(row: &Row<'_>) -> rusqlite::Result<Item> {
         encoding_override: row
             .get::<_, Option<String>>(29)?
             .and_then(|text| serde_json::from_str(&text).ok()),
+        frozen_path: row.get(30)?,
     })
 }
 
@@ -1046,23 +1060,38 @@ impl Store {
     /// A file found in a watched folder: appended in `pending_review` (`hold_reason =
     /// 'watch_pending'`, `origin = 'watch'`), never in `ready`, so only `promote` lets it run
     /// (N4). The destination is not marked as used: the user did not choose it for this file.
-    /// Returns `None`, adding nothing, when the same path already waits or runs in the queue
-    /// (added by hand, or found before and not finished).
-    pub fn add_watched_item(&mut self, item: &NewItem) -> Result<Option<i64>> {
+    /// Returns `None`, adding nothing, when the same file (path, size and time) already waits
+    /// or runs in the queue (added by hand, or found before and not finished); a new version
+    /// of it is a new item. The row names its private copy under `frozen_root`
+    /// (`frozen_file`), which the caller makes: the copy is what is approved and sent.
+    /// Refused with `WatchWaitingFull` while `MAX_WAITING_COPIES` files wait for approval.
+    pub fn add_watched_item(&mut self, item: &NewItem, frozen_root: &Path) -> Result<Option<i64>> {
         let tx = self.conn.transaction()?;
         destination_exists(&tx, item.destination_id)?;
         let key = path_key(&item.source_path);
-        let queued: Vec<String> = {
-            let mut stmt =
-                tx.prepare("SELECT source_path FROM items WHERE state NOT IN (?1, ?2)")?;
+        let queued: Vec<(String, i64, i64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT source_path, source_size, source_mtime FROM items
+                 WHERE state NOT IN (?1, ?2)",
+            )?;
             let rows = stmt.query_map(
                 params![State::Sent.as_str(), State::Cancelled.as_str()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
             rows.collect::<rusqlite::Result<_>>()?
         };
-        if queued.iter().any(|path| path_key(path) == key) {
+        if queued.iter().any(|(path, size, mtime)| {
+            path_key(path) == key && (*size, *mtime) == (item.source_size, item.source_mtime)
+        }) {
             return Ok(None);
+        }
+        let waiting: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM items WHERE state = ?1 AND frozen_path IS NOT NULL",
+            [State::PendingReview.as_str()],
+            |row| row.get(0),
+        )?;
+        if waiting >= MAX_WAITING_COPIES {
+            return Err(QueueError::WatchWaitingFull);
         }
         let now = now_iso();
         tx.execute(
@@ -1085,8 +1114,25 @@ impl Store {
             ],
         )?;
         let id = tx.last_insert_rowid();
+        tx.execute(
+            "UPDATE items SET frozen_path = ?1 WHERE id = ?2",
+            params![
+                frozen_file(frozen_root, id, &item.source_path).to_string_lossy(),
+                id
+            ],
+        )?;
         tx.commit()?;
         Ok(Some(id))
+    }
+
+    /// Drops a watched item whose private copy could not be made: nothing was approved, and
+    /// the watcher tries the file again.
+    pub fn remove_waiting(&mut self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM items WHERE id = ?1 AND state = ?2",
+            params![id, State::PendingReview.as_str()],
+        )?;
+        Ok(())
     }
 
     /// Puts `ids` first, in that order; the other items keep their relative order after them.
@@ -1152,8 +1198,8 @@ impl Store {
     /// Deletes `item`'s temporary file (its own) and the encoded files of its source that no
     /// item needs any more (`unneeded_outputs`); never a source.
     pub fn discard_files(&self, item: &Item) -> Result<()> {
-        if let Some(temp) = &item.temp_path {
-            remove_quietly(temp);
+        for path in [&item.temp_path, &item.frozen_path].into_iter().flatten() {
+            remove_quietly(path);
         }
         self.release_outputs(item)
     }
@@ -1229,6 +1275,12 @@ impl Store {
             if !protected.contains(&path_key(temp)) {
                 remove_quietly(temp);
             }
+        }
+        for frozen in removed
+            .iter()
+            .filter_map(|item| item.frozen_path.as_deref())
+        {
+            remove_quietly(frozen);
         }
         for path in unneeded_outputs(&kept, &removed) {
             remove_quietly(&path);
@@ -1816,6 +1868,14 @@ impl Store {
         }
         Ok(deltas)
     }
+}
+
+/// Where the private copy of a watched file lives: `<root>\<item id>\<file name>`. The name is
+/// the original's (the plan and the sent file take theirs from it); the folder is not the
+/// item's encode folder, so a Strip output cannot land on its own input.
+pub fn frozen_file(root: &Path, id: i64, source: &str) -> PathBuf {
+    let name = Path::new(source).file_name().unwrap_or_default();
+    root.join(id.to_string()).join(name)
 }
 
 /// Deletes a queue file (temporary or encoded, never a source), then its item folder if that
@@ -3053,25 +3113,108 @@ mod tests {
 
     #[test]
     fn a_watched_file_waits_for_approval_and_is_not_queued_twice() {
+        let dir = TestDir::new("watched-copy");
         let mut store = memory_store();
         let destination_id = first_destination(&store);
         let item = NewItem {
-            source_path: r"C:\In.mp4".into(),
+            source_path: r"C:\In.mp4".into(),
             source_size: 3,
             source_mtime: 1,
             destination_id,
             send_mode: SendMode::Video,
             caption: String::new(),
         };
-        let id = store.add_watched_item(&item).unwrap().unwrap();
+        let id = store.add_watched_item(&item, dir.path()).unwrap().unwrap();
         let held = store.get_item(id).unwrap();
         assert_eq!(held.state, State::PendingReview);
         assert_eq!(held.hold_reason.as_deref(), Some(HOLD_WATCH));
         assert_eq!(held.origin, ORIGIN_WATCH);
-        assert_eq!(store.add_watched_item(&item).unwrap(), None);
+        assert_eq!(
+            held.content_path(),
+            frozen_file(dir.path(), id, &item.source_path).to_string_lossy()
+        );
+        assert_eq!(store.add_watched_item(&item, dir.path()).unwrap(), None);
+        // A new version of the file (other size or time) is a new item to approve.
+        let newer = NewItem {
+            source_mtime: 2,
+            ..item.clone()
+        };
+        let newer_id = store.add_watched_item(&newer, dir.path()).unwrap().unwrap();
+        assert_ne!(newer_id, id);
         // Once the first one is gone (cancelled), the path may come again.
         store.cancel(id).unwrap();
-        assert!(store.add_watched_item(&item).unwrap().is_some());
+        assert!(store.add_watched_item(&item, dir.path()).unwrap().is_some());
+    }
+
+    #[test]
+    fn only_so_many_watched_files_wait_for_approval() {
+        let dir = TestDir::new("watched-limit");
+        let mut store = memory_store();
+        let destination_id = first_destination(&store);
+        let new = |n: i64| NewItem {
+            source_path: format!(r"C:\In{n}.mp4"),
+            source_size: 3,
+            source_mtime: 1,
+            destination_id,
+            send_mode: SendMode::Video,
+            caption: String::new(),
+        };
+        let ids: Vec<i64> = (0..MAX_WAITING_COPIES)
+            .map(|n| {
+                store
+                    .add_watched_item(&new(n), dir.path())
+                    .unwrap()
+                    .unwrap()
+            })
+            .collect();
+        let refused = store.add_watched_item(&new(99), dir.path());
+        assert!(matches!(refused, Err(QueueError::WatchWaitingFull)));
+        assert_eq!(refused.unwrap_err().code(), "WATCH_WAITING_FULL");
+        // Room again once the user decides one (approved, or refused).
+        store.promote(&ids[..1]).unwrap();
+        assert!(
+            store
+                .add_watched_item(&new(99), dir.path())
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn the_private_copy_goes_with_the_item() {
+        let dir = TestDir::new("watched-cleanup");
+        let mut store = memory_store();
+        let destination_id = first_destination(&store);
+        let copy = |store: &mut Store, name: &str| {
+            let item = NewItem {
+                source_path: format!(r"C:\{name}"),
+                source_size: 3,
+                source_mtime: 1,
+                destination_id,
+                send_mode: SendMode::Video,
+                caption: String::new(),
+            };
+            let id = store.add_watched_item(&item, dir.path()).unwrap().unwrap();
+            let path = frozen_file(dir.path(), id, name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"abc").unwrap();
+            (id, path)
+        };
+        let (refused, refused_copy) = copy(&mut store, "a.mp4");
+        let (_, cleared_copy) = copy(&mut store, "b.mp4");
+        store.cancel(refused).unwrap();
+        assert!(!refused_copy.exists(), "refused: copy and folder go");
+        assert!(!refused_copy.parent().unwrap().exists());
+        assert!(cleared_copy.exists(), "waiting: copy stays");
+        store.clear_items(ClearScope::All, None).unwrap();
+        assert!(!cleared_copy.exists(), "cleared: copy goes");
+        // A failed item keeps its copy for a retry.
+        let (failed, failed_copy) = copy(&mut store, "d.mp4");
+        force_state(&store, failed, State::Failed);
+        store
+            .release_outputs(&store.get_item(failed).unwrap())
+            .unwrap();
+        assert!(failed_copy.exists());
     }
 
     #[test]

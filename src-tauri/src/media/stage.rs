@@ -673,7 +673,7 @@ impl FfmpegStage {
         if item.send_mode == SendMode::Document {
             return Ok(estimate);
         }
-        let source = PathBuf::from(&item.source_path);
+        let source = PathBuf::from(item.content_path());
         let resolved = self.sidecars.resolve().map_err(missing)?;
         let info = self.estimate_probe(&resolved, item, &source).await?;
         let input = plan_input(&source, item, limit_bytes, &settings, &choice, None);
@@ -779,7 +779,7 @@ impl FfmpegStage {
         item: &Item,
         cancel: &CancellationToken,
     ) -> Result<Option<Analysis>> {
-        let source = PathBuf::from(&item.source_path);
+        let source = PathBuf::from(item.content_path());
         if item.send_mode != SendMode::Document {
             super::check_input_extension(&source)?;
         }
@@ -828,7 +828,7 @@ impl FfmpegStage {
         // `limit_resolved`: the limit this item is planned for, and sent under (the plan
         // carries it to the upload).
         let limit = self.limits.resolve_logged();
-        let source = PathBuf::from(&item.source_path);
+        let source = PathBuf::from(item.content_path());
         if item.send_mode != SendMode::Document {
             super::check_input_extension(&source)?;
         }
@@ -1010,7 +1010,7 @@ impl FfmpegStage {
             ffprobe: &resolved.ffprobe,
         };
         let settings = self.settings.get();
-        let input = PathBuf::from(&item.source_path);
+        let input = PathBuf::from(item.content_path());
         let job = Job {
             tools: &tools,
             input: &input,

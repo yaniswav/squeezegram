@@ -1353,6 +1353,7 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
             encoding_override: None,
+            frozen_path: None,
         };
         let destination = Destination {
             id: 1,

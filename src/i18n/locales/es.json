@@ -53,6 +53,7 @@
     "ILLEGAL_TRANSITION": "Esta acción no es posible en el estado actual del elemento.",
     "DESTINATION_NOT_FOUND": "Este destino ya no existe.",
     "WATCH_FOLDER_NOT_FOUND": "Esta carpeta vigilada ya no existe.",
+    "WATCH_WAITING_FULL": "Hay demasiados archivos vigilados esperando su aprobación. Apruebe o rechace algunos; los demás se tomarán después.",
     "FILE_UNREADABLE": "No se puede leer un archivo, o no es un archivo normal.",
     "INPUT_FORMAT_UNSUPPORTED": "Este formato de entrada no es compatible. Elige un vídeo o una foto compatible; no se admiten listas de reproducción, manifiestos ni secuencias de imágenes.",
     "FFMPEG_MISSING": "ffmpeg no está instalado, o la carpeta de ffmpeg personalizada no contiene ffmpeg.exe ni ffprobe.exe.",

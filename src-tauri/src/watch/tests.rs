@@ -8,7 +8,7 @@ use crate::entitlements::EntitlementStatus;
 use crate::queue::State;
 use crate::queue::events::recorder::Recorder;
 use crate::queue::orchestrator::{PauseRange, Unavailable};
-use crate::queue::store::{HOLD_WATCH, ORIGIN_WATCH, SendMode, Store};
+use crate::queue::store::{HOLD_WATCH, MAX_WAITING_COPIES, ORIGIN_WATCH, SendMode, Store};
 use crate::queue::test_util::{TestDir, destination, first_destination};
 
 const STABLE: Duration = Duration::from_secs(10);
@@ -78,6 +78,17 @@ fn watched_items(queue: &Orchestrator) -> Vec<String> {
                 .into_owned()
         })
         .collect()
+}
+
+/// An engine whose private copies go to a temp folder of the test, never the real one.
+fn engine(dir: &TestDir, queue: &Orchestrator, switch: Arc<Switch>) -> Engine {
+    let settings = SettingsStore::load(dir.path().join("settings.json")).unwrap();
+    let temp = dir.path().join("temp");
+    std::fs::create_dir_all(&temp).unwrap();
+    settings
+        .set(&serde_json::json!({ "temp": { "dir": temp.to_string_lossy() } }))
+        .unwrap();
+    Engine::new(queue.clone(), switch, Arc::new(settings))
 }
 
 /// One listing; what it found is handed to the queue (as `Engine::poll` does when it succeeds).
@@ -293,7 +304,7 @@ fn found_files_wait_in_pending_review_and_never_run_by_themselves() {
     let queue = orchestrator(store);
     let switch = Arc::new(Switch::default());
     switch.set(true);
-    let mut engine = Engine::new(queue.clone(), switch);
+    let mut engine = engine(&dir, &queue, switch);
     let t0 = Instant::now();
     engine.poll(t0, STABLE);
     std::fs::write(watched.join("a.jpg"), b"jpeg").unwrap();
@@ -339,7 +350,7 @@ fn a_restart_adds_nothing_again_but_what_came_while_closed() {
             .add_watch_folder(&watched.to_string_lossy(), destination_id, None)
             .unwrap();
         let queue = orchestrator(store);
-        let mut engine = Engine::new(queue.clone(), switch.clone());
+        let mut engine = engine(&dir, &queue, switch.clone());
         engine.poll(t0, STABLE);
         std::fs::write(watched.join("kept.mp4"), b"1").unwrap();
         std::fs::write(watched.join("removed.mp4"), b"2").unwrap();
@@ -360,7 +371,7 @@ fn a_restart_adds_nothing_again_but_what_came_while_closed() {
     std::fs::write(watched.join("closed.mp4"), b"4").unwrap();
 
     let queue = orchestrator(Store::open(&dir.path().join("squeezegram.db")).unwrap());
-    let mut engine = Engine::new(queue.clone(), switch);
+    let mut engine = engine(&dir, &queue, switch);
     let t1 = t0 + secs(100);
     for step in 0..5 {
         engine.poll(t1 + secs(step * 10), STABLE);
@@ -390,7 +401,7 @@ fn start_and_settle(dir: &TestDir, t: Instant) -> (Orchestrator, Engine) {
     let switch = Arc::new(Switch::default());
     switch.set(true);
     let queue = orchestrator(Store::open(&dir.path().join("squeezegram.db")).unwrap());
-    let mut engine = Engine::new(queue.clone(), switch);
+    let mut engine = engine(dir, &queue, switch);
     for step in 0..5 {
         engine.poll(t + secs(step * 10), STABLE);
     }
@@ -512,7 +523,7 @@ fn nothing_is_listed_or_seeded_before_the_license_applies() {
     let (_watched, folder) = folder_with(&dir, &[("old.mp4", b"1")]);
     let queue = orchestrator(Store::open(&dir.path().join("squeezegram.db")).unwrap());
     let switch = Arc::new(Switch::default());
-    let mut engine = Engine::new(queue.clone(), switch.clone());
+    let mut engine = engine(&dir, &queue, switch.clone());
     let t0 = Instant::now();
     engine.poll(t0, STABLE);
     assert_eq!(seen_names(&queue, &folder), None, "not listed, not seeded");
@@ -537,7 +548,7 @@ fn a_seen_list_that_cannot_be_saved_is_tried_again() {
     let queue = orchestrator(store);
     let switch = Arc::new(Switch::default());
     switch.set(true);
-    let mut engine = Engine::new(queue.clone(), switch);
+    let mut engine = engine(&dir, &queue, switch);
     let t0 = Instant::now();
     engine.poll(t0, STABLE);
     assert!(
@@ -570,7 +581,7 @@ fn the_license_gate_turns_watching_off_and_on() {
         .unwrap();
     let queue = orchestrator(store);
     let switch = Arc::new(Switch::default());
-    let mut engine = Engine::new(queue.clone(), switch.clone());
+    let mut engine = engine(&dir, &queue, switch.clone());
     let t0 = Instant::now();
 
     // Not licensed: nothing is listed, nothing is taken.
@@ -629,7 +640,7 @@ fn a_disabled_folder_is_not_watched_and_starts_over_when_enabled() {
     let queue = orchestrator(store);
     let switch = Arc::new(Switch::default());
     switch.set(true);
-    let mut engine = Engine::new(queue.clone(), switch);
+    let mut engine = engine(&dir, &queue, switch);
     let t0 = Instant::now();
     engine.poll(t0, STABLE);
     let set_enabled = |enabled| {
@@ -667,7 +678,7 @@ fn an_unreadable_folder_is_retried_and_its_baseline_taken_when_it_comes_back() {
     let queue = orchestrator(store);
     let switch = Arc::new(Switch::default());
     switch.set(true);
-    let mut engine = Engine::new(queue.clone(), switch);
+    let mut engine = engine(&dir, &queue, switch);
     let t0 = Instant::now();
     engine.poll(t0, STABLE);
     let unreadable = engine.unreadable();
@@ -696,17 +707,18 @@ fn a_path_already_in_the_queue_is_not_queued_twice() {
     let queue = orchestrator(store);
     let switch = Arc::new(Switch::default());
     switch.set(true);
-    let mut engine = Engine::new(queue.clone(), switch);
+    let mut engine = engine(&dir, &queue, switch);
     let t0 = Instant::now();
     engine.poll(t0, STABLE);
     let path = watched.join("both.mp4");
     std::fs::write(&path, b"1").unwrap();
     // The user drops the same file by hand before the watcher takes it.
+    let stamp = intake::file_stamp(&path).unwrap();
     queue
         .add(&[NewItem {
             source_path: path.to_string_lossy().to_uppercase(),
-            source_size: 1,
-            source_mtime: 0,
+            source_size: stamp.0,
+            source_mtime: stamp.1,
             destination_id,
             send_mode: SendMode::Video,
             caption: String::new(),
@@ -716,6 +728,101 @@ fn a_path_already_in_the_queue_is_not_queued_twice() {
     engine.poll(t0 + secs(20), STABLE);
     assert_eq!(queue.list().unwrap().len(), 1);
     assert!(watched_items(&queue).is_empty());
+}
+
+#[test]
+fn a_watched_file_is_approved_from_a_private_copy_and_a_new_version_needs_its_own() {
+    let dir = TestDir::new("watch-copy");
+    let watched = dir.path().join("in");
+    std::fs::create_dir(&watched).unwrap();
+    let mut store = open_store(&dir);
+    let destination_id = first_destination(&store);
+    store
+        .add_watch_folder(&watched.to_string_lossy(), destination_id, None)
+        .unwrap();
+    let queue = orchestrator(store);
+    let switch = Arc::new(Switch::default());
+    switch.set(true);
+    let mut engine = engine(&dir, &queue, switch);
+    let t0 = Instant::now();
+    engine.poll(t0, STABLE);
+    let path = watched.join("clip.mp4");
+    std::fs::write(&path, b"first").unwrap();
+    engine.poll(t0 + secs(3), STABLE);
+    engine.poll(t0 + secs(15), STABLE);
+
+    let items = queue.list().unwrap();
+    assert_eq!(items.len(), 1);
+    let first = items[0].frozen_path.clone().unwrap();
+    assert_ne!(
+        Path::new(&first),
+        path,
+        "not the folder the third party writes in"
+    );
+    assert_eq!(std::fs::read(&first).unwrap(), b"first");
+    assert_eq!(
+        intake::file_stamp(Path::new(&first)),
+        Some((items[0].source_size, items[0].source_mtime)),
+        "the copy is the file that was queued"
+    );
+
+    // Replaced by a file of the same size, later: a new version (a name that left the folder
+    // and came back is new, as is a changed one after a restart).
+    std::fs::remove_file(&path).unwrap();
+    engine.poll(t0 + secs(16), STABLE);
+    std::fs::write(&path, b"other").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(SystemTime::now() + Duration::from_secs(120))
+        .unwrap();
+    engine.poll(t0 + secs(18), STABLE);
+    engine.poll(t0 + secs(30), STABLE);
+    let items = queue.list().unwrap();
+    assert_eq!(items.len(), 2, "the new version waits for its own approval");
+    assert_eq!(
+        std::fs::read(&first).unwrap(),
+        b"first",
+        "the approved one is unchanged"
+    );
+    let second = items[1].frozen_path.clone().unwrap();
+    assert_eq!(std::fs::read(&second).unwrap(), b"other");
+}
+
+#[test]
+fn watched_files_wait_for_approval_only_up_to_a_limit() {
+    let dir = TestDir::new("watch-limit");
+    let watched = dir.path().join("in");
+    std::fs::create_dir(&watched).unwrap();
+    let mut store = open_store(&dir);
+    let destination_id = first_destination(&store);
+    store
+        .add_watch_folder(&watched.to_string_lossy(), destination_id, None)
+        .unwrap();
+    let queue = orchestrator(store);
+    let switch = Arc::new(Switch::default());
+    switch.set(true);
+    let mut engine = engine(&dir, &queue, switch);
+    let t0 = Instant::now();
+    engine.poll(t0, STABLE);
+    for n in 0..=MAX_WAITING_COPIES {
+        std::fs::write(watched.join(format!("{n}.mp4")), b"x").unwrap();
+    }
+    engine.poll(t0 + secs(3), STABLE);
+    engine.poll(t0 + secs(15), STABLE);
+    let waiting = |queue: &Orchestrator| watched_items(queue).len() as i64;
+    assert_eq!(
+        waiting(&queue),
+        MAX_WAITING_COPIES,
+        "one file is left for later"
+    );
+
+    // The user decides one: the file left behind is taken at the next poll.
+    let first = queue.list().unwrap()[0].id;
+    queue.promote(&[first]).unwrap();
+    engine.poll(t0 + secs(18), STABLE);
+    assert_eq!(waiting(&queue), MAX_WAITING_COPIES + 1);
 }
 
 #[test]
@@ -743,7 +850,7 @@ fn a_file_the_queue_refuses_is_tried_again() {
     let queue = orchestrator(store);
     let switch = Arc::new(Switch::default());
     switch.set(true);
-    let mut engine = Engine::new(queue.clone(), switch);
+    let mut engine = engine(&dir, &queue, switch);
     let t0 = Instant::now();
     engine.poll(t0, STABLE);
     std::fs::write(watched.join("a.mp4"), b"1").unwrap();

@@ -12,6 +12,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{BuildHasher, RandomState};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -31,7 +32,7 @@ use super::events::{
 use super::state::{Changes, Column};
 use super::store::{
     ClearOutcome, ClearScope, Destination, DestinationPatch, HistoryEntry, HistoryFilter,
-    HistoryStatus, Item, ItemPatch, NewItem, SendVia, Store, remove_quietly,
+    HistoryStatus, Item, ItemPatch, NewItem, SendVia, Store, frozen_file, remove_quietly,
 };
 use super::{QueueError, Result, State, iso, parse_iso, recovery};
 
@@ -430,13 +431,37 @@ impl Orchestrator {
 
     /// A file found in a watched folder, held in `pending_review` until the user approves it
     /// (`Store::add_watched_item`). The loop is not woken: the item cannot run yet.
-    pub fn add_watched(&self, item: &NewItem) -> Result<Option<i64>> {
-        let id = self.with_store(|store| store.add_watched_item(item))?;
-        if let Some(id) = id {
-            self.emit_changed(&[id]);
-            self.analyze_soon(&[id]);
+    ///
+    /// The file is copied under `frozen_root` right away, before anyone sees the item: the
+    /// analysis, the approval and the send all use that copy (`Item::content_path`), so a
+    /// change made to the original afterwards never reaches the destination. Copying at
+    /// approval time instead would leave the file the user looked at free to change before it.
+    /// The copy runs without the store's lock; if it fails the item is dropped again.
+    pub fn add_watched(&self, item: &NewItem, frozen_root: &Path) -> Result<Option<i64>> {
+        let Some(id) = self.with_store(|store| store.add_watched_item(item, frozen_root))? else {
+            return Ok(None);
+        };
+        let frozen = frozen_file(frozen_root, id, &item.source_path);
+        let copied = frozen
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::copy(&item.source_path, &frozen))
+            // Changed since the watcher saw it stable: drop it, the next poll retakes it.
+            .and_then(|size| {
+                if i64::try_from(size).ok() == Some(item.source_size) {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::other("watched file changed while copied"))
+                }
+            });
+        if let Err(error) = copied {
+            remove_quietly(&frozen.to_string_lossy());
+            self.with_store(|store| store.remove_waiting(id))?;
+            return Err(error.into());
         }
-        Ok(id)
+        self.emit_changed(&[id]);
+        self.analyze_soon(&[id]);
+        Ok(Some(id))
     }
 
     pub fn list(&self) -> Result<Vec<Item>> {
@@ -1124,7 +1149,7 @@ impl Orchestrator {
                     id,
                     State::Encoded,
                     identity
-                        .set(Column::OutputPath, item.source_path.clone())
+                        .set(Column::OutputPath, item.content_path().to_owned())
                         .set(Column::OutputSize, item.source_size)
                         .clear(Column::ProgressPhase)
                         .reason("sendable_as_is"),

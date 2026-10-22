@@ -28,6 +28,8 @@ pub enum QueueError {
     DestinationNotFound(i64),
     #[error("watched folder {0} not found")]
     WatchFolderNotFound(i64),
+    #[error("too many watched files are waiting for approval")]
+    WatchWaitingFull,
     #[error("item {item_id}: illegal transition {from} -> {to}")]
     IllegalTransition {
         item_id: i64,
@@ -56,6 +58,7 @@ impl QueueError {
             QueueError::ItemNotFound(_) => "ITEM_NOT_FOUND",
             QueueError::DestinationNotFound(_) => "DESTINATION_NOT_FOUND",
             QueueError::WatchFolderNotFound(_) => "WATCH_FOLDER_NOT_FOUND",
+            QueueError::WatchWaitingFull => "WATCH_WAITING_FULL",
             QueueError::IllegalTransition { .. } => "ILLEGAL_TRANSITION",
             QueueError::ItemStarted(_) => "ITEM_STARTED",
             QueueError::FileUnreadable(_) => "FILE_UNREADABLE",

@@ -10,6 +10,7 @@ use super::{QueueError, Result};
 /// Migrations in order: entry `i` brings the schema to version `i + 1`.
 const MIGRATIONS: &[&str] = &[
     SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7, SCHEMA_V8,
+    SCHEMA_V9,
 ];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
@@ -196,6 +197,12 @@ ALTER TABLE items ADD COLUMN send_via TEXT NOT NULL DEFAULT 'upload'
     CHECK (send_via IN ('copy', 'remote', 'upload'));
 ALTER TABLE history ADD COLUMN via TEXT NOT NULL DEFAULT 'upload'
     CHECK (via IN ('copy', 'remote', 'upload'));
+";
+
+/// v9: the private copy a watched file is approved and sent from (`Item::content_path`).
+/// Existing rows have none: they read their source as before.
+const SCHEMA_V9: &str = "
+ALTER TABLE items ADD COLUMN frozen_path TEXT;
 ";
 
 /// `%APPDATA%\squeezegram\squeezegram.db`.

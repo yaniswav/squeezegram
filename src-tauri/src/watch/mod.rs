@@ -34,6 +34,13 @@
 //! (`Store::add_watched_item`), and content already sent to the destination is held as a
 //! duplicate when probed, as for a manual add.
 //!
+//! **Approval.** What the user approves is a private copy, made when the file is queued
+//! (`Orchestrator::add_watched`) in `<temp root>rozen\<item id>`: the analysis, the approval
+//! and the send all read it, so a file replaced afterwards, even by one of the same size, never
+//! reaches the destination. The replacement is a new version (new size or time) and a new item
+//! to approve. At most `MAX_WAITING_COPIES` files wait for approval: past that a file is left
+//! for the next poll (`WATCH_WAITING_FULL` in the journal) until the user decides some.
+//!
 //! **Gate.** Nothing is listed unless `Entitlements::allows(WatchedFolder)`, asked at every
 //! poll: the verdict follows the license and the signed-in account. The license commands and
 //! the login watcher wake the thread so a change applies at once. The gate also closes for a
@@ -434,6 +441,8 @@ impl Tracker {
 pub struct Engine {
     queue: Orchestrator,
     entitlements: Arc<dyn Entitlements>,
+    /// Where the private copies go: the temp root, read at each file.
+    settings: Arc<SettingsStore>,
     /// Whether the last poll was allowed to watch; `None` before the first poll.
     active: Option<bool>,
     trackers: HashMap<i64, Tracker>,
@@ -442,10 +451,15 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(queue: Orchestrator, entitlements: Arc<dyn Entitlements>) -> Self {
+    pub fn new(
+        queue: Orchestrator,
+        entitlements: Arc<dyn Entitlements>,
+        settings: Arc<SettingsStore>,
+    ) -> Self {
         Self {
             queue,
             entitlements,
+            settings,
             active: None,
             trackers: HashMap::new(),
             unreadable: Arc::default(),
@@ -545,7 +559,7 @@ impl Engine {
                         );
                     }
                     for file in found {
-                        if queue_file(&self.queue, folder, &file) {
+                        if queue_file(&self.queue, &self.settings, folder, &file) {
                             tracker.taken(&file);
                         } else {
                             tracker.refused(&file.name);
@@ -592,7 +606,12 @@ fn save_seen(queue: &Orchestrator, folder: &WatchFolder, tracker: &mut Tracker) 
 }
 
 /// Whether the queue has the file now (added, or already there).
-fn queue_file(queue: &Orchestrator, folder: &WatchFolder, file: &Found) -> bool {
+fn queue_file(
+    queue: &Orchestrator,
+    settings: &SettingsStore,
+    folder: &WatchFolder,
+    file: &Found,
+) -> bool {
     let Some(destination_id) = folder.destination_id else {
         return false;
     };
@@ -603,14 +622,18 @@ fn queue_file(queue: &Orchestrator, folder: &WatchFolder, file: &Found) -> bool 
             None => Ok(store.get_destination(destination_id)?.default_mode),
         })
         .and_then(|send_mode| {
-            queue.add_watched(&NewItem {
-                source_path: path.clone(),
-                source_size: file.size as i64,
-                source_mtime: file.modified_s,
-                destination_id,
-                send_mode,
-                caption: String::new(),
-            })
+            let frozen_root = crate::media::stage::temp_root(&settings.get().temp)?.join("frozen");
+            queue.add_watched(
+                &NewItem {
+                    source_path: path.clone(),
+                    source_size: file.size as i64,
+                    source_mtime: file.modified_s,
+                    destination_id,
+                    send_mode,
+                    caption: String::new(),
+                },
+                &frozen_root,
+            )
         });
     match added {
         Ok(Some(item_id)) => tracing::info!(
@@ -675,7 +698,7 @@ impl WatchService {
     ) -> io::Result<Self> {
         let (signals, received) = mpsc::channel();
         let (finished, done) = mpsc::channel();
-        let mut engine = Engine::new(queue, entitlements);
+        let mut engine = Engine::new(queue, entitlements, settings.clone());
         let unreadable = engine.unreadable();
         thread::Builder::new().name("watch".into()).spawn(move || {
             let started = Instant::now();

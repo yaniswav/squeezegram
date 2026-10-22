@@ -53,6 +53,7 @@
     "ILLEGAL_TRANSITION": "Cette action n'est pas possible dans l'état actuel de l'élément.",
     "DESTINATION_NOT_FOUND": "Cette destination n'existe plus.",
     "WATCH_FOLDER_NOT_FOUND": "Ce dossier surveillé n'existe plus.",
+    "WATCH_WAITING_FULL": "Trop de fichiers surveillés attendent votre approbation. Approuvez-en ou refusez-en quelques-uns ; les autres seront pris ensuite.",
     "FILE_UNREADABLE": "Un fichier ne peut pas être lu, ou ce n'est pas un fichier ordinaire.",
     "INPUT_FORMAT_UNSUPPORTED": "Ce format d'entrée n'est pas pris en charge. Choisissez une vidéo ou une photo compatible ; les listes de lecture, manifestes et séquences d’images sont refusés.",
     "FFMPEG_MISSING": "ffmpeg n'est pas installé, ou le dossier ffmpeg personnalisé ne contient pas ffmpeg.exe et ffprobe.exe.",

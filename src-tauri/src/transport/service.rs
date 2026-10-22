@@ -1060,6 +1060,7 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
             encoding_override: None,
+            frozen_path: None,
         };
         let plan = |kind: &str, note: Option<&str>| -> Plan {
             serde_json::from_value(json!({
