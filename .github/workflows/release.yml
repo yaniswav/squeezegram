@@ -52,6 +52,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check that the tagged commit is on main
+        shell: pwsh
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::error::Could not fetch origin/main; refusing the release build.'
+            exit 1
+          }
+          git merge-base --is-ancestor $env:COMMIT_SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::error::The tagged commit is not on origin/main; refusing the release build.'
+            exit 1
+          }
 
       # Installs the exact version pinned in the "packageManager" field of package.json.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -205,6 +222,28 @@ jobs:
       TAURI_CLI_SHA256: d3919ebe0bf7013dd98293862784dd37b8f76db2d650e13a3ec11c5dd799c519
       VERSION: ${{ needs.build.outputs.version }}
     steps:
+      - name: Check that signing is for a tag on main
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if ($env:REF -cnotlike 'refs/tags/v*') {
+            Write-Output '::error::Signing requires a refs/tags/v* ref.'
+            exit 1
+          }
+          $status = & gh api "repos/$env:REPOSITORY/compare/main...$env:COMMIT_SHA" --jq '.status'
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::error::Could not compare the tagged commit with main; refusing to sign.'
+            exit 1
+          }
+          if (@('identical', 'behind') -cnotcontains $status) {
+            Write-Output '::error::The tagged commit is not on main; refusing to sign.'
+            exit 1
+          }
+
       # Only the scripts folder: make-latest-json.ps1 needs nothing else.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

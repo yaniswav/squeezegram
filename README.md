@@ -150,6 +150,16 @@ Do not publish these local outputs: the executable embeds the Telegram API ident
 
 Release setup (owner, once): `.github/workflows/release.yml` uses two GitHub environments, each with the owner as required reviewer and a deployment rule that allows only `v*` tags. In `release`, keep the secrets `SQUEEZEGRAM_TG_API_ID` and `SQUEEZEGRAM_TG_API_HASH` (build job). Create `release-signing` and move `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` into it (sign job, which runs no project dependency). Delete those two secrets from `release` and from the repository secrets.
 
+Protect `main` with branch protection or an active ruleset that blocks force pushes and deletion (add required pull requests and checks if you work through pull requests). Add an active tag ruleset for `v*` that restricts creation, updates and deletion to the owner (only the owner may bypass it). In `release-signing`, set the owner as required reviewer and allow deployments from tags matching `v*` only; preventing self-review is not needed. The owner checks the tagged commit before approving signing. The workflow's ancestry checks guard against mistakes; these GitHub settings are the real security boundary because a tag can contain a modified workflow.
+
+Verify the effective settings with the owner's authenticated GitHub CLI (settings only, no secret values). The first command may return 404 when `main` is protected only by a ruleset; in that case, confirm its active branch ruleset in the second command. Check the tag ruleset's pattern, creation/update/deletion rules and owner-only bypass, then the signing environment's reviewer and tag deployment policy:
+
+```powershell
+gh api repos/yaniswav/squeezegram/branches/main/protection
+gh api repos/yaniswav/squeezegram/rulesets --paginate --jq '.[].id' | ForEach-Object { gh api "repos/yaniswav/squeezegram/rulesets/$_" }
+@('release-signing', 'release-signing/deployment-branch-policies') | ForEach-Object { gh api "repos/yaniswav/squeezegram/environments/$_" }
+```
+
 ## License
 
 squeezegram is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, modify and share it for noncommercial purposes as defined in that license. Commercial use requires a separate written agreement with the author: open an issue on this repository to ask.
