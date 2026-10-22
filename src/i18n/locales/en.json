@@ -508,7 +508,7 @@
     "invalid": "Fix the highlighted fields to save.",
     "license": {
       "title": "License",
-      "hint": "A license unlocks squeezegram Premium for the Telegram account it was bought for. It is checked on this computer, with no network request.",
+      "hint": "A license unlocks squeezegram Premium for the Telegram account it was bought for. It is checked on this computer, with no network request. It contains a pseudonymous identifier derived from your Telegram account: anyone holding the license could check whether it belongs to a given account. The bot and signer keep orders and licenses for as long as set in the privacy notice.",
       "unavailable": "The license status couldn't be read.",
       "status": {
         "free": "Plan: Free",

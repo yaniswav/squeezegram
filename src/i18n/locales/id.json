@@ -493,7 +493,7 @@
     "invalid": "Perbaiki kolom yang disorot untuk menyimpan.",
     "license": {
       "title": "Lisensi",
-      "hint": "Lisensi membuka fitur squeezegram Premium untuk akun Telegram tempat lisensi itu dibeli. Lisensi diperiksa di komputer ini, tanpa permintaan jaringan.",
+      "hint": "Lisensi membuka fitur squeezegram Premium untuk akun Telegram tempat lisensi itu dibeli. Lisensi diperiksa di komputer ini, tanpa permintaan jaringan. Lisensi berisi pengenal pseudonim yang diturunkan dari akun Telegram Anda: siapa pun yang memegang lisensi dapat memeriksa apakah lisensi itu milik akun tertentu. Bot dan layanan penandatanganan menyimpan pesanan dan lisensi selama jangka waktu yang ditetapkan dalam pemberitahuan privasi.",
       "unavailable": "Status lisensi tidak dapat dibaca.",
       "status": {
         "free": "Paket: Gratis",

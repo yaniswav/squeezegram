@@ -523,7 +523,7 @@
     "invalid": "Corrija os campos destacados para salvar.",
     "license": {
       "title": "Licença",
-      "hint": "Uma licença desbloqueia o squeezegram Premium para a conta do Telegram para a qual foi comprada. Ela é verificada neste computador, sem nenhuma requisição de rede.",
+      "hint": "Uma licença desbloqueia o squeezegram Premium para a conta do Telegram para a qual foi comprada. Ela é verificada neste computador, sem nenhuma requisição de rede. Contém um identificador pseudônimo derivado da sua conta do Telegram: quem tiver a licença poderá verificar se ela pertence a uma determinada conta. O bot e o serviço de assinatura guardam pedidos e licenças pelo prazo definido no aviso de privacidade.",
       "unavailable": "Não foi possível ler o status da licença.",
       "status": {
         "free": "Plano: Gratuito",

@@ -523,7 +523,7 @@
     "invalid": "Corrija los campos marcados para poder guardar.",
     "license": {
       "title": "Licencia",
-      "hint": "Una licencia desbloquea squeezegram Premium para la cuenta de Telegram para la que se compró. Se comprueba en este equipo, sin ninguna solicitud de red.",
+      "hint": "Una licencia desbloquea squeezegram Premium para la cuenta de Telegram para la que se compró. Se comprueba en este equipo, sin ninguna solicitud de red. Contiene un identificador seudónimo derivado de su cuenta de Telegram: quien tenga la licencia podría comprobar si pertenece a una cuenta concreta. El bot y el servicio de firma conservan pedidos y licencias durante el plazo fijado en el aviso de privacidad.",
       "unavailable": "No se pudo leer el estado de la licencia.",
       "status": {
         "free": "Plan: Gratuito",
