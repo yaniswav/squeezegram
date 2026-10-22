@@ -43,7 +43,7 @@ Free:
 - Compression to just under the upload limit, with automatic encoder choice (graphics card first, processor as fallback).
 - Sending to chats, groups and forum topics, with caption templates (variables are listed in the app), thumbnails, and a minimum interval between sends set per destination.
 - Duplicate detection: a file already sent to a destination waits for your confirmation, with a link to the earlier message.
-- Removal of location and camera data (GPS position, camera serial numbers, editing history) from photos, and the recorded location of compliant MP4 videos, when they are sent without re-encoding. HEIC files are sent unchanged.
+- Removal of location and camera data (GPS position, camera serial numbers, editing history) from photos, and the recorded location of compliant MP4 videos, plus the embedded cover images and attachments of videos (MKV fonts included), when they are sent without re-encoding. HEIC files are sent unchanged.
 - Proxy support (SOCKS5, HTTP, MTProto).
 - The option to use your own Telegram `api_id` (from <https://my.telegram.org>) instead of squeezegram's.
 - Automatic updates (installer) or a portable build.
@@ -59,9 +59,9 @@ squeezegram Premium is a lifetime licence for version 1, bought once in Telegram
 | Caption templates, thumbnails, duplicate detection, metadata removal | yes | yes |
 | Proxy, own `api_id`, languages, updates | yes | yes |
 | Video codec (H.264 or HEVC), encoder speed, target size, maximum resolution, audio bitrate, per-file settings | automatic values | adjustable |
-| Send one batch to several chats or topics | one destination per batch | several |
+| Send one batch to several chats or topics at once | one destination per add (you can add the same files again for another destination) | several at once |
 | Watched folders (new files wait in the queue for your approval, never sent automatically) | no | yes |
-| Background mode (notification-area icon, start with Windows) | no | yes |
+| Background mode (keep running in the notification area, start hidden with Windows) | no ("Start with Windows" is available, but the window shows) | yes |
 
 ## Privacy
 

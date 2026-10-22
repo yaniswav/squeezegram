@@ -239,7 +239,7 @@
       "extraEmpty": "Choisissez une destination pour cet emplacement, ou supprimez-le.",
       "addAnother": "Ajouter une autre destination",
       "premium": "Premium",
-      "multiLocked": "L'envoi d'un lot vers plusieurs chats ou sujets est inclus avec squeezegram Premium.",
+      "multiLocked": "L'envoi d'un lot vers plusieurs chats ou sujets en une seule fois est inclus avec squeezegram Premium. Sans lui, ajoutez de nouveau les fichiers pour chaque destination.",
       "check": {
         "checking": "Vérification des autorisations…",
         "ok": "Vous pouvez envoyer ici.",
@@ -729,7 +729,7 @@
       "title": "Confidentialité",
       "strip": {
         "label": "Retirer la position et les données de l'appareil photo",
-        "hint": "Les photos envoyées sans réencodage (en tant que fichiers, par exemple) partent sans leur position GPS, sans les numéros de série de l'appareil photo ni l'historique de retouche ; leurs pixels et leur orientation sont conservés. Les vidéos MP4 conformes perdent de la même façon leur localisation enregistrée. Les fichiers HEIC sont envoyés sans modification."
+        "hint": "Les photos envoyées sans réencodage (en tant que fichiers, par exemple) partent sans leur position GPS, sans les numéros de série de l'appareil photo ni l'historique de retouche ; leurs pixels et leur orientation sont conservés. Les vidéos MP4 conformes perdent de la même façon leur localisation enregistrée. Les vidéos envoyées sans réencodage perdent aussi leurs images de couverture et pièces jointes intégrées (polices MKV comprises). Les fichiers HEIC sont envoyés sans modification."
       }
     },
     "temp": {
@@ -795,7 +795,7 @@
     "background": {
       "title": "Arrière-plan",
       "premium": "Premium",
-      "locked": "Inclus avec squeezegram Premium. D'ici là, fermer la fenêtre quitte l'application.",
+      "locked": "Inclus avec squeezegram Premium : rester actif dans la zone de notification et démarrer masqué avec Windows. D'ici là, fermer la fenêtre quitte l'application, et le démarrage avec Windows affiche la fenêtre.",
       "close": {
         "label": "Quand je ferme la fenêtre",
         "hint": "Tant qu'elle continue de tourner, la file d'attente et les dossiers surveillés restent actifs. Faites un clic droit sur l'icône dans la zone de notification pour mettre la file en pause ou quitter.",
@@ -804,7 +804,7 @@
       },
       "autostart": {
         "label": "Démarrer avec Windows",
-        "hint": "squeezegram démarre lorsque vous vous connectez à Windows et reste masqué dans la zone de notification. Cela s'applique immédiatement : il n'y a rien à enregistrer.",
+        "hint": "squeezegram démarre lorsque vous vous connectez à Windows. Avec Premium, il reste masqué dans la zone de notification ; sans Premium, sa fenêtre s'affiche. Cela s'applique immédiatement : il n'y a rien à enregistrer.",
         "inactive": "Démarrer masqué nécessite Premium. L'entrée de démarrage reste en place : Windows lance donc squeezegram avec sa fenêtre affichée. Désactivez cette option pour supprimer l'entrée."
       }
     },

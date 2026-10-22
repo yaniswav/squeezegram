@@ -239,7 +239,7 @@
       "extraEmpty": "Escolha um destino para este espaço, ou remova-o.",
       "addAnother": "Adicionar outro destino",
       "premium": "Premium",
-      "multiLocked": "Enviar um lote para vários chats ou tópicos está incluído no squeezegram Premium.",
+      "multiLocked": "Enviar um lote para vários chats ou tópicos de uma só vez está incluído no squeezegram Premium. Sem ele, adicione os arquivos novamente para cada destino.",
       "check": {
         "checking": "Verificando permissões…",
         "ok": "Você pode enviar para cá.",
@@ -729,7 +729,7 @@
       "title": "Privacidade",
       "strip": {
         "label": "Remover localização e dados da câmera das fotos",
-        "hint": "Fotos enviadas sem recodificação (como arquivos, por exemplo) saem sem a posição GPS, os números de série da câmera nem o histórico de edição; os pixels e a orientação são mantidos. Vídeos MP4 compatíveis perdem a localização gravada da mesma forma. Arquivos HEIC são enviados sem alteração."
+        "hint": "Fotos enviadas sem recodificação (como arquivos, por exemplo) saem sem a posição GPS, os números de série da câmera nem o histórico de edição; os pixels e a orientação são mantidos. Vídeos MP4 compatíveis perdem a localização gravada da mesma forma. Vídeos enviados sem recodificação também perdem capas e anexos incorporados (inclusive fontes MKV). Arquivos HEIC são enviados sem alteração."
       }
     },
     "temp": {
@@ -795,7 +795,7 @@
     "background": {
       "title": "Segundo plano",
       "premium": "Premium",
-      "locked": "Incluído no squeezegram Premium. Até lá, fechar a janela encerra o app.",
+      "locked": "Incluído no squeezegram Premium: continuar em execução na área de notificação e iniciar oculto com o Windows. Até lá, fechar a janela encerra o app, e iniciar com o Windows mostra a janela.",
       "close": {
         "label": "Quando eu fechar a janela",
         "hint": "Enquanto continua em execução, a fila e as pastas monitoradas seguem funcionando. Clique com o botão direito no ícone da área de notificação para pausar a fila ou sair.",
@@ -804,7 +804,7 @@
       },
       "autostart": {
         "label": "Iniciar com o Windows",
-        "hint": "O squeezegram inicia quando você entra no Windows e fica oculto na área de notificação. A mudança vale imediatamente; não há nada para salvar.",
+        "hint": "O squeezegram inicia quando você entra no Windows. Com o Premium, fica oculto na área de notificação; sem ele, a janela é exibida. A mudança vale imediatamente; não há nada para salvar.",
         "inactive": "Iniciar oculto exige o Premium. A entrada de inicialização continua lá, então o Windows abre o squeezegram com a janela visível. Desative esta opção para remover a entrada."
       }
     },

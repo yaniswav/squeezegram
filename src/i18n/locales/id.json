@@ -231,7 +231,7 @@
       "extraEmpty": "Pilih tujuan untuk slot ini, atau hapus slot ini.",
       "addAnother": "Tambahkan tujuan lain",
       "premium": "Premium",
-      "multiLocked": "Mengirim satu kelompok ke beberapa chat atau topik termasuk dalam squeezegram Premium.",
+      "multiLocked": "Mengirim satu kelompok ke beberapa chat atau topik sekaligus termasuk dalam squeezegram Premium. Tanpa itu, tambahkan berkas lagi untuk setiap tujuan.",
       "check": {
         "checking": "Memeriksa izin…",
         "ok": "Anda dapat mengirim ke sini.",
@@ -699,7 +699,7 @@
       "title": "Privasi",
       "strip": {
         "label": "Hapus data lokasi dan kamera dari foto",
-        "hint": "Foto yang dikirim tanpa enkode ulang (misalnya sebagai berkas) dikirim tanpa posisi GPS, nomor seri kamera, atau riwayat pengeditan; piksel dan orientasinya tetap dipertahankan. Video MP4 yang sesuai standar juga kehilangan lokasi yang direkam dengan cara yang sama. Berkas HEIC dikirim tanpa perubahan."
+        "hint": "Foto yang dikirim tanpa enkode ulang (misalnya sebagai berkas) dikirim tanpa posisi GPS, nomor seri kamera, atau riwayat pengeditan; piksel dan orientasinya tetap dipertahankan. Video MP4 yang sesuai standar juga kehilangan lokasi yang direkam dengan cara yang sama. Video yang dikirim tanpa enkode ulang juga kehilangan gambar sampul dan lampiran yang tersemat (termasuk font MKV). Berkas HEIC dikirim tanpa perubahan."
       }
     },
     "temp": {
@@ -765,7 +765,7 @@
     "background": {
       "title": "Latar belakang",
       "premium": "Premium",
-      "locked": "Termasuk dalam squeezegram Premium. Sampai saat itu, menutup jendela akan mengeluarkan aplikasi.",
+      "locked": "Termasuk dalam squeezegram Premium: tetap berjalan di area notifikasi dan dimulai tersembunyi bersama Windows. Sampai saat itu, menutup jendela akan mengeluarkan aplikasi, dan memulai bersama Windows menampilkan jendela.",
       "close": {
         "label": "Saat saya menutup jendela",
         "hint": "Selama tetap berjalan, antrean dan folder yang dipantau terus bekerja. Klik kanan ikon di area notifikasi untuk menjeda antrean atau keluar.",
@@ -774,7 +774,7 @@
       },
       "autostart": {
         "label": "Mulai bersama Windows",
-        "hint": "squeezegram dimulai saat Anda masuk ke Windows dan tetap tersembunyi di area notifikasi. Ini langsung berlaku; tidak ada yang perlu disimpan.",
+        "hint": "squeezegram dimulai saat Anda masuk ke Windows. Dengan Premium, aplikasi tetap tersembunyi di area notifikasi; tanpa Premium, jendelanya ditampilkan. Ini langsung berlaku; tidak ada yang perlu disimpan.",
         "inactive": "Memulai secara tersembunyi membutuhkan Premium. Entri startup tetap ada, sehingga Windows memulai squeezegram dengan jendelanya terlihat. Nonaktifkan ini untuk menghapus entri."
       }
     },

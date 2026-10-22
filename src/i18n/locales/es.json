@@ -239,7 +239,7 @@
       "extraEmpty": "Elija un destino para esta casilla, o quítela.",
       "addAnother": "Añadir otro destino",
       "premium": "Premium",
-      "multiLocked": "Enviar un lote a varios chats o temas está incluido en squeezegram Premium.",
+      "multiLocked": "Enviar un lote a varios chats o temas a la vez está incluido en squeezegram Premium. Sin él, vuelva a añadir los archivos para cada destino.",
       "check": {
         "checking": "Comprobando permisos…",
         "ok": "Puede enviar aquí.",
@@ -729,7 +729,7 @@
       "title": "Privacidad",
       "strip": {
         "label": "Quitar la ubicación y los datos de la cámara de las fotos",
-        "hint": "Las fotos que se envían sin recodificar (como archivos, por ejemplo) salen sin su posición GPS, sin los números de serie de la cámara ni el historial de edición; sus píxeles y su orientación se conservan. Los vídeos MP4 compatibles pierden de la misma forma la ubicación grabada. Los archivos HEIC se envían sin cambios."
+        "hint": "Las fotos que se envían sin recodificar (como archivos, por ejemplo) salen sin su posición GPS, sin los números de serie de la cámara ni el historial de edición; sus píxeles y su orientación se conservan. Los vídeos MP4 compatibles pierden de la misma forma la ubicación grabada. Los vídeos enviados sin recodificar también pierden las imágenes de portada y los adjuntos incrustados (incluidas las fuentes MKV). Los archivos HEIC se envían sin cambios."
       }
     },
     "temp": {
@@ -795,7 +795,7 @@
     "background": {
       "title": "Segundo plano",
       "premium": "Premium",
-      "locked": "Incluido con squeezegram Premium. Hasta entonces, al cerrar la ventana la aplicación se cierra.",
+      "locked": "Incluido con squeezegram Premium: seguir en ejecución en el área de notificaciones e iniciarse oculto con Windows. Hasta entonces, al cerrar la ventana la aplicación se cierra, y al iniciar con Windows se muestra la ventana.",
       "close": {
         "label": "Cuando cierro la ventana",
         "hint": "Mientras sigue en ejecución, la cola y las carpetas vigiladas siguen funcionando. Haga clic derecho en el icono del área de notificaciones para pausar la cola o salir.",
@@ -804,7 +804,7 @@
       },
       "autostart": {
         "label": "Iniciar con Windows",
-        "hint": "squeezegram se inicia al iniciar sesión en Windows y permanece oculto en el área de notificaciones. Esto se aplica de inmediato; no hay nada que guardar.",
+        "hint": "squeezegram se inicia al iniciar sesión en Windows. Con Premium permanece oculto en el área de notificaciones; sin Premium, se muestra su ventana. Esto se aplica de inmediato; no hay nada que guardar.",
         "inactive": "Iniciarse oculto requiere Premium. La entrada de inicio sigue ahí, así que Windows inicia squeezegram con su ventana visible. Desactive esto para quitar la entrada."
       }
     },

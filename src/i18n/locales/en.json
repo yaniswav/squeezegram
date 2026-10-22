@@ -235,7 +235,7 @@
       "extraEmpty": "Choose a destination for this slot, or remove it.",
       "addAnother": "Add another destination",
       "premium": "Premium",
-      "multiLocked": "Sending one batch to several chats or topics is included with squeezegram Premium.",
+      "multiLocked": "Sending one batch to several chats or topics at once is included with squeezegram Premium. Without it, queue the files again for each destination.",
       "check": {
         "checking": "Checking permissions…",
         "ok": "You can send here.",
@@ -714,7 +714,7 @@
       "title": "Privacy",
       "strip": {
         "label": "Remove location and camera data from photos",
-        "hint": "Photos sent without re-encoding (as files, for example) go out without their GPS position, camera serial numbers or editing history; their pixels and orientation are kept. Compliant MP4 videos lose their recorded location the same way. HEIC files are sent unchanged."
+        "hint": "Photos sent without re-encoding (as files, for example) go out without their GPS position, camera serial numbers or editing history; their pixels and orientation are kept. Compliant MP4 videos lose their recorded location the same way. Videos sent without re-encoding also lose embedded cover images and attachments (MKV fonts included). HEIC files are sent unchanged."
       }
     },
     "temp": {
@@ -780,7 +780,7 @@
     "background": {
       "title": "Background",
       "premium": "Premium",
-      "locked": "Included with squeezegram Premium. Until then, closing the window quits the app.",
+      "locked": "Included with squeezegram Premium: keep running in the notification area and start hidden with Windows. Until then, closing the window quits the app, and Start with Windows opens the window.",
       "close": {
         "label": "When I close the window",
         "hint": "While it keeps running, the queue and the watched folders go on working. Right-click the icon in the notification area to pause the queue or quit.",
@@ -789,7 +789,7 @@
       },
       "autostart": {
         "label": "Start with Windows",
-        "hint": "squeezegram starts when you sign in to Windows and stays hidden in the notification area. This applies right away; there is nothing to save.",
+        "hint": "squeezegram starts when you sign in to Windows. With Premium it stays hidden in the notification area; without it, its window shows. This applies right away; there is nothing to save.",
         "inactive": "Starting hidden needs Premium. The startup entry is still there, so Windows starts squeezegram with its window showing. Turn this off to remove the entry."
       }
     },
