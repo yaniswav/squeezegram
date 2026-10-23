@@ -536,14 +536,23 @@ async fn ready_without_me_is_a_generic_step_and_never_overrides_a_newer_state() 
 
     // `getMe` answers late; meanwhile TDLib already moved on: `Ready` must not come back.
     replay.push_steps(steps(json!([
-        { "expect": "getMe", "delay_ms": 300, "reply": {
+        { "expect": "getMe", "delay_ms": 1000, "reply": {
             "@type": "user", "id": 1, "first_name": "Late", "is_premium": false } },
         { "expect": "getOption", "reply": { "@type": "optionValueInteger", "value": "1024" } }
     ])));
     replay.inject(update(json!({ "@type": "authorizationStateReady" })));
-    tokio::time::sleep(Duration::from_millis(50)).await;
     replay.inject(update(json!({ "@type": "authorizationStateLoggingOut" })));
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    wait_state(&transport, "logging_out", |s| {
+        matches!(s, AuthState::LoggingOut)
+    })
+    .await;
+    // The late `getMe` answer is what sends the second `getOption`: wait for it, not a sleep.
+    let late = Instant::now();
+    while replay.sent_of("getOption").len() < 2 {
+        assert!(late.elapsed() < WAIT, "the late getMe never answered");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(
         matches!(*transport.auth_state().borrow(), AuthState::LoggingOut),
         "{:?}",
@@ -628,7 +637,11 @@ async fn chat_is_made_known_before_any_operation() {
             "is_shareable": false, "has_my_invite_links": false }] })
         .to_string(),
     );
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let injected = Instant::now();
+    while lock(&transport.inner.folders).is_none() {
+        assert!(injected.elapsed() < WAIT, "updateChatFolders never handled");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     let user = Peer {
         kind: PeerKind::User,
         raw_id: 7,

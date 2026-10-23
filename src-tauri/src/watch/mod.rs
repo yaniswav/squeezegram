@@ -35,7 +35,7 @@
 //! duplicate when probed, as for a manual add.
 //!
 //! **Approval.** What the user approves is a private copy, made when the file is queued
-//! (`Orchestrator::add_watched`) in `<temp root>rozen\<item id>`: the analysis, the approval
+//! (`Orchestrator::add_watched`) in `<temp root>\frozen\<item id>`: the analysis, the approval
 //! and the send all read it, so a file replaced afterwards, even by one of the same size, never
 //! reaches the destination. The replacement is a new version (new size or time) and a new item
 //! to approve. At most `MAX_WAITING_COPIES` files wait for approval: past that a file is left

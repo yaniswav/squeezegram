@@ -789,12 +789,16 @@ async fn wait_before_retry(cancel: &CancellationToken, delay: Duration) -> Resul
 /// the speed of the machine decides how long an encode takes, never whether it advances.
 async fn stall_watch(progress: &AtomicU64, stall: Duration) {
     let tick = (stall / 10).max(Duration::from_millis(1));
-    let (mut seen, mut since) = (progress.load(Ordering::Relaxed), Instant::now());
+    // tokio's clock, so a test can pause it (same wall time otherwise).
+    let (mut seen, mut since) = (
+        progress.load(Ordering::Relaxed),
+        tokio::time::Instant::now(),
+    );
     loop {
         tokio::time::sleep(tick).await;
         let now = progress.load(Ordering::Relaxed);
         if now != seen {
-            (seen, since) = (now, Instant::now());
+            (seen, since) = (now, tokio::time::Instant::now());
         } else if since.elapsed() >= stall {
             return;
         }
@@ -2304,7 +2308,7 @@ mod tests {
         assert_eq!(classify_failure("", Some(1), true), "FFMPEG_FAILED");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_stall_watch_returns_only_once_progress_has_stopped() {
         let progress = AtomicU64::new(0);
         let moving = async {
@@ -2319,7 +2323,7 @@ mod tests {
             () = moving => {}
             () = &mut watch => panic!("progress was moving"),
         }
-        let stopped = Instant::now();
+        let stopped = tokio::time::Instant::now();
         watch.await;
         assert!(stopped.elapsed() >= Duration::from_millis(300));
     }
