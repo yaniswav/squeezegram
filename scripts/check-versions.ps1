@@ -47,8 +47,8 @@ $distinct = @($versions.Values | Sort-Object -Unique)
 if ($distinct.Count -ne 1) {
     throw ('Versions differ: ' + (($versions.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', '))
 }
-if ($distinct[0] -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$') {
-    throw "Version '$($distinct[0])' is not a semantic version"
+if ($distinct[0] -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+    throw "Version '$($distinct[0])' must be X.Y.Z or X.Y.Z-prerelease (no build metadata '+')"
 }
 
 $endpoints = @((Get-Content -LiteralPath (Join-Path $root 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json).plugins.updater.endpoints)

@@ -60,7 +60,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $Version) { $Version = (& (Join-Path $PSScriptRoot 'check-versions.ps1') | Select-Object -Last 1) }
-if ($Version -notmatch '^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$') { throw "Version '$Version' is not a semantic version" }
+if ($Version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "Version '$Version' must be X.Y.Z or X.Y.Z-prerelease (no build metadata '+')" }
 if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw "Repository '$Repository' is not owner/name" }
 if (-not $Tag) { $Tag = "v$Version" }
 if (-not $AssetName) { $AssetName = "squeezegram-$Version-setup-x64.exe" }

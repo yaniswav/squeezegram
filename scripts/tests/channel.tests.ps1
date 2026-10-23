@@ -262,4 +262,74 @@ Describe 'Updater signature structure and binding' {
         Assert-Refused { & (Join-Path $script:scripts 'make-latest-json.ps1') -Version '1.2.3' -Tag 'v1.2.4' -SignatureFile $sig -OutFile $out } 'does not match version'
         if (Test-Path -LiteralPath $out) { throw 'A rejected tag produced a manifest' }
     }
+    # One release-version rule in every script: X.Y.Z or X.Y.Z-prerelease; no build metadata, no '+' in installer names.
+    It 'writes a manifest for plain and prerelease versions' {
+        foreach ($v in '1.2.3', '1.2.3-rc.1') {
+            $name = "squeezegram-$v-setup-x64.exe"
+            $sig = Join-Path $TestDrive "$v.sig"
+            $out = Join-Path $TestDrive "$v.json"
+            Set-Content -LiteralPath $sig -Value (New-SyntheticSignature "trusted comment: timestamp:1234567890`tfile:$name`tversion:$v")
+            & (Join-Path $script:scripts 'make-latest-json.ps1') -Version $v -SignatureFile $sig -OutFile $out
+            $manifest = Get-Content -LiteralPath $out -Raw | ConvertFrom-Json
+            if ($manifest.version -cne $v -or $manifest.platforms.'windows-x86_64'.url -cne "https://github.com/yaniswav/squeezegram/releases/download/v$v/$name") { throw "Manifest changed the version or URL for $v" }
+        }
+    }
+    It 'refuses build metadata and malformed versions' {
+        foreach ($v in '1.2.3+b', '1.2.3-rc.1+b', '1.2', 'v1.2.3', '1.2.3-') {
+            $out = Join-Path $TestDrive 'malformed.json'
+            Assert-Refused { & (Join-Path $script:scripts 'make-latest-json.ps1') -Version $v -SignatureFile (Join-Path $TestDrive 'none.sig') -OutFile $out } 'must be X\.Y\.Z'
+            if (Test-Path -LiteralPath $out) { throw "A rejected version produced a manifest: $v" }
+        }
+    }
+    It 'refuses a plus sign in the installer name' {
+        $out = Join-Path $TestDrive 'plus.json'
+        Assert-Refused { & (Join-Path $script:scripts 'make-latest-json.ps1') -Version '1.2.3' -AssetName 'squeezegram-1.2.3+b-setup-x64.exe' -SignatureFile (Join-Path $TestDrive 'none.sig') -OutFile $out } 'URL encoding'
+        if (Test-Path -LiteralPath $out) { throw 'A rejected installer name produced a manifest' }
+    }
+}
+
+Describe 'Version rule in check-versions.ps1 and build-inno-installer.ps1' {
+    It 'check-versions accepts plain and prerelease versions and refuses the rest' {
+        $scripts = Split-Path -Parent $PSScriptRoot
+        # A copy of the script in a throwaway tree, because it reads the files next to its own folder.
+        $fx = Join-Path $TestDrive 'fx'
+        New-Item -ItemType Directory -Force -Path (Join-Path $fx 'scripts/lib'), (Join-Path $fx 'src-tauri') | Out-Null
+        Copy-Item -LiteralPath (Join-Path $scripts 'check-versions.ps1') -Destination (Join-Path $fx 'scripts')
+        Copy-Item -LiteralPath (Join-Path $scripts 'lib/channel.ps1') -Destination (Join-Path $fx 'scripts/lib')
+        $conf = '{"version":"VER","plugins":{"updater":{"endpoints":["https://github.com/yaniswav/squeezegram/releases/download/channel-v1/latest.json"]}}}'
+        foreach ($case in @(@('1.2.3', $true), @('1.2.3-rc.1', $true), @('1.2.3+b', $false), @('1.2.3-rc.1+b', $false), @('1.2', $false), @('v1.2.3', $false), @('1.2.3-', $false))) {
+            $v = $case[0]
+            Set-Content -LiteralPath (Join-Path $fx 'package.json') -Value ('{"version":"' + $v + '"}')
+            Set-Content -LiteralPath (Join-Path $fx 'src-tauri/Cargo.toml') -Value "[package]`nversion = `"$v`""
+            Set-Content -LiteralPath (Join-Path $fx 'src-tauri/tauri.conf.json') -Value $conf.Replace('VER', $v)
+            $caught = $null
+            $result = $null
+            try { $result = & (Join-Path $fx 'scripts/check-versions.ps1') | Select-Object -Last 1 } catch { $caught = $_ }
+            if ($case[1]) {
+                if ($null -ne $caught -or $result -cne $v) { throw "Version '$v' should be accepted, got '$caught'" }
+            }
+            elseif ($null -eq $caught -or $caught.Exception.Message -notmatch 'must be X\.Y\.Z') { throw "Version '$v' should be refused, got '$caught'" }
+        }
+    }
+    It 'build-inno-installer checks the version and the file name before any input' {
+        $inno = Join-Path (Split-Path -Parent $PSScriptRoot) 'build-inno-installer.ps1'
+        $absent = Join-Path $TestDrive 'absent'
+        function Invoke-Inno([string] $Version, [string] $Filename) {
+            & $inno -AppSource $absent -TdjsonSource $absent -NoticesSource $absent -LicenseSource $absent -BootstrapperSource $absent -Version $Version -OutputDirectory $absent -OutputFilename $Filename
+        }
+        # A value that passes binding reaches the input check; a refused one stops at binding.
+        foreach ($v in '1.2.3', '1.2.3-rc.1') {
+            $caught = $null
+            try { Invoke-Inno $v "squeezegram-$v-setup-x64" } catch { $caught = $_ }
+            if ($null -eq $caught -or $caught.Exception.Message -notmatch 'Required input missing') { throw "Version '$v' should pass the version check, got '$caught'" }
+        }
+        foreach ($v in '1.2.3+b', '1.2.3-rc.1+b', '1.2', 'v1.2.3', '1.2.3-') {
+            $caught = $null
+            try { Invoke-Inno $v 'squeezegram-setup-x64' } catch { $caught = $_ }
+            if ($null -eq $caught -or $caught.Exception.ParameterName -ne 'Version') { throw "Version '$v' should be refused, got '$caught'" }
+        }
+        $caught = $null
+        try { Invoke-Inno '1.2.3' 'squeezegram-1.2.3+b-setup-x64' } catch { $caught = $_ }
+        if ($null -eq $caught -or $caught.Exception.ParameterName -ne 'OutputFilename') { throw "A '+' in the installer name should be refused, got '$caught'" }
+    }
 }

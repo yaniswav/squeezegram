@@ -9,9 +9,9 @@ param(
     [Parameter(Mandatory)][string] $NoticesSource,
     [Parameter(Mandatory)][string] $LicenseSource,
     [Parameter(Mandatory)][string] $BootstrapperSource,
-    [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$')][string] $Version,
+    [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$')][string] $Version,
     [Parameter(Mandatory)][string] $OutputDirectory,
-    [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9._+-]+$')][string] $OutputFilename,
+    [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9._-]+$')][string] $OutputFilename,
     [string] $IsccPath
 )
 
@@ -43,7 +43,7 @@ if ((Get-FileHash -LiteralPath $IsccPath -Algorithm SHA256).Hash.ToLowerInvarian
 }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).ProviderPath
-$numericVersion = $Version -replace '[-+].*$', ''
+$numericVersion = $Version -replace '-.*$', ''
 $defines = @(
     "/DAppSource=$AppSource", "/DTdjsonSource=$TdjsonSource", "/DNoticesSource=$NoticesSource",
     "/DLicenseSource=$LicenseSource", "/DBootstrapperSource=$BootstrapperSource", "/DVersion=$Version",

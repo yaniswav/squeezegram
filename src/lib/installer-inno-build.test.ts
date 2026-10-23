@@ -134,19 +134,14 @@ test(
 )
 
 test(
-  "Inno accepts release, prerelease and metadata versions but fails before compiling absent inputs",
+  "Inno accepts release and prerelease versions but fails before compiling absent inputs",
   { skip: process.platform !== "win32" },
   () => {
     const path = fileURLToPath(
       new URL("scripts/build-inno-installer.ps1", root),
     )
 
-    for (const version of [
-      "0.1.0",
-      "0.1.0-beta.1",
-      "0.1.0+build.2",
-      "0.1.0-beta.1+local.2",
-    ]) {
+    for (const version of ["0.1.0", "0.1.0-beta.1"]) {
       const missing = fileURLToPath(
         new URL("src-tauri/target/absent-inno-test-payload", root),
       )
@@ -183,13 +178,14 @@ test(
 
     assert.match(
       compiler,
-      /\$numericVersion = \$Version -replace '\[-\+\]\.\*\$', ''/,
+      /\$numericVersion = \$Version -replace '-\.\*\$', ''/,
     )
     assert.match(compiler, /\/DNumericVersion=\$numericVersion/)
   },
 )
 
-test("release version guards accept prerelease plus metadata consistently", () => {
+// Build metadata is refused: the channel publishes only vX.Y.Z and the updater ignores `+meta`.
+test("release version guards accept prerelease and refuse metadata consistently", () => {
   const check = script("check-versions")
 
   const expression = compiler.match(
@@ -201,18 +197,15 @@ test("release version guards accept prerelease plus metadata consistently", () =
 
   const pattern = new RegExp(expression)
 
-  for (const version of [
-    "0.1.0",
-    "0.1.0-beta.1",
-    "0.1.0+build.2",
-    "0.1.0-beta.1+local.2",
-  ]) {
+  for (const version of ["0.1.0", "0.1.0-beta.1"]) {
     assert.ok(pattern.test(version))
   }
 
   for (const version of [
     "0.1",
     "0.1.0-",
+    "0.1.0+build.2",
+    "0.1.0-beta.1+local.2",
     "0.1.0+",
     "0.1.0+local+other",
     "0.1.0/local",
