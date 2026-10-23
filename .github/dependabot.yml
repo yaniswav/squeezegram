@@ -8,6 +8,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Reviewed version, pinned by src/lib/installer-inno-build.test.ts;
+      # bumped manually together with the Inno adapter review.
+      - dependency-name: tauri-plugin-updater
     groups:
       cargo-minor-and-patch:
         update-types:
@@ -19,6 +23,14 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Reviewed version, pinned by src/lib/installer-inno-build.test.ts and
+      # release.yml's standalone signer; bumped manually with the Inno adapter
+      # review.
+      - dependency-name: "@tauri-apps/cli"
+      # Keep @types/node on the Node major used by CI.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       npm-minor-and-patch:
         update-types:
