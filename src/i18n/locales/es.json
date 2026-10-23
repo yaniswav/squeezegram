@@ -820,7 +820,7 @@
     "background": {
       "title": "Segundo plano",
       "premium": "Premium",
-      "locked": "Incluido con squeezegram Premium: seguir en ejecución en el área de notificaciones e iniciarse oculto con Windows. Hasta entonces, al cerrar la ventana la aplicación se cierra, y al iniciar con Windows se muestra la ventana.",
+      "locked": "Incluido con squeezegram Premium: seguir en ejecución en el área de notificaciones e iniciarse con Windows. Hasta entonces, al cerrar la ventana la aplicación se cierra.",
       "close": {
         "label": "Cuando cierro la ventana",
         "hint": "Mientras sigue en ejecución, la cola y las carpetas vigiladas siguen funcionando. Haga clic derecho en el icono del área de notificaciones para pausar la cola o salir.",
@@ -829,8 +829,8 @@
       },
       "autostart": {
         "label": "Iniciar con Windows",
-        "hint": "squeezegram se inicia al iniciar sesión en Windows. Con Premium permanece oculto en el área de notificaciones; sin Premium, se muestra su ventana. Esto se aplica de inmediato; no hay nada que guardar.",
-        "inactive": "Iniciarse oculto requiere Premium. La entrada de inicio sigue ahí, así que Windows inicia squeezegram con su ventana visible. Desactive esto para quitar la entrada."
+        "hint": "squeezegram se inicia al iniciar sesión en Windows. Activarlo requiere Premium; después permanece oculto en el área de notificaciones. Esto se aplica de inmediato; no hay nada que guardar.",
+        "inactive": "Premium no está activo. La entrada de inicio sigue ahí, así que Windows inicia squeezegram con su ventana visible. Desactive esto para quitar la entrada."
       }
     },
     "groupRisk": {

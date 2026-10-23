@@ -820,7 +820,7 @@
     "background": {
       "title": "Segundo plano",
       "premium": "Premium",
-      "locked": "Incluído no squeezegram Premium: continuar em execução na área de notificação e iniciar oculto com o Windows. Até lá, fechar a janela encerra o app, e iniciar com o Windows mostra a janela.",
+      "locked": "Incluído no squeezegram Premium: continuar em execução na área de notificação e iniciar com o Windows. Até lá, fechar a janela encerra o app.",
       "close": {
         "label": "Quando eu fechar a janela",
         "hint": "Enquanto continua em execução, a fila e as pastas monitoradas seguem funcionando. Clique com o botão direito no ícone da área de notificação para pausar a fila ou sair.",
@@ -829,8 +829,8 @@
       },
       "autostart": {
         "label": "Iniciar com o Windows",
-        "hint": "O squeezegram inicia quando você entra no Windows. Com o Premium, fica oculto na área de notificação; sem ele, a janela é exibida. A mudança vale imediatamente; não há nada para salvar.",
-        "inactive": "Iniciar oculto exige o Premium. A entrada de inicialização continua lá, então o Windows abre o squeezegram com a janela visível. Desative esta opção para remover a entrada."
+        "hint": "O squeezegram inicia quando você entra no Windows. Ativar exige o Premium; depois, ele fica oculto na área de notificação. A mudança vale imediatamente; não há nada para salvar.",
+        "inactive": "O Premium não está ativo. A entrada de inicialização continua lá, então o Windows abre o squeezegram com a janela visível. Desative esta opção para remover a entrada."
       }
     },
     "groupRisk": {

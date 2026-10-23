@@ -790,7 +790,7 @@
     "background": {
       "title": "Latar belakang",
       "premium": "Premium",
-      "locked": "Termasuk dalam squeezegram Premium: tetap berjalan di area notifikasi dan dimulai tersembunyi bersama Windows. Sampai saat itu, menutup jendela akan mengeluarkan aplikasi, dan memulai bersama Windows menampilkan jendela.",
+      "locked": "Termasuk dalam squeezegram Premium: tetap berjalan di area notifikasi dan dimulai bersama Windows. Sampai saat itu, menutup jendela akan mengeluarkan aplikasi.",
       "close": {
         "label": "Saat saya menutup jendela",
         "hint": "Selama tetap berjalan, antrean dan folder yang dipantau terus bekerja. Klik kanan ikon di area notifikasi untuk menjeda antrean atau keluar.",
@@ -799,8 +799,8 @@
       },
       "autostart": {
         "label": "Mulai bersama Windows",
-        "hint": "squeezegram dimulai saat Anda masuk ke Windows. Dengan Premium, aplikasi tetap tersembunyi di area notifikasi; tanpa Premium, jendelanya ditampilkan. Ini langsung berlaku; tidak ada yang perlu disimpan.",
-        "inactive": "Memulai secara tersembunyi membutuhkan Premium. Entri startup tetap ada, sehingga Windows memulai squeezegram dengan jendelanya terlihat. Nonaktifkan ini untuk menghapus entri."
+        "hint": "squeezegram dimulai saat Anda masuk ke Windows. Mengaktifkannya membutuhkan Premium; setelah itu aplikasi tetap tersembunyi di area notifikasi. Ini langsung berlaku; tidak ada yang perlu disimpan.",
+        "inactive": "Premium tidak aktif. Entri startup tetap ada, sehingga Windows memulai squeezegram dengan jendelanya terlihat. Nonaktifkan ini untuk menghapus entri."
       }
     },
     "groupRisk": {

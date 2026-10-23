@@ -805,7 +805,7 @@
     "background": {
       "title": "Background",
       "premium": "Premium",
-      "locked": "Included with squeezegram Premium: keep running in the notification area and start hidden with Windows. Until then, closing the window quits the app, and Start with Windows opens the window.",
+      "locked": "Included with squeezegram Premium: keep running in the notification area and start with Windows. Until then, closing the window quits the app.",
       "close": {
         "label": "When I close the window",
         "hint": "While it keeps running, the queue and the watched folders go on working. Right-click the icon in the notification area to pause the queue or quit.",
@@ -814,8 +814,8 @@
       },
       "autostart": {
         "label": "Start with Windows",
-        "hint": "squeezegram starts when you sign in to Windows. With Premium it stays hidden in the notification area; without it, its window shows. This applies right away; there is nothing to save.",
-        "inactive": "Starting hidden needs Premium. The startup entry is still there, so Windows starts squeezegram with its window showing. Turn this off to remove the entry."
+        "hint": "squeezegram starts when you sign in to Windows. Turning this on needs Premium; it then stays hidden in the notification area. This applies right away; there is nothing to save.",
+        "inactive": "Premium isn't active. The startup entry is still there, so Windows starts squeezegram with its window showing. Turn this off to remove the entry."
       }
     },
     "groupRisk": {

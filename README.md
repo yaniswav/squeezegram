@@ -61,13 +61,13 @@ squeezegram Premium is a lifetime licence for version 1, bought once in Telegram
 | Video codec (H.264 or HEVC), encoder speed, target size, maximum resolution, audio bitrate, per-file settings | automatic values | adjustable |
 | Send one batch to several chats or topics at once | one destination per add (you can add the same files again for another destination) | several at once |
 | Watched folders (new files wait in the queue for your approval, never sent automatically) | no | yes |
-| Background mode (keep running in the notification area, start hidden with Windows) | no ("Start with Windows" is available, but the window shows) | yes |
+| Background mode (keep running in the notification area, start with Windows) | no | yes |
 
 ## Privacy
 
 squeezegram has no analytics or telemetry and no server of its own. Your files stay on your computer until you choose to send them. Settings, the queue and the licence key are stored in `%APPDATA%\squeezegram`; the Telegram session, ffmpeg and logs are stored in `%LOCALAPPDATA%\squeezegram`. Temporary files use `%LOCALAPPDATA%\squeezegram\tmp` by default, or the temporary folder selected in Settings.
 
-The licence contains a pseudonymous identifier derived from your Telegram account. Anyone holding the licence could check whether it belongs to a given account. The bot and signer keep orders and licences for as long as set in the privacy notice.
+The licence contains a pseudonymous identifier derived from your Telegram account. Anyone holding the licence could check whether it belongs to a given account. The bot and signer keep orders and licences for as long as set in the privacy notice (see [PRIVACY.md](PRIVACY.md), currently a draft).
 
 What leaves your computer:
 

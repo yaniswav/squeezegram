@@ -820,7 +820,7 @@
     "background": {
       "title": "Arrière-plan",
       "premium": "Premium",
-      "locked": "Inclus avec squeezegram Premium : rester actif dans la zone de notification et démarrer masqué avec Windows. D'ici là, fermer la fenêtre quitte l'application, et le démarrage avec Windows affiche la fenêtre.",
+      "locked": "Inclus avec squeezegram Premium : rester actif dans la zone de notification et démarrer avec Windows. D'ici là, fermer la fenêtre quitte l'application.",
       "close": {
         "label": "Quand je ferme la fenêtre",
         "hint": "Tant qu'elle continue de tourner, la file d'attente et les dossiers surveillés restent actifs. Faites un clic droit sur l'icône dans la zone de notification pour mettre la file en pause ou quitter.",
@@ -829,8 +829,8 @@
       },
       "autostart": {
         "label": "Démarrer avec Windows",
-        "hint": "squeezegram démarre lorsque vous vous connectez à Windows. Avec Premium, il reste masqué dans la zone de notification ; sans Premium, sa fenêtre s'affiche. Cela s'applique immédiatement : il n'y a rien à enregistrer.",
-        "inactive": "Démarrer masqué nécessite Premium. L'entrée de démarrage reste en place : Windows lance donc squeezegram avec sa fenêtre affichée. Désactivez cette option pour supprimer l'entrée."
+        "hint": "squeezegram démarre lorsque vous vous connectez à Windows. L'activer nécessite Premium ; il reste alors masqué dans la zone de notification. Cela s'applique immédiatement : il n'y a rien à enregistrer.",
+        "inactive": "Premium n'est pas actif. L'entrée de démarrage reste en place : Windows lance donc squeezegram avec sa fenêtre affichée. Désactivez cette option pour supprimer l'entrée."
       }
     },
     "groupRisk": {
