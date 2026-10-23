@@ -411,6 +411,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decode_part_is_strict_base64url_without_padding() {
+        // Pinned across base64 upgrades: these are the three ways a key part can be malformed.
+        assert_eq!(decode_part("AA"), Ok(vec![0]));
+        assert_eq!(decode_part("-_8"), Ok(vec![0xfb, 0xff]));
+        assert_eq!(
+            decode_part("AB"),
+            Err(LicenseError::Malformed),
+            "trailing bits"
+        );
+        assert_eq!(decode_part("AA=="), Err(LicenseError::Malformed), "padding");
+        assert_eq!(
+            decode_part("+/8"),
+            Err(LicenseError::Malformed),
+            "standard alphabet"
+        );
+        assert_eq!(decode_part("A"), Err(LicenseError::Malformed), "length");
+    }
+
+    #[test]
     fn subject_matches_the_python_reference() {
         let vectors = test_vectors::load();
         assert!(!vectors.subjects.is_empty());
