@@ -32,7 +32,7 @@ The executable is not code-signed. Windows SmartScreen may show "Windows protect
 
 ## First launch
 
-1. **ffmpeg.** squeezegram needs ffmpeg to compress. Press "Download ffmpeg (LGPL)": it downloads one pinned LGPL build from the BtbN FFmpeg-Builds release on GitHub, checks its SHA-256, and installs it. You can also point it at an ffmpeg you already have ("Use my own ffmpeg").
+1. **ffmpeg.** squeezegram needs ffmpeg to compress. Press "Download ffmpeg (LGPL)": it downloads one pinned LGPL build of BtbN FFmpeg-Builds, hosted on this project's GitHub releases with its source, checks its SHA-256, and installs it. You can also point it at an ffmpeg you already have ("Use my own ffmpeg").
 2. **Sign in to Telegram** with a QR code (scan it from Telegram on your phone) or with your phone number.
 3. Add files, choose the destination chat or topic, and send.
 

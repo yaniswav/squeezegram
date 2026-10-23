@@ -21,13 +21,15 @@ pub use download::{Build, install_build};
 
 const EXE: &str = if cfg!(windows) { ".exe" } else { "" };
 
-/// The pinned LGPL build (dated release, never `latest`).
+/// The pinned LGPL build: BtbN's `autobuild-2026-10-22-13-06` file, hosted on this project's own
+/// release with its corresponding source (BtbN deletes its builds after about 14 days).
+/// `scripts/mirror-ffmpeg.ps1` creates that release.
 pub fn pinned_build() -> Build {
     Build {
-        tag: "autobuild-2026-10-05-13-07".into(),
-        url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-05-13-07/ffmpeg-n9.0.2-22-g46d8f462ee-win64-lgpl-9.0.zip".into(),
-        size: 171_475_153,
-        sha256: "1c73d2256f0198805daf0f765feab8d3f21d3ab85e8dda0c2bb44ce1e3a126c7".into(),
+        tag: "ffmpeg-n9.0.2-33".into(),
+        url: "https://github.com/yaniswav/squeezegram/releases/download/ffmpeg-n9.0.2-33/ffmpeg-n9.0.2-33-g4cf298e66a-win64-lgpl-9.0.zip".into(),
+        size: 171_482_264,
+        sha256: "ebc6e5d6c51856b402c347f0c4cfca70c4bc43c85f7b1148237b92742d81d16f".into(),
     }
 }
 

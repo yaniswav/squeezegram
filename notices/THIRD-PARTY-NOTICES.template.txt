@@ -149,16 +149,17 @@ ffmpeg.exe and ffprobe.exe as separate processes (it does not link to FFmpeg
 libraries) and obtains them in one of two ways:
 
   a) The user presses "Download ffmpeg (LGPL)" in the app. squeezegram then
-     downloads one pinned file from the GitHub release of the BtbN
-     FFmpeg-Builds project, checks its SHA-256 and unpacks it into
+     downloads one pinned file, checks its SHA-256 and unpacks it into
      %LOCALAPPDATA%\squeezegram\sidecars. Nothing is downloaded without this
-     action, and the file comes from BtbN's release, not from a copy hosted by
-     the squeezegram project.
+     action. The file is an unmodified build of the BtbN FFmpeg-Builds project
+     (release autobuild-2026-10-22-13-06), hosted by the squeezegram project on
+     its own GitHub release "ffmpeg-n9.0.2-33", together with its
+     corresponding source (below).
 
-       File:    ffmpeg-n9.0.2-22-g46d8f462ee-win64-lgpl-9.0.zip
-       URL:     https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-05-13-07/ffmpeg-n9.0.2-22-g46d8f462ee-win64-lgpl-9.0.zip
-       Size:    171475153 bytes
-       SHA-256: 1c73d2256f0198805daf0f765feab8d3f21d3ab85e8dda0c2bb44ce1e3a126c7
+       File:    ffmpeg-n9.0.2-33-g4cf298e66a-win64-lgpl-9.0.zip
+       URL:     https://github.com/yaniswav/squeezegram/releases/download/ffmpeg-n9.0.2-33/ffmpeg-n9.0.2-33-g4cf298e66a-win64-lgpl-9.0.zip
+       Size:    171482264 bytes
+       SHA-256: ebc6e5d6c51856b402c347f0c4cfca70c4bc43c85f7b1148237b92742d81d16f
 
   b) The user points the app to an FFmpeg they obtained themselves. That
      build, and its licence, are then the user's responsibility.
@@ -174,17 +175,15 @@ licences; the build scripts below list them.
 
 Corresponding source of the pinned build:
 
-  - FFmpeg: commit 46d8f462eeb87ee1f704d8c44a0ee24fca471ad1 (release n9.0.2 plus
-    22 commits), https://github.com/FFmpeg/FFmpeg/tree/46d8f462eeb87ee1f704d8c44a0ee24fca471ad1
-    and https://github.com/FFmpeg/FFmpeg/archive/46d8f462eeb87ee1f704d8c44a0ee24fca471ad1.tar.gz
+  - FFmpeg: commit 4cf298e66a20dd90e8b7c62333ab5812596835ec (release n9.0.2 plus
+    33 commits), archive ffmpeg-source-4cf298e66a.tar.gz on the same
+    squeezegram release, also at
+    https://github.com/FFmpeg/FFmpeg/tree/4cf298e66a20dd90e8b7c62333ab5812596835ec
   - Build scripts, patches and the list of bundled libraries with their
-    versions: https://github.com/BtbN/FFmpeg-Builds, tag
-    autobuild-2026-10-05-13-07
-    (https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-10-05-13-07)
-
-BtbN keeps only recent builds, so that URL may stop working one day. If the
-squeezegram project ever hosts the FFmpeg binary itself, it will host the
-corresponding source archive in the same place.
+    versions: BtbN FFmpeg-Builds commit
+    937868360a21d711ec94a33f5591d345ad9b7754 (tag autobuild-2026-10-22-13-06),
+    archive ffmpeg-builds-scripts-9378683.tar.gz on the same squeezegram
+    release, also at https://github.com/BtbN/FFmpeg-Builds
 
 ================================================================================
 6. Not distributed with squeezegram

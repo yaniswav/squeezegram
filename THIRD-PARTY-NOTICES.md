@@ -27,13 +27,13 @@ The generation fails when a crate of the Windows build is missing from the Rust 
 - **tdjson.dll**: TDLib 1.8.68 (Boost 1.0), with OpenSSL 3.6.5 (Apache-2.0), zlib 1.3.2 (zlib license) and SQLite with the SQLCipher changes (Zetetic BSD-style license) linked statically.
 - **squeezegram.exe**: the Rust crates of the Windows build (permissive licenses, plus five MPL-2.0 crates used unmodified, listed with their source in the notices), the bundled SQLite of `rusqlite` (public domain) and the static WebView2 loader (BSD-3-Clause, Microsoft).
 - **The user interface**: the npm production packages, plus Tailwind CSS, whose styles end up in the stylesheet.
-- **FFmpeg is not included.** The app downloads one pinned LGPL v3 build from the BtbN FFmpeg-Builds release when the user presses "Download ffmpeg (LGPL)". The notices give the pinned URL and SHA-256 and where the corresponding source is (FFmpeg commit and BtbN build scripts for that release). If this project ever hosts the FFmpeg binary itself, it must host the source archive in the same place.
+- **FFmpeg is not included.** When the user presses "Download ffmpeg (LGPL)", the app downloads one pinned, unmodified LGPL v3 build of BtbN FFmpeg-Builds, hosted on this project's `ffmpeg-n9.0.2-33` release (BtbN deletes its builds after about 14 days). This project is then the distributor: the same release holds the corresponding source (FFmpeg source and BtbN build scripts at the build's commits). The notices give the pinned URL, SHA-256 and both commits.
 - `tdl` (AGPL-3.0) was only a development tool and is part of no build. The Microsoft Visual C++ runtime and the WebView2 Runtime are required on the target machine and are not redistributed.
 
 ## When to update it
 
 - **tdjson.dll rebuilt**: change the versions and the commit in section 1 of the template (and the license text if the SQLCipher license changed). The OpenSSL and zlib versions are the ones found as strings in the DLL.
-- **FFmpeg pin changed** (`src-tauri/src/sidecars/mod.rs`): change section 5 of the template (URL, size, SHA-256, FFmpeg commit, BtbN tag).
+- **FFmpeg pin changed** (`src-tauri/src/sidecars/mod.rs`): change section 5 of the template (URL, size, SHA-256, FFmpeg commit, BtbN commit and tag) and the values in `scripts/mirror-ffmpeg.ps1`, then have the owner run that script to create the new hosting release.
 - **cargo-about version**: change the pin in `scripts/install-cargo-about.ps1` only, regenerate and compare.
 - **A package without a license file**: add its copyright holder to `notices/npm.json` (MIT only) after reading its repository.
 
