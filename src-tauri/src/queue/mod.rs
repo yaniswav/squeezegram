@@ -44,6 +44,9 @@ pub enum QueueError {
     /// with the cap in effect.
     #[error("{code}: over the cap of {max}")]
     OverCap { code: &'static str, max: usize },
+    /// `item_resolve_unknown` with a message id the last reconciliation search did not propose.
+    #[error("message was not proposed for reconciliation")]
+    ReconcileNotProposed,
     #[error("invalid value in database: {0}")]
     InvalidValue(String),
     #[error("database schema version {0} is newer than this app")]
@@ -66,6 +69,7 @@ impl QueueError {
             QueueError::IllegalTransition { .. } => "ILLEGAL_TRANSITION",
             QueueError::ItemStarted(_) => "ITEM_STARTED",
             QueueError::FileUnreadable(_) => "FILE_UNREADABLE",
+            QueueError::ReconcileNotProposed => "RECONCILE_NOT_PROPOSED",
             QueueError::OverCap { code, .. } => code,
         }
     }

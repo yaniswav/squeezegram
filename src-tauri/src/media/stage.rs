@@ -652,7 +652,9 @@ impl FfmpegStage {
             let started = std::time::Instant::now();
             let tested =
                 detect::detect_hevc(&tools, &self.temp_base()?.join("detect"), cancel).await?;
-            let report = tested_json(&tested, VideoCodec::Hevc).to_string();
+            // An object, not a bare array: the log layer only merges objects into `fields`.
+            let report =
+                serde_json::json!({ "hevc": tested_json(&tested, VideoCodec::Hevc) }).to_string();
             detection.hevc = Some(tested);
             tracing::info!(
                 event = "hevc_detection",

@@ -1488,9 +1488,7 @@ impl Store {
                 .get(&id)
                 .is_some_and(|candidates| candidates.contains(&message_id))
         {
-            return Err(QueueError::InvalidValue(
-                "message was not proposed for reconciliation".into(),
-            ));
+            return Err(QueueError::ReconcileNotProposed);
         }
         self.transition(
             id,
@@ -2842,10 +2840,10 @@ mod tests {
         force_state(&store, id, State::Unknown);
         force_state(&store, other, State::Unknown);
         let before = store.get_item(id).unwrap();
-        assert!(matches!(
-            store.mark_sent(id, Some(55)),
-            Err(QueueError::InvalidValue(_))
-        ));
+        assert_eq!(
+            store.mark_sent(id, Some(55)).unwrap_err().code(),
+            "RECONCILE_NOT_PROPOSED"
+        );
         store
             .remember_reconciliation_candidates(&before, vec![55])
             .unwrap();

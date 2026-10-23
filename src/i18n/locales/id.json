@@ -51,6 +51,7 @@
     "ITEM_NOT_FOUND": "Item ini sudah tidak ada.",
     "ITEM_STARTED": "Item ini sudah mulai diproses dan tidak dapat diubah lagi.",
     "ILLEGAL_TRANSITION": "Tindakan ini tidak mungkin dilakukan pada status item saat ini.",
+    "RECONCILE_NOT_PROPOSED": "Pesan Telegram ini tidak diusulkan oleh pencarian terakhir. Cari lagi, lalu pilih salah satu pesan yang diusulkan.",
     "DESTINATION_NOT_FOUND": "Tujuan ini sudah tidak ada.",
     "WATCH_FOLDER_NOT_FOUND": "Folder yang dipantau ini sudah tidak ada.",
     "WATCH_WAITING_FULL": "Terlalu banyak berkas yang dipantau menunggu persetujuan Anda. Setujui atau tolak beberapa; sisanya akan diambil setelah itu.",

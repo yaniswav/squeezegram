@@ -51,6 +51,7 @@
     "ITEM_NOT_FOUND": "Cet élément n'existe plus.",
     "ITEM_STARTED": "Cet élément a déjà démarré et ne peut plus être modifié.",
     "ILLEGAL_TRANSITION": "Cette action n'est pas possible dans l'état actuel de l'élément.",
+    "RECONCILE_NOT_PROPOSED": "Ce message Telegram n'a pas été proposé par la dernière recherche. Relancez la recherche, puis choisissez l'un des messages proposés.",
     "DESTINATION_NOT_FOUND": "Cette destination n'existe plus.",
     "WATCH_FOLDER_NOT_FOUND": "Ce dossier surveillé n'existe plus.",
     "WATCH_WAITING_FULL": "Trop de fichiers surveillés attendent votre approbation. Approuvez-en ou refusez-en quelques-uns ; les autres seront pris ensuite.",

@@ -51,6 +51,7 @@
     "ITEM_NOT_FOUND": "This item no longer exists.",
     "ITEM_STARTED": "This item has already started and can no longer be changed.",
     "ILLEGAL_TRANSITION": "This action is not possible in the item's current state.",
+    "RECONCILE_NOT_PROPOSED": "This Telegram message was not proposed by the last search. Search again, then pick one of the proposed messages.",
     "DESTINATION_NOT_FOUND": "This destination no longer exists.",
     "WATCH_FOLDER_NOT_FOUND": "This watched folder no longer exists.",
     "WATCH_WAITING_FULL": "Too many watched files are waiting for your approval. Approve or refuse some; the others will be taken afterwards.",

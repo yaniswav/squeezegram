@@ -901,7 +901,7 @@ mod tests {
                 crate::queue::orchestrator::ResolveAction::MarkSent,
                 Some(other),
             ),
-            Err(QueueError::InvalidValue(_))
+            Err(QueueError::ReconcileNotProposed)
         ));
         assert_eq!(queue.with_store(|s| s.get_item(id)).unwrap(), before);
         assert!(Path::new(&output).is_file());

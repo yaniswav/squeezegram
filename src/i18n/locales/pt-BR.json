@@ -51,6 +51,7 @@
     "ITEM_NOT_FOUND": "Este item não existe mais.",
     "ITEM_STARTED": "Este item já foi iniciado e não pode mais ser alterado.",
     "ILLEGAL_TRANSITION": "Esta ação não é possível no estado atual do item.",
+    "RECONCILE_NOT_PROPOSED": "Esta mensagem do Telegram não foi proposta pela última busca. Busque de novo e escolha uma das mensagens propostas.",
     "DESTINATION_NOT_FOUND": "Este destino não existe mais.",
     "WATCH_FOLDER_NOT_FOUND": "Esta pasta monitorada não existe mais.",
     "WATCH_WAITING_FULL": "Há arquivos monitorados demais aguardando sua aprovação. Aprove ou recuse alguns; os outros serão recebidos depois.",

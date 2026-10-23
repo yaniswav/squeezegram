@@ -1119,7 +1119,7 @@ async fn resolve_unknown_marks_sent_or_retries() {
     assert!(matches!(
         h.orch
             .resolve_unknown(marked, ResolveAction::MarkSent, Some(4242)),
-        Err(QueueError::InvalidValue(_))
+        Err(QueueError::ReconcileNotProposed)
     ));
     assert_eq!(h.item(marked).state, Unknown);
     assert!(
