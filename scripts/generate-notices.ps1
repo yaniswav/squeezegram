@@ -77,7 +77,9 @@ Push-Location $tauriDir
 try {
     # Download the crates first: cargo-about then runs offline and never reaches the network
     # itself (it would otherwise fetch missing licence files from the crates' repositories).
-    & cargo fetch --locked --target $target
+    # All platforms: cargo-about's own `cargo metadata` resolves the whole graph before it
+    # filters on about.toml's targets, and fails offline on a crate it cannot find.
+    & cargo fetch --locked
     Assert-Native 'cargo fetch'
     $metaJson = & cargo metadata --format-version 1 --locked --filter-platform $target
     Assert-Native 'cargo metadata'
