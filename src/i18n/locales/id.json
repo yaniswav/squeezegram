@@ -600,8 +600,8 @@
       },
       "target": {
         "label": "Ukuran keluaran",
-        "hint": "Isi batas unggah, atau targetkan berkas yang lebih kecil. Berkas tidak pernah melebihi batas.",
-        "limit": "Isi batas unggah (otomatis)",
+        "hint": "Hingga batas unggah, atau targetkan berkas yang lebih kecil. Berkas tidak pernah melebihi batas, dan tidak lebih dari yang dibutuhkan sumbernya.",
+        "limit": "Hingga batas unggah (otomatis)",
         "custom": "Ukuran kustom",
         "mb": "Ukuran target (MB)",
         "error": "Masukkan bilangan bulat MB dari 1 sampai 4000."

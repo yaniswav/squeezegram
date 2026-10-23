@@ -630,8 +630,8 @@
       },
       "target": {
         "label": "Tamanho de saída",
-        "hint": "Usar todo o limite de envio, ou buscar um arquivo menor. Um arquivo nunca ultrapassa o limite.",
-        "limit": "Usar todo o limite de envio (automático)",
+        "hint": "Ir até o limite de envio, ou buscar um arquivo menor. Um arquivo nunca ultrapassa o limite nem o que o original precisa.",
+        "limit": "Até o limite de envio (automático)",
         "custom": "Tamanho personalizado",
         "mb": "Tamanho alvo (MB)",
         "error": "Digite um número inteiro de MB de 1 a 4000."

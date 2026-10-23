@@ -51,8 +51,39 @@ pub fn corrective_video_bps(previous: u64, limit_bytes: u64, real_bytes: u64) ->
     (video >= MIN_VIDEO_BPS).then_some(video)
 }
 
+/// Video bitrate (bit/s) of the source stream: its own, else the container's less the audio's.
+/// `None` when unknown or not positive.
+fn source_video_bps(info: &MediaInfo, video: &VideoInfo) -> Option<u64> {
+    video.bit_rate.filter(|bps| *bps > 0).or_else(|| {
+        let audio = info.audio.as_ref().map_or(Some(0), |a| a.bit_rate)?;
+        info.bit_rate?.checked_sub(audio).filter(|bps| *bps > 0)
+    })
+}
+
+/// Bitrate the output may reach, as a multiple of the source's. Same codec: 1.0; a modern codec
+/// (hevc, vp9, av1) to H.264: 1.6; H.264 to HEVC: 0.7; vp9/av1 to HEVC: same family, 1.0; any
+/// other pair (older codecs, unknown): no cap.
+fn cap_factor(source_codec: &str, output: VideoCodec) -> Option<f64> {
+    match (source_codec, output) {
+        ("h264", VideoCodec::H264) | ("hevc" | "vp9" | "av1", VideoCodec::Hevc) => Some(1.0),
+        ("hevc" | "vp9" | "av1", VideoCodec::H264) => Some(1.6),
+        ("h264", VideoCodec::Hevc) => Some(0.7),
+        _ => None,
+    }
+}
+
+/// `formula` limited to what the source needs: filling the limit would only inflate a small
+/// source (a 40 Mb/s HEVC clip came out at 100 Mb/s H.264, 2.5x its size).
+fn capped_video_bps(formula: u64, info: &MediaInfo, video: &VideoInfo, output: VideoCodec) -> u64 {
+    let cap = source_video_bps(info, video)
+        .zip(cap_factor(&video.codec, output))
+        .map(|(bps, factor)| (bps as f64 * factor).round() as u64);
+    cap.map_or(formula, |cap| formula.min(cap).max(MIN_VIDEO_BPS))
+}
+
 /// Plan of the CPU retry after a GPU encoder stopped mid-encode: same streams and filters, the
-/// fallback `encoder`, and the video bitrate recomputed with the current `margin`.
+/// fallback `encoder`, and the video bitrate recomputed with the current `margin` (never above
+/// the planned one, which carries the source cap).
 ///
 /// The formula is measured on NVENC and on x264 (which runs 2 passes
 /// with `maxrate = bitrate`, see `encode::video_options`). libopenh264 and h264_mf are NOT
@@ -64,7 +95,7 @@ pub fn for_fallback(plan: &Plan, encoder: &str, margin: f64) -> Plan {
     if let Some(duration) = plan.duration_s
         && let Some(video) = plan_bitrate(plan.aim_bytes(), margin, duration, plan.audio_kbps)
     {
-        next.video_bps = Some(video);
+        next.video_bps = Some(plan.video_bps.map_or(video, |planned| video.min(planned)));
     }
     next
 }
@@ -424,8 +455,9 @@ pub fn build_plan(info: Option<&MediaInfo>, input: &PlanInput<'_>) -> Result<Pla
     }
     let duration = info.duration_s.ok_or(PlanError::Unreadable)?;
     let audio_kbps = audio.map(|_| input.audio_kbps);
-    plan.video_bps =
-        Some(plan_bitrate(aim, input.margin, duration, audio_kbps).ok_or(PlanError::TooLarge)?);
+    let formula =
+        plan_bitrate(aim, input.margin, duration, audio_kbps).ok_or(PlanError::TooLarge)?;
+    plan.video_bps = Some(capped_video_bps(formula, info, video, input.codec));
     plan.video_codec = input.codec;
     plan.preset = input.preset;
     plan.target_bytes = target;
@@ -691,6 +723,103 @@ mod tests {
             for_fallback(&plan, "h264_mf", 0.05).video_bps,
             plan.video_bps
         );
+    }
+
+    /// `source_codec` at `video_bps` (the stream's own, or the container's with `container_bps`),
+    /// 316.9 s, AAC audio at `audio_bps`, planned for a 4 GiB limit.
+    fn capped_plan(
+        source_codec: &str,
+        video_bps: Option<u64>,
+        container_bps: Option<u64>,
+        audio_bps: Option<u64>,
+        codec: VideoCodec,
+    ) -> Plan {
+        let source = PathBuf::from("clip.mkv");
+        let mut stream = video(source_codec, "Main 10", "yuv420p10le");
+        stream.bit_rate = video_bps;
+        let mut info = info(stream, Some("aac"), Some(316.9));
+        info.bit_rate = container_bps;
+        info.audio.as_mut().unwrap().bit_rate = audio_bps;
+        let mut wanted = input(&source, 1_610_000_000);
+        wanted.limit_bytes = 4096 * MIB;
+        wanted.codec = codec;
+        build_plan(Some(&info), &wanted).unwrap()
+    }
+
+    #[test]
+    fn the_bitrate_never_exceeds_what_the_source_needs() {
+        // Owner's case: HEVC 4K at 40.4 Mb/s to H.264, Premium limit. Without the cap the
+        // formula gave about 105 Mb/s, a 4 GB output from a 1.6 GB source.
+        let formula = plan_bitrate(4096 * MIB, 0.03, 316.9, Some(128)).unwrap();
+        assert!(formula > 100_000_000, "{formula}");
+        let plan = capped_plan("hevc", Some(40_400_000), None, None, VideoCodec::H264);
+        assert_eq!(plan.video_bps, Some(64_640_000));
+        // About 2.57 GB instead of 4.07 GB.
+        assert_eq!(plan.estimated_bytes(), Some(2_566_009_334));
+        // A source above the formula: the formula wins.
+        let plan = capped_plan("hevc", Some(200_000_000), None, None, VideoCodec::H264);
+        assert_eq!(plan.video_bps, Some(formula));
+        // The same codec out is 1.0, H.264 to HEVC is 0.7, vp9 to HEVC is 1.0.
+        let bps =
+            |codec: &str, out| capped_plan(codec, Some(40_400_000), None, None, out).video_bps;
+        assert_eq!(bps("hevc", VideoCodec::Hevc), Some(40_400_000));
+        assert_eq!(bps("h264", VideoCodec::Hevc), Some(28_280_000));
+        assert_eq!(bps("h264", VideoCodec::H264), Some(40_400_000));
+        assert_eq!(bps("vp9", VideoCodec::Hevc), Some(40_400_000));
+        // An older codec has no known ratio: no cap.
+        assert_eq!(bps("mpeg4", VideoCodec::H264), Some(formula));
+    }
+
+    #[test]
+    fn an_unknown_source_bitrate_leaves_the_formula_alone() {
+        let formula = plan_bitrate(4096 * MIB, 0.03, 316.9, Some(128));
+        for unknown in [None, Some(0)] {
+            let plan = capped_plan("hevc", unknown, None, None, VideoCodec::H264);
+            assert_eq!(plan.video_bps, formula);
+        }
+    }
+
+    #[test]
+    fn a_source_without_a_video_bitrate_uses_the_container_less_the_audio() {
+        let plan = capped_plan(
+            "hevc",
+            None,
+            Some(40_528_768),
+            Some(128_768),
+            VideoCodec::H264,
+        );
+        assert_eq!(plan.video_bps, Some(64_640_000));
+        // An audio track larger than the container is absurd: no cap.
+        let plan = capped_plan("hevc", None, Some(100_000), Some(128_768), VideoCodec::H264);
+        assert_eq!(
+            plan.video_bps,
+            plan_bitrate(4096 * MIB, 0.03, 316.9, Some(128))
+        );
+        // An audio track of unknown bitrate: no cap either.
+        let plan = capped_plan("hevc", None, Some(40_528_768), None, VideoCodec::H264);
+        assert_eq!(
+            plan.video_bps,
+            plan_bitrate(4096 * MIB, 0.03, 316.9, Some(128))
+        );
+    }
+
+    #[test]
+    fn the_cap_never_goes_below_the_minimum_bitrate() {
+        let plan = capped_plan("hevc", Some(10_000), None, None, VideoCodec::H264);
+        assert_eq!(plan.video_bps, Some(MIN_VIDEO_BPS));
+    }
+
+    #[test]
+    fn the_fallback_plan_keeps_the_source_cap() {
+        let plan = capped_plan("hevc", Some(40_400_000), None, None, VideoCodec::H264);
+        // Recomputing from the aim alone would give about 105 Mb/s again.
+        assert_eq!(
+            for_fallback(&plan, "libx264", 0.03).video_bps,
+            Some(64_640_000)
+        );
+        // A larger margin still lowers it.
+        let lowered = for_fallback(&plan, "libx264", 0.5).video_bps.unwrap();
+        assert!(lowered < 64_640_000, "{lowered}");
     }
 
     /// A conforming H.264 file of `size` and 600 s, planned with the given target/codec/preset.

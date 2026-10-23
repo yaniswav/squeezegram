@@ -630,8 +630,8 @@
       },
       "target": {
         "label": "Taille de sortie",
-        "hint": "Remplir la limite d'envoi, ou viser un fichier plus petit. Un fichier ne dépasse jamais la limite.",
-        "limit": "Remplir la limite d'envoi (automatique)",
+        "hint": "Aller jusqu'à la limite d'envoi, ou viser un fichier plus petit. Un fichier ne dépasse jamais la limite, ni ce dont la source a besoin.",
+        "limit": "Jusqu'à la limite d'envoi (automatique)",
         "custom": "Taille personnalisée",
         "mb": "Target size (Mo)",
         "error": "Enter a whole number of Mo from 1 to 4000."

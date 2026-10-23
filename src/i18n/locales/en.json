@@ -615,8 +615,8 @@
       },
       "target": {
         "label": "Output size",
-        "hint": "Fill the upload limit, or aim for a smaller file. A file never goes over the limit.",
-        "limit": "Fill the upload limit (automatic)",
+        "hint": "Go up to the upload limit, or aim for a smaller file. A file never goes over the limit, and never uses more than the source needs.",
+        "limit": "Up to the upload limit (automatic)",
         "custom": "Custom size",
         "mb": "Target size (MB)",
         "error": "Enter a whole number of MB from 1 to 4000."

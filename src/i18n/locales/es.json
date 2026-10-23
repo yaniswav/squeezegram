@@ -630,8 +630,8 @@
       },
       "target": {
         "label": "Tamaño de salida",
-        "hint": "Llene el límite de subida, o apunte a un archivo más pequeño. Un archivo nunca supera el límite.",
-        "limit": "Llenar el límite de subida (automático)",
+        "hint": "Llegue hasta el límite de subida, o apunte a un archivo más pequeño. Un archivo nunca supera el límite ni lo que necesita el original.",
+        "limit": "Hasta el límite de subida (automático)",
         "custom": "Tamaño personalizado",
         "mb": "Tamaño objetivo (MB)",
         "error": "Introduzca un número entero de MB del 1 al 4000."
