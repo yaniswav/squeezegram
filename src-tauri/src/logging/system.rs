@@ -155,7 +155,7 @@ pub fn ffmpeg_info(sidecars: Option<&SidecarService>) -> FfmpegInfo {
     match sidecars.resolve() {
         Ok(resolved) => FfmpegInfo {
             source: Some(resolved.source.as_str()),
-            ffmpeg_path: Some(resolved.ffmpeg.to_string_lossy().into_owned()),
+            ffmpeg_path: Some(crate::sidecars::display_path(&resolved.ffmpeg)),
             version: tool_version(&resolved.ffmpeg),
             error_code: None,
         },

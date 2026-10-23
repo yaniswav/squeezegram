@@ -21,6 +21,19 @@ pub use download::{Build, install_build};
 
 const EXE: &str = if cfg!(windows) { ".exe" } else { "" };
 
+/// The usual form of a path for the user: `canonicalize` returns `\\?\C:\…` (or
+/// `\\?\UNC\server\share\…`) on Windows, while the tools still run from the canonical path.
+pub(crate) fn display_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => match rest.strip_prefix(r"UNC\") {
+            Some(unc) => format!(r"\\{unc}"),
+            None => rest.to_owned(),
+        },
+        None => text.into_owned(),
+    }
+}
+
 /// The pinned LGPL build: BtbN's `autobuild-2026-10-22-13-06` file, hosted on this project's own
 /// release with its corresponding source (BtbN deletes its builds after about 14 days).
 /// `scripts/mirror-ffmpeg.ps1` creates that release.
@@ -207,12 +220,8 @@ impl SidecarService {
         SidecarStatus {
             installed: resolved.is_some(),
             source: resolved.as_ref().map(|r| r.source.clone()),
-            ffmpeg_path: resolved
-                .as_ref()
-                .map(|r| r.ffmpeg.to_string_lossy().into_owned()),
-            ffprobe_path: resolved
-                .as_ref()
-                .map(|r| r.ffprobe.to_string_lossy().into_owned()),
+            ffmpeg_path: resolved.as_ref().map(|r| display_path(&r.ffmpeg)),
+            ffprobe_path: resolved.as_ref().map(|r| display_path(&r.ffprobe)),
             pinned_tag: self.build.tag.clone(),
             pinned_size: self.build.size,
             installing: self.installing.load(Ordering::Relaxed),
@@ -324,6 +333,17 @@ impl SidecarService {
 mod tests {
     use super::*;
     use crate::queue::test_util::TestDir;
+
+    #[test]
+    fn displayed_paths_drop_the_verbatim_prefix() {
+        let shown = |p: &str| display_path(Path::new(p));
+        assert_eq!(shown(r"\\?\C:\ff\bin\ffmpeg.exe"), r"C:\ff\bin\ffmpeg.exe");
+        assert_eq!(
+            shown(r"\\?\UNC\srv\share\ffmpeg.exe"),
+            r"\\srv\share\ffmpeg.exe"
+        );
+        assert_eq!(shown(r"C:\ff\ffmpeg.exe"), r"C:\ff\ffmpeg.exe");
+    }
 
     fn service(dir: &TestDir) -> SidecarService {
         let settings = Arc::new(SettingsStore::load(dir.path().join("settings.json")).unwrap());
