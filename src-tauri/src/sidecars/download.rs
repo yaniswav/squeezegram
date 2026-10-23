@@ -288,7 +288,7 @@ fn extract(archive: &Path, into: &Path) -> Result<(), SidecarError> {
     for index in 0..zip.len() {
         let mut entry = zip.by_index(index).map_err(|e| bad(&e))?;
         // Only exact, known names are written: nothing from the archive picks a path.
-        let name = entry.name().replace('\\', "/");
+        let name = entry.name().map_err(|e| bad(&e))?.replace('\\', "/");
         let Some((_, relative)) = name.split_once('/') else {
             continue;
         };

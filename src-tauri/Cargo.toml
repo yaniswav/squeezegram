@@ -25,7 +25,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 # Updates: the plugin downloads and checks the minisign signature against the public key in
 # tauri.conf.json; it runs the NSIS installer, which restarts the app (no process plugin needed).
-tauri-plugin-updater = "2.13"
+# Default features minus `zip` (the updater artifact is a plain .exe); the zip feature pulls zip 4.x (RUSTSEC-2026-0367/0368/0369). Locked at 2.13.2, the reviewed version (see installer-inno-build.test.ts).
+tauri-plugin-updater = { version = "2.13", default-features = false, features = ["rustls-tls", "system-proxy"] }
 # Version comparison (already in the tree through the updater and Tauri).
 semver = "1"
 serde = { version = "1", features = ["derive"] }
@@ -44,7 +45,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 ureq = "3"
 # SHA-256 of the downloaded archive, verified before extraction.
 sha2 = "0.11"
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
 # Content identity `size:blake3`.
 blake3 = { version = "1.8", features = ["rayon"] }
 # TDLib transport: `tdjson.dll` loaded at run time (a release without it still starts, TG_LIB_MISSING).

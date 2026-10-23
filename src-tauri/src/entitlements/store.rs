@@ -1210,7 +1210,10 @@ mod tests {
         });
         export::write_zip(&out, &report, dir.path()).unwrap();
         let mut zip = zip::ZipArchive::new(File::open(&out).unwrap()).unwrap();
-        let names: Vec<String> = zip.file_names().map(str::to_owned).collect();
+        let names: Vec<String> = zip
+            .file_names()
+            .map(|name| name.unwrap().into_owned())
+            .collect();
         assert!(
             names
                 .iter()
