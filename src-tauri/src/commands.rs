@@ -344,6 +344,9 @@ impl EventSink for TauriEvents {
 
     fn queue_progress(&self, event: &QueueProgress) {
         self.emit(QUEUE_PROGRESS, event);
+        if let Some(state) = self.0.try_state::<AppState>() {
+            state.background.progress(event);
+        }
     }
 
     fn sidecar_progress(&self, event: &SidecarProgress) {

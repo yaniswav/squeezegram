@@ -1074,7 +1074,11 @@
     "quit": "إنهاء",
     "idle": "squeezegram: خامل",
     "working": "squeezegram: {{count}} في قائمة الانتظار",
-    "paused": "squeezegram: متوقف مؤقتًا، {{count}} في قائمة الانتظار"
+    "paused": "squeezegram: متوقف مؤقتًا، {{count}} في قائمة الانتظار",
+    "statusCompressing": "ضغط · {{count}} في قائمة الانتظار · {{percent}}",
+    "statusSending": "إرسال · {{count}} في قائمة الانتظار · {{percent}}",
+    "statusPaused": "متوقف مؤقتًا · {{count}} في قائمة الانتظار",
+    "percent": "{{value}}%"
   },
   "quit": {
     "title": "إنهاء squeezegram؟",

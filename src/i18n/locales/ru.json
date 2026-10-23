@@ -1038,7 +1038,11 @@
     "quit": "Выход",
     "idle": "squeezegram: ожидание",
     "working": "squeezegram: в очереди {{count}}",
-    "paused": "squeezegram: пауза, в очереди {{count}}"
+    "paused": "squeezegram: пауза, в очереди {{count}}",
+    "statusCompressing": "Сжатие · в очереди {{count}} · {{percent}}",
+    "statusSending": "Отправка · в очереди {{count}} · {{percent}}",
+    "statusPaused": "Пауза · в очереди {{count}}",
+    "percent": "{{value}} %"
   },
   "quit": {
     "title": "Выйти из squeezegram?",

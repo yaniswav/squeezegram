@@ -5,7 +5,9 @@
 //!   closing the window hides it; the queue and the watched folders keep going.
 //! - **Tray icon** (`tray`): exists only while the window can be hidden, that is when closing
 //!   hides it or when the app was started hidden (`--background`). Menu: open,
-//!   pause or resume the queue, quit. The tooltip tells what the queue is doing.
+//!   pause or resume the queue, quit. While work is pending a disabled line above them tells
+//!   what it is, how many items are left and the overall percentage (`progress`); the tooltip
+//!   tells what the queue is doing, with the same percentage.
 //! - **Quit.** From the tray it goes through the normal exit (`RunEvent::ExitRequested`, see
 //!   `close_core` in `lib.rs`: watcher, queue, TDLib), after a confirmation in the window when
 //!   an item is being worked on.
@@ -25,6 +27,7 @@
 
 pub mod autostart;
 mod labels;
+mod progress;
 mod tray;
 
 use std::time::Duration;

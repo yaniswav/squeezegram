@@ -1020,7 +1020,11 @@
     "quit": "Sair",
     "idle": "squeezegram: ocioso",
     "working": "squeezegram: {{count}} na fila",
-    "paused": "squeezegram: pausado, {{count}} na fila"
+    "paused": "squeezegram: pausado, {{count}} na fila",
+    "statusCompressing": "Comprimindo · {{count}} na fila · {{percent}}",
+    "statusSending": "Enviando · {{count}} na fila · {{percent}}",
+    "statusPaused": "Pausado · {{count}} na fila",
+    "percent": "{{value}}%"
   },
   "quit": {
     "title": "Sair do squeezegram?",

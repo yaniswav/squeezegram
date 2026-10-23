@@ -1020,7 +1020,11 @@
     "quit": "Salir",
     "idle": "squeezegram: inactivo",
     "working": "squeezegram: {{count}} en la cola",
-    "paused": "squeezegram: en pausa, {{count}} en la cola"
+    "paused": "squeezegram: en pausa, {{count}} en la cola",
+    "statusCompressing": "Comprimiendo · {{count}} en la cola · {{percent}}",
+    "statusSending": "Enviando · {{count}} en la cola · {{percent}}",
+    "statusPaused": "En pausa · {{count}} en la cola",
+    "percent": "{{value}} %"
   },
   "quit": {
     "title": "¿Salir de squeezegram?",

@@ -1002,7 +1002,11 @@
     "quit": "Quit",
     "idle": "squeezegram: idle",
     "working": "squeezegram: {{count}} in queue",
-    "paused": "squeezegram: paused, {{count}} in queue"
+    "paused": "squeezegram: paused, {{count}} in queue",
+    "statusCompressing": "Compressing · {{count}} in queue · {{percent}}",
+    "statusSending": "Sending · {{count}} in queue · {{percent}}",
+    "statusPaused": "Paused · {{count}} in queue",
+    "percent": "{{value}}%"
   },
   "quit": {
     "title": "Quit squeezegram?",

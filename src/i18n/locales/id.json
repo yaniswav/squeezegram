@@ -984,7 +984,11 @@
     "quit": "Keluar",
     "idle": "squeezegram: diam",
     "working": "squeezegram: {{count}} dalam antrean",
-    "paused": "squeezegram: dijeda, {{count}} dalam antrean"
+    "paused": "squeezegram: dijeda, {{count}} dalam antrean",
+    "statusCompressing": "Mengompresi · {{count}} dalam antrean · {{percent}}",
+    "statusSending": "Mengirim · {{count}} dalam antrean · {{percent}}",
+    "statusPaused": "Dijeda · {{count}} dalam antrean",
+    "percent": "{{value}}%"
   },
   "quit": {
     "title": "Keluar dari squeezegram?",

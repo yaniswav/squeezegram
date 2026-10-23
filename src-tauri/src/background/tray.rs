@@ -19,6 +19,7 @@ use tokio::sync::Notify;
 
 use super::autostart::{self, Autostart, AutostartError};
 use super::labels::Labels;
+use super::progress::{self, Due, Line, Status, Tracker};
 use super::{
     CloseBehavior, PENDING_GRACE, QUIT_REQUESTED, START_VERDICT_TIMEOUT, StartVisibility,
     close_behavior, licensed_for_tray, queue_line, start_visibility, tray_wanted,
@@ -26,6 +27,7 @@ use super::{
 use crate::MAIN_WINDOW;
 use crate::commands::AppState;
 use crate::entitlements::{EntitlementSource, Entitlements, Feature};
+use crate::queue::events::QueueProgress;
 use crate::queue::orchestrator::Orchestrator;
 use crate::settings::SettingsStore;
 
@@ -33,12 +35,20 @@ const TRAY_ID: &str = "main";
 const MENU_OPEN: &str = "tray_open";
 const MENU_TOGGLE: &str = "tray_toggle";
 const MENU_QUIT: &str = "tray_quit";
+const MENU_STATUS: &str = "tray_status";
 /// A burst of queue events is one update.
 const COALESCE: Duration = Duration::from_millis(250);
 
 /// The icon and the menu entries whose text changes.
 struct TrayParts {
     tray: TrayIcon<Wry>,
+    menu: Menu<Wry>,
+    /// The disabled line and the rule under it: in the menu only while work is pending.
+    status: MenuItem<Wry>,
+    rule: PredefinedMenuItem<Wry>,
+    status_shown: bool,
+    /// The status line and the tooltip as last written, and when.
+    written: Option<((Option<String>, String), Instant)>,
     open: MenuItem<Wry>,
     toggle: MenuItem<Wry>,
     quit: MenuItem<Wry>,
@@ -66,6 +76,12 @@ pub struct Background {
     hidden_start: bool,
     wake: Notify,
     tray: Mutex<Option<TrayParts>>,
+    /// Whether the tray exists, for the progress events, which must not wait for `tray`.
+    tray_up: AtomicBool,
+    /// The batch the status line summarizes.
+    batch: Mutex<Tracker>,
+    /// A delayed update is already on its way.
+    retry_scheduled: AtomicBool,
     /// Since when the license has been waiting for its account, if it is.
     pending_since: Mutex<Option<Instant>>,
     /// The startup entry was checked against this executable (once per run).
@@ -103,6 +119,9 @@ impl Background {
             hidden_start,
             wake: Notify::new(),
             tray: Mutex::new(None),
+            tray_up: AtomicBool::new(false),
+            batch: Mutex::new(Tracker::default()),
+            retry_scheduled: AtomicBool::new(false),
             pending_since: Mutex::new(None),
             autostart_checked: AtomicBool::new(false),
             start: Mutex::new(Start {
@@ -141,6 +160,15 @@ impl Background {
     /// Something that the tray shows or depends on may have changed.
     pub fn refresh(&self) {
         self.wake.notify_one();
+    }
+
+    /// Progress of an item: the tray follows it when its whole percent moves.
+    pub fn progress(&self, event: &QueueProgress) {
+        if self.tray_up.load(Ordering::Relaxed)
+            && lock(&self.batch).record(event.item_id, event.phase, event.percent)
+        {
+            self.refresh();
+        }
     }
 
     /// The page has loaded: the window may be shown without a white flash.
@@ -314,6 +342,7 @@ impl Background {
             match self.build(&Labels::for_language(&settings.ui.language)) {
                 Ok(parts) => {
                     *tray = Some(parts);
+                    self.tray_up.store(true, Ordering::Relaxed);
                     tracing::info!(event = "tray_created", "tray icon created");
                 }
                 Err(error) => {
@@ -323,6 +352,7 @@ impl Background {
         } else if !wanted && tray.is_some() {
             self.app.remove_tray_by_id(TRAY_ID);
             *tray = None;
+            self.tray_up.store(false, Ordering::Relaxed);
             tracing::info!(event = "tray_removed", "tray icon removed");
             // A hidden window with no tray would leave no way back.
             let hidden = self
@@ -333,7 +363,7 @@ impl Background {
                 self.show_window("tray_removed");
             }
         }
-        if let Some(parts) = tray.as_ref() {
+        if let Some(parts) = tray.as_mut() {
             self.update(parts, &Labels::for_language(&settings.ui.language));
         }
         let tray_exists = tray.is_some();
@@ -416,6 +446,8 @@ impl Background {
         let open = MenuItem::with_id(&self.app, MENU_OPEN, &labels.open, true, None::<&str>)?;
         let toggle = MenuItem::with_id(&self.app, MENU_TOGGLE, &labels.pause, true, None::<&str>)?;
         let quit = MenuItem::with_id(&self.app, MENU_QUIT, &labels.quit, true, None::<&str>)?;
+        let status = MenuItem::with_id(&self.app, MENU_STATUS, "", false, None::<&str>)?;
+        let rule = PredefinedMenuItem::separator(&self.app)?;
         let separator = PredefinedMenuItem::separator(&self.app)?;
         let items: [&dyn IsMenuItem<Wry>; 4] = [&open, &toggle, &separator, &quit];
         let menu = Menu::with_items(&self.app, &items)?;
@@ -445,6 +477,11 @@ impl Background {
         let tray = builder.build(&self.app)?;
         Ok(TrayParts {
             tray,
+            menu,
+            status,
+            rule,
+            status_shown: false,
+            written: None,
             open,
             toggle,
             quit,
@@ -452,12 +489,13 @@ impl Background {
     }
 
     /// Texts and tooltip from the language and the queue.
-    fn update(&self, parts: &TrayParts, labels: &Labels) {
-        let total = self
+    fn update(self: &Arc<Self>, parts: &mut TrayParts, labels: &Labels) {
+        let items = self
             .queue
-            .with_store(|store| store.activity())
-            .map_or(0, |activity| activity.total());
+            .with_store(|store| store.active_items())
+            .unwrap_or_default();
         let running = self.queue.is_running();
+        let status = lock(&self.batch).status(&items, running);
         let toggle = if running {
             &labels.pause
         } else {
@@ -467,12 +505,72 @@ impl Background {
             parts.open.set_text(&labels.open),
             parts.toggle.set_text(toggle),
             parts.quit.set_text(&labels.quit),
-            parts
-                .tray
-                .set_tooltip(Some(labels.tooltip(queue_line(total, running)))),
         ];
         for error in results.into_iter().filter_map(Result::err) {
             tracing::warn!(event = "tray_error", error = %error, "could not update the tray");
         }
+        self.update_status(parts, labels, &status, running);
+    }
+
+    /// The status line and the tooltip, only when they change and at most once a second.
+    fn update_status(
+        self: &Arc<Self>,
+        parts: &mut TrayParts,
+        labels: &Labels,
+        status: &Status,
+        running: bool,
+    ) {
+        let percent =
+            matches!(status.line, Line::Compressing | Line::Sending).then_some(status.percent);
+        let text = (
+            labels.status_line(status),
+            labels.tooltip(queue_line(status.count, running), percent),
+        );
+        let now = Instant::now();
+        let shown = parts.written.as_ref().map(|(text, at)| (text, *at));
+        match progress::due(shown, &text, now) {
+            Due::Skip => return,
+            Due::After(wait) => return self.update_in(wait),
+            Due::Now => {}
+        }
+        let mut results = Vec::new();
+        match &text.0 {
+            Some(line) => {
+                results.push(parts.status.set_text(line));
+                if !parts.status_shown {
+                    let both: [&dyn IsMenuItem<Wry>; 2] = [&parts.status, &parts.rule];
+                    let inserted = parts.menu.insert_items(&both, 0);
+                    parts.status_shown = inserted.is_ok();
+                    results.push(inserted);
+                }
+            }
+            None if parts.status_shown => {
+                let removed = parts
+                    .menu
+                    .remove(&parts.status)
+                    .and_then(|()| parts.menu.remove(&parts.rule));
+                parts.status_shown = removed.is_err();
+                results.push(removed);
+            }
+            None => {}
+        }
+        results.push(parts.tray.set_tooltip(Some(&text.1)));
+        for error in results.into_iter().filter_map(Result::err) {
+            tracing::warn!(event = "tray_error", error = %error, "could not update the tray");
+        }
+        parts.written = Some((text, now));
+    }
+
+    /// Asks for another update once the minimum interval is over.
+    fn update_in(self: &Arc<Self>, wait: Duration) {
+        if self.retry_scheduled.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let this = self.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(wait).await;
+            this.retry_scheduled.store(false, Ordering::Relaxed);
+            this.refresh();
+        });
     }
 }

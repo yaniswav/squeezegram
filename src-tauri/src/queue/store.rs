@@ -1044,6 +1044,34 @@ impl Store {
         Ok(activity)
     }
 
+    /// Items that count for the tray (those `activity` counts): id, state and size of the
+    /// source, which weighs the item in the overall percentage.
+    pub fn active_items(&self) -> Result<Vec<(i64, State, u64)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, state, source_size FROM items")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut items = Vec::new();
+        for row in rows {
+            let (id, name, size) = row?;
+            match State::from_str(&name) {
+                Ok(state)
+                    if state.is_running() || matches!(state, State::Ready | State::Encoded) =>
+                {
+                    items.push((id, state, u64::try_from(size).unwrap_or(0)));
+                }
+                _ => {}
+            }
+        }
+        Ok(items)
+    }
+
     pub fn transition(&mut self, id: i64, to: State, changes: &Changes) -> Result<State> {
         let from = state::transition(&mut self.conn, id, to, changes)?;
         self.reconciliation_candidates.remove(&id);
@@ -3056,6 +3084,7 @@ mod tests {
             }
         );
         assert_eq!(activity.total(), 5);
+        assert_eq!(store.active_items().unwrap().len(), activity.total());
     }
 
     #[test]

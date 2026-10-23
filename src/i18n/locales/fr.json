@@ -1020,7 +1020,11 @@
     "quit": "Quitter",
     "idle": "squeezegram : inactif",
     "working": "squeezegram : {{count}} dans la file",
-    "paused": "squeezegram : en pause, {{count}} dans la file"
+    "paused": "squeezegram : en pause, {{count}} dans la file",
+    "statusCompressing": "Compression · {{count}} dans la file · {{percent}}",
+    "statusSending": "Envoi · {{count}} dans la file · {{percent}}",
+    "statusPaused": "En pause · {{count}} dans la file",
+    "percent": "{{value}} %"
   },
   "quit": {
     "title": "Quitter squeezegram ?",
