@@ -59,15 +59,15 @@ Telegram (payment and messaging platform) and GitHub (downloads) process data ou
 
 ### How long
 
-| Data                                                          | Duration                                                 |
-| ------------------------------------------------------------- | -------------------------------------------------------- |
-| App data on your PC                                           | Until you delete it. Journal: 7 days                     |
-| Unused invoices and their consent entries (no payment made)   | 30 days, then deleted with `python -m bot purge`         |
-| Orders, charge ids, licence, consent date, refund information | 10 years after payment (accounting and dispute evidence) |
-| Signature records and revoked licence ids                     | Same as orders                                           |
-| Support messages in the owner's Telegram chat                 | 12 months after the request is closed                    |
-| Server logs                                                   | Kept in memory only, erased when the server restarts     |
-| Backups                                                       | Same duration as the data they contain                   |
+| Data                                                          | Duration                                                                                        |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| App data on your PC                                           | Until you delete it. Journal: 7 days                                                            |
+| Unused invoices and their consent entries (no payment made)   | 30 days, then deleted with `python -m bot purge`                                                |
+| Orders, charge ids, licence, consent date, refund information | 10 years after payment (accounting and dispute evidence)                                        |
+| Signature records and revoked licence ids                     | Same as orders                                                                                  |
+| Support messages in the owner's Telegram chat                 | 12 months after the request is closed                                                           |
+| Server logs                                                   | 12 weeks (weekly rotation), readable by root only                                               |
+| Backups                                                       | Daily copies kept 30 days, readable by root only; a deleted row stays in them until they expire |
 
 Orders and signatures are kept on purpose: they stop a successful payment from being replayed to obtain a second licence, and they let the owner handle refunds and revoke a refunded licence. This is why they are not deleted when you ask. Today the purge commands (`python -m bot purge`, `python -m signer purge`) delete only unused invoices and their consent entries. They do not delete orders or signatures, so deleting those after the period above needs a separate, reviewed tool or a manual action. Deleting a row does not securely erase disk pages or backups.
 
@@ -133,15 +133,15 @@ Telegram (plateforme de paiement et de messagerie) et GitHub (téléchargements)
 
 ### Combien de temps
 
-| Donnée                                                                                            | Durée                                                              |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Données de l'application sur votre PC                                                             | Jusqu'à ce que vous les supprimiez. Journal : 7 jours              |
-| Factures non utilisées et leurs entrées de consentement (sans paiement)                           | 30 jours, puis suppression avec `python -m bot purge`              |
-| Commandes, identifiants de paiement, licence, date de consentement, informations de remboursement | 10 ans après le paiement (comptabilité et preuve en cas de litige) |
-| Enregistrements de signature et identifiants de licences révoquées                                | Comme les commandes                                                |
-| Messages au support dans la discussion Telegram du propriétaire                                   | 12 mois après la clôture de la demande                             |
-| Journaux du serveur                                                                               | Gardés en mémoire seulement, effacés au redémarrage du serveur     |
-| Sauvegardes                                                                                       | Même durée que les données qu'elles contiennent                    |
+| Donnée                                                                                            | Durée                                                                                                                   |
+| ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Données de l'application sur votre PC                                                             | Jusqu'à ce que vous les supprimiez. Journal : 7 jours                                                                   |
+| Factures non utilisées et leurs entrées de consentement (sans paiement)                           | 30 jours, puis suppression avec `python -m bot purge`                                                                   |
+| Commandes, identifiants de paiement, licence, date de consentement, informations de remboursement | 10 ans après le paiement (comptabilité et preuve en cas de litige)                                                      |
+| Enregistrements de signature et identifiants de licences révoquées                                | Comme les commandes                                                                                                     |
+| Messages au support dans la discussion Telegram du propriétaire                                   | 12 mois après la clôture de la demande                                                                                  |
+| Journaux du serveur                                                                               | 12 semaines (rotation hebdomadaire), lisibles par root seulement                                                        |
+| Sauvegardes                                                                                       | Copies quotidiennes gardées 30 jours, lisibles par root seulement ; une ligne supprimée y reste jusqu'à leur expiration |
 
 Les commandes et les signatures sont conservées volontairement : elles empêchent qu'un paiement réussi soit rejoué pour obtenir une seconde licence, et permettent au propriétaire de traiter les remboursements et de révoquer une licence remboursée. C'est pourquoi elles ne sont pas supprimées sur simple demande. Aujourd'hui, les commandes de purge (`python -m bot purge`, `python -m signer purge`) ne suppriment que les factures non utilisées et leurs entrées de consentement. Elles ne suppriment ni les commandes ni les signatures : les supprimer après la durée ci-dessus demande un outil distinct, relu, ou une action manuelle. Supprimer une ligne n'efface pas de façon sûre les pages du disque ni les sauvegardes.
 
