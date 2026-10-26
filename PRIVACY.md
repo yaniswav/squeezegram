@@ -1,6 +1,6 @@
-# Privacy notice (DRAFT)
+# Privacy notice
 
-> Draft written from what the code does. It has not been reviewed by a lawyer, is not legal advice and gives no legal guarantee. Every duration marked `TO CONFIRM (legal)` is a proposal, not a decision.
+> Written from what the code really does.
 
 - [English](#english)
 - [Français](#français)
@@ -47,33 +47,33 @@ The bot does not store your name, username or phone number. The licence contains
 - **GitHub** receives ordinary web requests when the app downloads ffmpeg or checks for updates.
 - No one else. Nothing is sold or used for advertising.
 
-### Legal basis (`TO CONFIRM (legal)`)
+### Legal basis
 
-| Purpose                                                                      | Proposed legal basis | Status             |
-| ---------------------------------------------------------------------------- | -------------------- | ------------------ |
-| Deliver and re-send your key, handle refunds and support                     | Contract             | TO CONFIRM (legal) |
-| Keep accounting records of orders                                            | Legal obligation     | TO CONFIRM (legal) |
-| Prevent replayed payments, payment audit, technical logs, proof of agreement | Legitimate interest  | TO CONFIRM (legal) |
+| Purpose                                                                      | Legal basis         |
+| ---------------------------------------------------------------------------- | ------------------- |
+| Deliver and re-send your key, handle refunds and support                     | Contract            |
+| Keep accounting records of orders                                            | Legal obligation    |
+| Prevent replayed payments, payment audit, technical logs, proof of agreement | Legitimate interest |
 
-Telegram (payment and messaging platform) and GitHub (downloads) process data outside the EU under their own terms (`TO CONFIRM (legal)`).
+Telegram (payment and messaging platform) and GitHub (downloads) process data outside the EU under their own terms.
 
 ### How long
 
-| Data                                                          | Proposed duration                                        | Status             |
-| ------------------------------------------------------------- | -------------------------------------------------------- | ------------------ |
-| App data on your PC                                           | Until you delete it. Journal: 7 days                     | In the code        |
-| Unused invoices and their consent entries (no payment made)   | 30 days, then deleted with `python -m bot purge`         | TO CONFIRM (legal) |
-| Orders, charge ids, licence, consent date, refund information | 10 years after payment (accounting and dispute evidence) | TO CONFIRM (legal) |
-| Signature records and revoked licence ids                     | Same as orders                                           | TO CONFIRM (legal) |
-| Support messages in the owner's Telegram chat                 | 12 months after the request is closed                    | TO CONFIRM (legal) |
-| Server logs                                                   | Kept in memory only, erased when the server restarts     | TO CONFIRM (legal) |
-| Backups                                                       | Same duration as the data they contain                   | TO CONFIRM (legal) |
+| Data                                                          | Duration                                                 |
+| ------------------------------------------------------------- | -------------------------------------------------------- |
+| App data on your PC                                           | Until you delete it. Journal: 7 days                     |
+| Unused invoices and their consent entries (no payment made)   | 30 days, then deleted with `python -m bot purge`         |
+| Orders, charge ids, licence, consent date, refund information | 10 years after payment (accounting and dispute evidence) |
+| Signature records and revoked licence ids                     | Same as orders                                           |
+| Support messages in the owner's Telegram chat                 | 12 months after the request is closed                    |
+| Server logs                                                   | Kept in memory only, erased when the server restarts     |
+| Backups                                                       | Same duration as the data they contain                   |
 
-Orders and signatures are kept on purpose: they stop a successful payment from being replayed to obtain a second licence, and they let the owner handle refunds and revoke a refunded licence. This is why they are not deleted when you ask. Today the purge commands (`python -m bot purge`, `python -m signer purge`) delete only unused invoices and their consent entries. They do not delete orders or signatures, so deleting those after the period above needs a separate, reviewed tool or a manual action (`TO CONFIRM (legal)`). Deleting a row does not securely erase disk pages or backups.
+Orders and signatures are kept on purpose: they stop a successful payment from being replayed to obtain a second licence, and they let the owner handle refunds and revoke a refunded licence. This is why they are not deleted when you ask. Today the purge commands (`python -m bot purge`, `python -m signer purge`) delete only unused invoices and their consent entries. They do not delete orders or signatures, so deleting those after the period above needs a separate, reviewed tool or a manual action. Deleting a row does not securely erase disk pages or backups.
 
 ### Your rights
 
-Depending on the law that applies to you, you may ask for access, correction, deletion, restriction or portability of your data, or object to its use. Send the request with `/paysupport` in the bot, from the Telegram account that paid. The owner may need that account to find your data, and may refuse deletion of what must be kept (see above). Answer time: `[e.g. one month]` (`TO CONFIRM (legal)`). You can also complain to your data protection authority.
+Depending on the law that applies to you, you may ask for access, correction, deletion, restriction or portability of your data, or object to its use. Send the request with `/paysupport` in the bot, from the Telegram account that paid. The owner may need that account to find your data, and may refuse deletion of what must be kept (see above). Answer time: within one month. You can also complain to your data protection authority.
 
 ### Changes
 
@@ -121,33 +121,33 @@ Le bot ne stocke ni votre nom, ni votre nom d'utilisateur, ni votre numéro de t
 - **GitHub** reçoit des requêtes web ordinaires quand l'application télécharge ffmpeg ou cherche une mise à jour.
 - Personne d'autre. Rien n'est vendu ni utilisé pour de la publicité.
 
-### Base juridique (`À CONFIRMER (juridique)`)
+### Base juridique
 
-| Finalité                                                                                     | Base juridique proposée | Statut                  |
-| -------------------------------------------------------------------------------------------- | ----------------------- | ----------------------- |
-| Livrer et renvoyer votre clé, traiter remboursements et support                              | Contrat                 | À CONFIRMER (juridique) |
-| Tenir la comptabilité des commandes                                                          | Obligation légale       | À CONFIRMER (juridique) |
-| Empêcher le rejeu de paiements, audit des paiements, journaux techniques, preuve de l'accord | Intérêt légitime        | À CONFIRMER (juridique) |
+| Finalité                                                                                     | Base juridique    |
+| -------------------------------------------------------------------------------------------- | ----------------- |
+| Livrer et renvoyer votre clé, traiter remboursements et support                              | Contrat           |
+| Tenir la comptabilité des commandes                                                          | Obligation légale |
+| Empêcher le rejeu de paiements, audit des paiements, journaux techniques, preuve de l'accord | Intérêt légitime  |
 
-Telegram (plateforme de paiement et de messagerie) et GitHub (téléchargements) traitent des données hors de l'UE selon leurs propres conditions (`À CONFIRMER (juridique)`).
+Telegram (plateforme de paiement et de messagerie) et GitHub (téléchargements) traitent des données hors de l'UE selon leurs propres conditions.
 
 ### Combien de temps
 
-| Donnée                                                                                            | Durée proposée                                                     | Statut                  |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------- |
-| Données de l'application sur votre PC                                                             | Jusqu'à ce que vous les supprimiez. Journal : 7 jours              | Dans le code            |
-| Factures non utilisées et leurs entrées de consentement (sans paiement)                           | 30 jours, puis suppression avec `python -m bot purge`              | À CONFIRMER (juridique) |
-| Commandes, identifiants de paiement, licence, date de consentement, informations de remboursement | 10 ans après le paiement (comptabilité et preuve en cas de litige) | À CONFIRMER (juridique) |
-| Enregistrements de signature et identifiants de licences révoquées                                | Comme les commandes                                                | À CONFIRMER (juridique) |
-| Messages au support dans la discussion Telegram du propriétaire                                   | 12 mois après la clôture de la demande                             | À CONFIRMER (juridique) |
-| Journaux du serveur                                                                               | Gardés en mémoire seulement, effacés au redémarrage du serveur     | À CONFIRMER (juridique) |
-| Sauvegardes                                                                                       | Même durée que les données qu'elles contiennent                    | À CONFIRMER (juridique) |
+| Donnée                                                                                            | Durée                                                              |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Données de l'application sur votre PC                                                             | Jusqu'à ce que vous les supprimiez. Journal : 7 jours              |
+| Factures non utilisées et leurs entrées de consentement (sans paiement)                           | 30 jours, puis suppression avec `python -m bot purge`              |
+| Commandes, identifiants de paiement, licence, date de consentement, informations de remboursement | 10 ans après le paiement (comptabilité et preuve en cas de litige) |
+| Enregistrements de signature et identifiants de licences révoquées                                | Comme les commandes                                                |
+| Messages au support dans la discussion Telegram du propriétaire                                   | 12 mois après la clôture de la demande                             |
+| Journaux du serveur                                                                               | Gardés en mémoire seulement, effacés au redémarrage du serveur     |
+| Sauvegardes                                                                                       | Même durée que les données qu'elles contiennent                    |
 
-Les commandes et les signatures sont conservées volontairement : elles empêchent qu'un paiement réussi soit rejoué pour obtenir une seconde licence, et permettent au propriétaire de traiter les remboursements et de révoquer une licence remboursée. C'est pourquoi elles ne sont pas supprimées sur simple demande. Aujourd'hui, les commandes de purge (`python -m bot purge`, `python -m signer purge`) ne suppriment que les factures non utilisées et leurs entrées de consentement. Elles ne suppriment ni les commandes ni les signatures : les supprimer après la durée ci-dessus demande un outil distinct, relu, ou une action manuelle (`À CONFIRMER (juridique)`). Supprimer une ligne n'efface pas de façon sûre les pages du disque ni les sauvegardes.
+Les commandes et les signatures sont conservées volontairement : elles empêchent qu'un paiement réussi soit rejoué pour obtenir une seconde licence, et permettent au propriétaire de traiter les remboursements et de révoquer une licence remboursée. C'est pourquoi elles ne sont pas supprimées sur simple demande. Aujourd'hui, les commandes de purge (`python -m bot purge`, `python -m signer purge`) ne suppriment que les factures non utilisées et leurs entrées de consentement. Elles ne suppriment ni les commandes ni les signatures : les supprimer après la durée ci-dessus demande un outil distinct, relu, ou une action manuelle. Supprimer une ligne n'efface pas de façon sûre les pages du disque ni les sauvegardes.
 
 ### Vos droits
 
-Selon la loi qui vous est applicable, vous pouvez demander l'accès à vos données, leur rectification, leur effacement, la limitation de leur traitement ou leur portabilité, ou vous opposer à leur usage. Envoyez la demande avec `/paysupport` dans le bot, depuis le compte Telegram qui a payé. Le propriétaire peut avoir besoin de ce compte pour retrouver vos données, et peut refuser d'effacer ce qui doit être conservé (voir plus haut). Délai de réponse : `[par ex. un mois]` (`À CONFIRMER (juridique)`). Vous pouvez aussi saisir votre autorité de protection des données.
+Selon la loi qui vous est applicable, vous pouvez demander l'accès à vos données, leur rectification, leur effacement, la limitation de leur traitement ou leur portabilité, ou vous opposer à leur usage. Envoyez la demande avec `/paysupport` dans le bot, depuis le compte Telegram qui a payé. Le propriétaire peut avoir besoin de ce compte pour retrouver vos données, et peut refuser d'effacer ce qui doit être conservé (voir plus haut). Délai de réponse : un mois au plus. Vous pouvez aussi saisir votre autorité de protection des données.
 
 ### Modifications
 
