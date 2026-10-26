@@ -9,7 +9,7 @@
 
 ### Who is responsible
 
-squeezegram is a Windows app. Its Premium licence is sold by a Telegram bot run by the owner: `[owner name / contact]`. The owner is the controller of the data described below for the bot and the licence signer. For the app itself, see "On your computer".
+squeezegram is a Windows app. Its Premium licence is sold by a Telegram bot run by the owner: Yanis Ethvignot (azellaxmc@gmail.com). The owner is the controller of the data described below for the bot and the licence signer. For the app itself, see "On your computer".
 
 ### On your computer
 
@@ -26,7 +26,7 @@ The uninstaller keeps your data. To delete it, follow the "Privacy" section of t
 
 ### What the bot and the signer keep, and why
 
-When you buy Premium, Telegram gives the bot the payment details. The bot and the signer, which run on the owner's server (location: `[country / host]`), keep:
+When you buy Premium, Telegram gives the bot the payment details. The bot and the signer, which run on the owner's server (located in France), keep:
 
 | Data                                                                                                                                                                                    | Where                         | Why                                                                                     |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------- |
@@ -66,7 +66,7 @@ Telegram (payment and messaging platform) and GitHub (downloads) process data ou
 | Orders, charge ids, licence, consent date, refund information | 10 years after payment (accounting and dispute evidence) | TO CONFIRM (legal) |
 | Signature records and revoked licence ids                     | Same as orders                                           | TO CONFIRM (legal) |
 | Support messages in the owner's Telegram chat                 | 12 months after the request is closed                    | TO CONFIRM (legal) |
-| Server logs                                                   | `[duration]`, depends on the server's log settings       | TO CONFIRM (legal) |
+| Server logs                                                   | Kept in memory only, erased when the server restarts     | TO CONFIRM (legal) |
 | Backups                                                       | Same duration as the data they contain                   | TO CONFIRM (legal) |
 
 Orders and signatures are kept on purpose: they stop a successful payment from being replayed to obtain a second licence, and they let the owner handle refunds and revoke a refunded licence. This is why they are not deleted when you ask. Today the purge commands (`python -m bot purge`, `python -m signer purge`) delete only unused invoices and their consent entries. They do not delete orders or signatures, so deleting those after the period above needs a separate, reviewed tool or a manual action (`TO CONFIRM (legal)`). Deleting a row does not securely erase disk pages or backups.
@@ -83,7 +83,7 @@ This notice may change. The version in the repository is the current one.
 
 ### Qui est responsable
 
-squeezegram est une application Windows. Sa licence Premium est vendue par un bot Telegram géré par le propriétaire : `[nom du propriétaire / contact]`. Le propriétaire est responsable du traitement des données décrites ci-dessous pour le bot et le signataire de licences. Pour l'application elle-même, voir « Sur votre ordinateur ».
+squeezegram est une application Windows. Sa licence Premium est vendue par un bot Telegram géré par le propriétaire : Yanis Ethvignot (azellaxmc@gmail.com). Le propriétaire est responsable du traitement des données décrites ci-dessous pour le bot et le signataire de licences. Pour l'application elle-même, voir « Sur votre ordinateur ».
 
 ### Sur votre ordinateur
 
@@ -100,7 +100,7 @@ Le désinstallateur conserve vos données. Pour les supprimer, suivez la section
 
 ### Ce que le bot et le signataire conservent, et pourquoi
 
-Quand vous achetez Premium, Telegram transmet au bot les informations du paiement. Le bot et le signataire, qui tournent sur le serveur du propriétaire (lieu : `[pays / hébergeur]`), conservent :
+Quand vous achetez Premium, Telegram transmet au bot les informations du paiement. Le bot et le signataire, qui tournent sur le serveur du propriétaire (situé en France), conservent :
 
 | Donnée                                                                                                                                                                                                            | Où                                    | Pourquoi                                                                          |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
@@ -140,7 +140,7 @@ Telegram (plateforme de paiement et de messagerie) et GitHub (téléchargements)
 | Commandes, identifiants de paiement, licence, date de consentement, informations de remboursement | 10 ans après le paiement (comptabilité et preuve en cas de litige) | À CONFIRMER (juridique) |
 | Enregistrements de signature et identifiants de licences révoquées                                | Comme les commandes                                                | À CONFIRMER (juridique) |
 | Messages au support dans la discussion Telegram du propriétaire                                   | 12 mois après la clôture de la demande                             | À CONFIRMER (juridique) |
-| Journaux du serveur                                                                               | `[durée]`, selon les réglages de journalisation du serveur         | À CONFIRMER (juridique) |
+| Journaux du serveur                                                                               | Gardés en mémoire seulement, effacés au redémarrage du serveur     | À CONFIRMER (juridique) |
 | Sauvegardes                                                                                       | Même durée que les données qu'elles contiennent                    | À CONFIRMER (juridique) |
 
 Les commandes et les signatures sont conservées volontairement : elles empêchent qu'un paiement réussi soit rejoué pour obtenir une seconde licence, et permettent au propriétaire de traiter les remboursements et de révoquer une licence remboursée. C'est pourquoi elles ne sont pas supprimées sur simple demande. Aujourd'hui, les commandes de purge (`python -m bot purge`, `python -m signer purge`) ne suppriment que les factures non utilisées et leurs entrées de consentement. Elles ne suppriment ni les commandes ni les signatures : les supprimer après la durée ci-dessus demande un outil distinct, relu, ou une action manuelle (`À CONFIRMER (juridique)`). Supprimer une ligne n'efface pas de façon sûre les pages du disque ni les sauvegardes.
