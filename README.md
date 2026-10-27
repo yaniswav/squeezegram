@@ -1,5 +1,7 @@
 # squeezegram
 
+<p align="center"><img src=".github/assets/promo.gif" width="300" alt="A 5.6 GB 4K video is squeezed to 1.99 GB by squeezegram and sent to a Telegram chat"></p>
+
 squeezegram is a Windows app that sends videos and photos from your computer to Telegram chats, groups and forum topics, from your own Telegram account. When a video is over Telegram's upload limit, it first compresses it to just under that limit, using your graphics card when it can (NVENC, Quick Sync or AMF), otherwise the processor.
 
 - The limit is 2,000 MiB (about 2 GB), or 4,000 MiB (about 4 GB) if your Telegram account has Telegram Premium. squeezegram reads which one applies from your account, and you can override it in Settings.
