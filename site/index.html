@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>squeezegram: send big videos to Telegram from Windows</title>
+    <meta
+      name="description"
+      content="A free Windows app that compresses videos over Telegram's upload limit to just under it, then sends them to your chats, groups and topics from your own account."
+    />
+    <link rel="canonical" href="https://yaniswav.github.io/squeezegram/" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:title"
+      content="squeezegram: send big videos to Telegram from Windows"
+    />
+    <meta
+      property="og:description"
+      content="Too big for Telegram? squeezegram compresses it to just under the limit and sends it from your own account."
+    />
+    <meta property="og:url" content="https://yaniswav.github.io/squeezegram/" />
+    <meta
+      property="og:image"
+      content="https://yaniswav.github.io/squeezegram/poster.jpg"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0a0a0a;
+        --fg: #fafafa;
+        --dim: #9a9a9a;
+        --line: #262626;
+        --card: #141414;
+        --font:
+          "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui,
+          -apple-system, sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--font);
+        line-height: 1.55;
+        -webkit-font-smoothing: antialiased;
+      }
+      a {
+        color: inherit;
+      }
+      .wrap {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 0 20px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 22px 0;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 800;
+        font-size: 20px;
+        letter-spacing: -0.03em;
+        text-decoration: none;
+      }
+      .brand img {
+        width: 36px;
+        height: 36px;
+        border-radius: 9px;
+      }
+      header nav {
+        display: flex;
+        gap: 22px;
+        font-size: 15px;
+        color: var(--dim);
+      }
+      header nav a {
+        text-decoration: none;
+      }
+      header nav a:hover {
+        color: var(--fg);
+      }
+
+      .hero {
+        padding: 72px 0 40px;
+        text-align: center;
+      }
+      h1 {
+        font-size: clamp(40px, 7vw, 76px);
+        font-weight: 850;
+        letter-spacing: -0.045em;
+        line-height: 1.02;
+      }
+      h1 span {
+        color: var(--dim);
+      }
+      .lead {
+        max-width: 640px;
+        margin: 24px auto 0;
+        font-size: clamp(17px, 2.2vw, 20px);
+        color: #c8c8c8;
+      }
+      .actions {
+        display: flex;
+        gap: 14px;
+        justify-content: center;
+        flex-wrap: wrap;
+        margin-top: 36px;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 15px 28px;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 17px;
+        text-decoration: none;
+        border: 2px solid var(--fg);
+      }
+      .btn.primary {
+        background: var(--fg);
+        color: var(--bg);
+      }
+      .btn:hover {
+        opacity: 0.85;
+      }
+      .btn:focus-visible,
+      a:focus-visible,
+      summary:focus-visible {
+        outline: 3px solid var(--fg);
+        outline-offset: 3px;
+      }
+      .meta {
+        margin-top: 18px;
+        font-size: 14px;
+        color: var(--dim);
+      }
+
+      .demo {
+        margin: 24px auto 0;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        overflow: hidden;
+        background: #0b0b0b;
+      }
+      .demo video {
+        display: block;
+        width: 100%;
+        height: auto;
+        aspect-ratio: 16 / 9;
+      }
+
+      section {
+        padding: 88px 0 0;
+      }
+      h2 {
+        font-size: clamp(30px, 4.5vw, 44px);
+        font-weight: 800;
+        letter-spacing: -0.035em;
+        line-height: 1.1;
+      }
+      .sub {
+        color: var(--dim);
+        margin-top: 12px;
+        font-size: 18px;
+        max-width: 640px;
+      }
+
+      .features {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+        gap: 16px;
+        margin-top: 36px;
+      }
+      .feature {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 26px;
+      }
+      .feature b {
+        display: block;
+        font-size: 19px;
+        letter-spacing: -0.02em;
+        margin-bottom: 8px;
+      }
+      .feature p {
+        color: #bdbdbd;
+        font-size: 15.5px;
+      }
+
+      .table-wrap {
+        margin-top: 36px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 15.5px;
+        min-width: 560px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      thead th {
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--dim);
+        font-weight: 600;
+        background: var(--card);
+      }
+      td:not(:first-child) {
+        color: #bdbdbd;
+        width: 26%;
+      }
+      td.yes {
+        color: var(--fg);
+        font-weight: 600;
+      }
+      .note {
+        margin-top: 16px;
+        color: var(--dim);
+        font-size: 15px;
+        max-width: 760px;
+      }
+
+      .faq {
+        margin-top: 28px;
+        border-top: 1px solid var(--line);
+      }
+      details {
+        border-bottom: 1px solid var(--line);
+      }
+      summary {
+        cursor: pointer;
+        list-style: none;
+        padding: 22px 36px 22px 0;
+        font-size: 18px;
+        font-weight: 650;
+        position: relative;
+      }
+      summary::-webkit-details-marker {
+        display: none;
+      }
+      summary::after {
+        content: "+";
+        position: absolute;
+        right: 4px;
+        top: 18px;
+        font-size: 26px;
+        font-weight: 400;
+        color: var(--dim);
+      }
+      details[open] summary::after {
+        content: "–";
+      }
+      details > div {
+        padding: 0 0 24px;
+        color: #c4c4c4;
+        max-width: 760px;
+      }
+      details > div p + p {
+        margin-top: 10px;
+      }
+      code {
+        font-family: Consolas, "Cascadia Mono", monospace;
+        font-size: 0.92em;
+        background: #1c1c1c;
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+
+      .cta {
+        text-align: center;
+        padding: 104px 0 24px;
+      }
+      .cta h2 {
+        margin-bottom: 30px;
+      }
+
+      footer {
+        margin-top: 72px;
+        padding: 30px 0 44px;
+        border-top: 1px solid var(--line);
+        color: var(--dim);
+        font-size: 14px;
+      }
+      footer .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        flex-wrap: wrap;
+      }
+      footer nav {
+        display: flex;
+        gap: 18px;
+        flex-wrap: wrap;
+      }
+
+      @media (max-width: 600px) {
+        header nav a.hide-sm {
+          display: none;
+        }
+        .hero {
+          padding-top: 40px;
+        }
+        section {
+          padding-top: 64px;
+        }
+        .demo {
+          border-radius: 14px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <a class="brand" href="./"><img src="icon.png" alt="" />squeezegram</a>
+        <nav>
+          <a class="hide-sm" href="#features">Features</a>
+          <a class="hide-sm" href="#premium">Premium</a>
+          <a href="#faq">FAQ</a>
+          <a href="https://github.com/yaniswav/squeezegram">GitHub</a>
+        </nav>
+      </header>
+
+      <main>
+        <div class="hero">
+          <h1>Too big for Telegram?<br /><span>Squeeze it. Send it.</span></h1>
+          <p class="lead">
+            squeezegram is a free Windows app that compresses videos over
+            Telegram's upload limit to just under it, then sends them to your
+            chats, groups and topics from your own account.
+          </p>
+          <div class="actions">
+            <a
+              class="btn primary"
+              href="https://github.com/yaniswav/squeezegram/releases/latest"
+              >Download for Windows</a
+            >
+            <a class="btn" href="https://github.com/yaniswav/squeezegram"
+              >View on GitHub</a
+            >
+          </div>
+          <p class="meta">
+            Free · Windows 10 and 11, x64 · Unofficial app, not affiliated with
+            Telegram
+          </p>
+        </div>
+
+        <div class="demo">
+          <video
+            id="demo"
+            src="demo.mp4"
+            poster="poster.jpg"
+            autoplay
+            muted
+            loop
+            playsinline
+            preload="metadata"
+            aria-label="Animation: a 5.6 GB 4K video is squeezed to 1.99 GB and delivered to a Telegram chat"
+          ></video>
+        </div>
+
+        <section id="features">
+          <h2>Just under the limit. Nothing more.</h2>
+          <p class="sub">
+            The limit is about 2 GB, or about 4 GB if your account has Telegram
+            Premium. squeezegram reads which one applies from your account.
+          </p>
+          <div class="features">
+            <div class="feature">
+              <b>Compressed on your PC</b>
+              <p>
+                On your graphics card when it can (NVENC, Quick Sync or AMF),
+                otherwise on the processor. Files already under the limit are
+                sent as they are.
+              </p>
+            </div>
+            <div class="feature">
+              <b>Sent from your account</b>
+              <p>
+                To chats, groups and forum topics, with caption templates,
+                thumbnails and duplicate detection. Sign in with a QR code or
+                your phone number.
+              </p>
+            </div>
+            <div class="feature">
+              <b>A queue you can trust</b>
+              <p>
+                One upload at a time. Pause, cancel, reorder, and recover after
+                a crash. A file whose upload is uncertain is never resent
+                without asking you.
+              </p>
+            </div>
+            <div class="feature">
+              <b>Your files stay yours</b>
+              <p>
+                No analytics, no telemetry, no server of its own. Location and
+                camera data can be removed from photos, and from videos sent
+                without re-encoding.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="premium">
+          <h2>Free is complete. Premium adds more.</h2>
+          <p class="sub">
+            Everything you need to compress and send is free. squeezegram
+            Premium is an optional one-time purchase.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Feature</th>
+                  <th scope="col">Free</th>
+                  <th scope="col">Premium</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Compression and sending</td>
+                  <td class="yes">Yes</td>
+                  <td class="yes">Yes</td>
+                </tr>
+                <tr>
+                  <td>
+                    Caption templates, thumbnails, duplicate detection, metadata
+                    removal
+                  </td>
+                  <td class="yes">Yes</td>
+                  <td class="yes">Yes</td>
+                </tr>
+                <tr>
+                  <td>
+                    Proxy (SOCKS5, HTTP, MTProto), your own <code>api_id</code>,
+                    7 languages, updates
+                  </td>
+                  <td class="yes">Yes</td>
+                  <td class="yes">Yes</td>
+                </tr>
+                <tr>
+                  <td>
+                    Codec (H.264 or HEVC), encoder speed, target size, maximum
+                    resolution, audio bitrate, per-file settings
+                  </td>
+                  <td>Automatic</td>
+                  <td class="yes">Adjustable</td>
+                </tr>
+                <tr>
+                  <td>Send one batch to several chats or topics</td>
+                  <td>One destination per add</td>
+                  <td class="yes">Several at once</td>
+                </tr>
+                <tr>
+                  <td>
+                    Watched folders: new files wait in the queue for your
+                    approval, never sent automatically
+                  </td>
+                  <td>No</td>
+                  <td class="yes">Yes</td>
+                </tr>
+                <tr>
+                  <td>
+                    Background mode: keep running in the notification area,
+                    start with Windows
+                  </td>
+                  <td>No</td>
+                  <td class="yes">Yes</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="note">
+            Premium is bought once in Telegram Stars from
+            <a href="https://t.me/squeezegram_bot">@squeezegram_bot</a>. It is a
+            lifetime licence for version 1, checked on your computer with no
+            network request. It is not Telegram Premium.
+          </p>
+        </section>
+
+        <section id="faq">
+          <h2>Questions</h2>
+          <div class="faq">
+            <details>
+              <summary>
+                Windows says "Windows protected your PC". Is it safe?
+              </summary>
+              <div>
+                <p>
+                  squeezegram is not code-signed, so SmartScreen warns about it,
+                  and some antivirus programs may flag unsigned software by
+                  mistake.
+                </p>
+                <p>
+                  Download it only from the
+                  <a
+                    href="https://github.com/yaniswav/squeezegram/releases/latest"
+                    >GitHub releases page</a
+                  >. Each release lists the SHA-256 of its files in
+                  <code>SHA256SUMS.txt</code>; check yours with
+                  <code
+                    >Get-FileHash
+                    .\squeezegram-&lt;version&gt;-setup-x64.exe</code
+                  >. If it matches, choose "More info", then "Run anyway".
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>Does squeezegram upload my files anywhere?</summary>
+              <div>
+                <p>
+                  Only to Telegram, and only what you put in the queue.
+                  squeezegram has no server of its own and no telemetry. It
+                  contacts GitHub to download ffmpeg once and to check for
+                  updates (you can turn that off).
+                </p>
+                <p>
+                  Details are in the
+                  <a
+                    href="https://github.com/yaniswav/squeezegram/blob/main/PRIVACY.md"
+                    >privacy notice</a
+                  >.
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>Can Telegram restrict my account?</summary>
+              <div>
+                <p>
+                  Sending from a user account is subject to Telegram's terms.
+                  Sending to groups where you lack permissions, or many files in
+                  a short time, can get an account limited. squeezegram waits as
+                  long as Telegram asks and lets you set an interval per
+                  destination, but it cannot prevent a restriction. You use it
+                  at your own risk.
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>What do I need?</summary>
+              <div>
+                <p>
+                  Windows 10 or 11 (x64) and a Telegram account. On first
+                  launch, squeezegram offers to download ffmpeg (an LGPL build
+                  hosted on this project's releases, checked by SHA-256), or you
+                  can point it at your own.
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>
+                Is squeezegram Premium the same as Telegram Premium?
+              </summary>
+              <div>
+                <p>
+                  No. Telegram Premium is Telegram's own subscription, which
+                  raises the upload limit to about 4 GB. squeezegram Premium is
+                  a one-time purchase that unlocks the extra settings and
+                  features of this app.
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>Can I see the code?</summary>
+              <div>
+                <p>
+                  Yes. The source is public on
+                  <a href="https://github.com/yaniswav/squeezegram">GitHub</a>
+                  under the
+                  <a
+                    href="https://github.com/yaniswav/squeezegram/blob/main/LICENSE"
+                    >PolyForm Noncommercial License 1.0.0</a
+                  >
+                  (source-available, free for noncommercial use). You can build
+                  it yourself.
+                </p>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <div class="cta">
+          <h2>Stop splitting your videos.</h2>
+          <a
+            class="btn primary"
+            href="https://github.com/yaniswav/squeezegram/releases/latest"
+            >Download for Windows</a
+          >
+          <p class="meta">Free · Windows 10 and 11, x64</p>
+        </div>
+      </main>
+
+      <footer>
+        <div class="row">
+          <p>squeezegram is an unofficial app, not affiliated with Telegram.</p>
+          <nav>
+            <a
+              href="https://github.com/yaniswav/squeezegram/blob/main/PRIVACY.md"
+              >Privacy</a
+            >
+            <a href="https://github.com/yaniswav/squeezegram/blob/main/LICENSE"
+              >License</a
+            >
+            <a
+              href="https://github.com/yaniswav/squeezegram/blob/main/SECURITY.md"
+              >Security</a
+            >
+            <a href="https://github.com/yaniswav/squeezegram/issues"
+              >Report a bug</a
+            >
+          </nav>
+        </div>
+      </footer>
+    </div>
+    <script>
+      // Respect reduced motion: show the poster instead of looping the animation.
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        const v = document.getElementById("demo")
+        v.removeAttribute("autoplay")
+        v.pause()
+        v.controls = true
+      }
+    </script>
+  </body>
+</html>

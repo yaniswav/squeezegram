@@ -9,7 +9,7 @@ squeezegram is a Windows app that sends videos and photos from your computer to 
 - Uploads go through a persistent queue: one upload at a time, pause, cancel, reorder, and recovery after a crash. A file whose upload outcome is unknown after a crash is never resent automatically; you decide.
 - The core is free. An optional one-time purchase, squeezegram Premium, adds a few conveniences (see below).
 
-Windows 10 or 11, x64 only.
+Windows 10 or 11, x64 only. Website: <https://yaniswav.github.io/squeezegram/>
 
 ## Download
 
@@ -69,7 +69,7 @@ squeezegram Premium is a lifetime licence for version 1, bought once in Telegram
 
 squeezegram has no analytics or telemetry and no server of its own. Your files stay on your computer until you choose to send them. Settings, the queue and the licence key are stored in `%APPDATA%\squeezegram`; the Telegram session, ffmpeg and logs are stored in `%LOCALAPPDATA%\squeezegram`. Temporary files use `%LOCALAPPDATA%\squeezegram\tmp` by default, or the temporary folder selected in Settings.
 
-The licence contains a pseudonymous identifier derived from your Telegram account. Anyone holding the licence could check whether it belongs to a given account. The bot and signer keep orders and licences for as long as set in the privacy notice (see [PRIVACY.md](PRIVACY.md), currently a draft).
+The licence contains a pseudonymous identifier derived from your Telegram account. Anyone holding the licence could check whether it belongs to a given account. The bot and signer keep orders and licences for as long as set in the privacy notice (see [PRIVACY.md](PRIVACY.md)).
 
 What leaves your computer:
 
