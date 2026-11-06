@@ -1,0 +1,47 @@
+# Appends the daily download totals to the "stats" branch, since GitHub only keeps the running total.
+# The numbers are already public; no project code runs and no secret is used.
+name: stats
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stats
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: stats
+      - name: Append today's totals
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          day=$(date -u +%F)
+          if grep -q "^$day," downloads.csv; then
+            echo "Already recorded for $day"
+            exit 0
+          fi
+          gh api "repos/$REPO/releases" --paginate \
+            --jq '.[] | .tag_name as $t | .assets[] | [$t, .name, .download_count] | @csv' \
+            | sed "s/^/$day,/" > today.csv
+          gh api "repos/$REPO" --jq '["repo", "stars", .stargazers_count] | @csv' \
+            | sed "s/^/$day,/" >> today.csv
+          cat today.csv >> downloads.csv
+          rm today.csv
+          git add downloads.csv
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "Record the download totals of $day"
+          git push origin stats
