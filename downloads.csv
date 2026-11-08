@@ -25,3 +25,16 @@ date,release,asset,downloads
 2026-11-07,"tdjson-1.8.68","tdjson-NOTICES.txt",1
 2026-11-07,"tdjson-1.8.68","tdjson.dll",3
 2026-11-07,"repo","stars",0
+2026-11-08,"v0.1.0","latest.json",2
+2026-11-08,"v0.1.0","SHA256SUMS.txt",1
+2026-11-08,"v0.1.0","squeezegram-0.1.0-portable-x64.zip",4
+2026-11-08,"v0.1.0","squeezegram-0.1.0-setup-x64.exe",8
+2026-11-08,"v0.1.0","squeezegram-0.1.0-setup-x64.exe.sig",2
+2026-11-08,"ffmpeg-n9.0.2-33","ffmpeg-builds-scripts-9378683.tar.gz",0
+2026-11-08,"ffmpeg-n9.0.2-33","ffmpeg-n9.0.2-33-g4cf298e66a-win64-lgpl-9.0.zip",5
+2026-11-08,"ffmpeg-n9.0.2-33","ffmpeg-source-4cf298e66a.tar.gz",0
+2026-11-08,"ffmpeg-n9.0.2-33","SHA256SUMS.txt",0
+2026-11-08,"channel-v1","latest.json",9
+2026-11-08,"tdjson-1.8.68","tdjson-NOTICES.txt",1
+2026-11-08,"tdjson-1.8.68","tdjson.dll",3
+2026-11-08,"repo","stars",0
