@@ -1,6 +1,6 @@
 [package]
 name = "squeezegram"
-version = "0.1.0"
+version = "0.1.1"
 description = "Compresses videos and photos and sends them to Telegram groups and topics."
 edition = "2024"
 rust-version = "1.90"
@@ -33,7 +33,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 thiserror = "2"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 # CancellationToken for the orchestrator (current item, shutdown).
 tokio-util = "0.7"

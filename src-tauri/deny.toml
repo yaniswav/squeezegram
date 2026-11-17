@@ -18,6 +18,9 @@ ignore = [
   # glib 0.18.5: unsound VariantStrIter. Same Linux/GTK tree, absent from
   # the Windows build and not upgradable from this repository.
   { id = "RUSTSEC-2024-0429", reason = "Linux/GTK dependency tree only, absent from the Windows build" },
+  # chrono is unmaintained (no vulnerability, no fixed version). Replacing it with jiff or time
+  # touches the logging, queue and licence dates: planned after 0.1.1, not inside a patch release.
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained, no known vulnerability; migration to jiff/time planned after 0.1.1" },
 ]
 
 [licenses]
