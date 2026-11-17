@@ -1,0 +1,70 @@
+name: Hardware test report
+description: Tell us how compression went on your PC (GPU or CPU, sizes, queue).
+title: "[Hardware] <GPU model> - <result>"
+labels: ["hardware-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing. Please do not paste your phone number, chat names or file names you want to keep private.
+  - type: input
+    id: version
+    attributes:
+      label: squeezegram version
+      placeholder: "0.1.1, installer or portable"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card and driver version
+      placeholder: "NVIDIA RTX 3060, driver 581.xx / AMD RX 6700 XT / Intel UHD 770 / none"
+    validations:
+      required: true
+  - type: dropdown
+    id: encoder
+    attributes:
+      label: Encoder squeezegram used
+      options:
+        - NVIDIA (NVENC)
+        - Intel (Quick Sync)
+        - AMD (AMF)
+        - CPU
+        - I don't know
+    validations:
+      required: true
+  - type: dropdown
+    id: limit
+    attributes:
+      label: Your upload limit
+      options:
+        - 2,000 MiB (standard account)
+        - 4,000 MiB (Telegram Premium)
+    validations:
+      required: true
+  - type: input
+    id: sizes
+    attributes:
+      label: Source size and final size
+      placeholder: "5.6 GB 4K HEVC, 12 min -> 1.95 GB"
+    validations:
+      required: true
+  - type: dropdown
+    id: under
+    attributes:
+      label: Did the result stay under the limit and upload?
+      options:
+        - "Yes"
+        - "No, it was over the limit"
+        - "No, the upload failed"
+    validations:
+      required: true
+  - type: textarea
+    id: restart
+    attributes:
+      label: Optional - quit during an upload and restart
+      description: What did the queue show after the restart? Was anything resent without asking?
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything unclear or broken (first setup, errors, queue controls)
